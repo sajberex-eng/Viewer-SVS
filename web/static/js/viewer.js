@@ -123,6 +123,7 @@ function setActive(view) {
   adjustPanel.attachTo(view);
   $('adjustTarget').textContent = t('adjust.target', { title: view.slide.title });
   $('adjustTarget').hidden = panes.length < 2;
+  updateLabelButton();
   updateStatusBar();
   markCurrentThumb();
 }
@@ -195,6 +196,7 @@ function applyCompareLayout() {
   $('adjustBoth').hidden = !comparing;
   $('adjustTarget').hidden = !comparing;
   $('btnCompare').hidden = comparing;
+  updateLabelButton();
   if (comparing) ensureSplitter();
   else $('splitter')?.remove();
   for (const pane of panes) {
@@ -369,6 +371,7 @@ function initTopbar() {
   };
   $('btnAdjust').addEventListener('click', () => toggleAdjust());
   $('adjustClose').addEventListener('click', () => toggleAdjust(false));
+  $('btnLabel').addEventListener('click', () => active?.toggleLabel?.());
   $('btnReset').addEventListener('click', () => active?.resetView());
   $('btnFullscreen').addEventListener('click', toggleFullscreen);
   $('btnCompare').addEventListener('click', startCompare);
@@ -418,6 +421,16 @@ function initTopbar() {
       button.setAttribute('aria-expanded', 'false');
     }
   });
+}
+
+// Заголовок половины с кнопкой этикетки виден только в режиме сравнения,
+// поэтому при одном скане этикетку открывает кнопка верхней панели.
+function updateLabelButton() {
+  const button = $('btnLabel');
+  button.hidden = panes.length > 1;
+  const hasLabel = Boolean(active?.slide.has_label);
+  button.disabled = !hasLabel;
+  button.title = t(hasLabel ? 'top.label.tip' : 'top.label.none');
 }
 
 function updateStatusBar() {

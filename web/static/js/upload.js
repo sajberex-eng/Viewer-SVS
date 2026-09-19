@@ -3,6 +3,11 @@
 import { ApiError, api } from './api.js';
 import { t } from './i18n.js';
 
+// Однофайловые форматы сканов; тот же список на сервере (storage.SLIDE_EXTENSIONS)
+export const SLIDE_EXTENSIONS = ['.svs', '.ndpi', '.scn', '.tiff', '.tif', '.bif', '.czi', '.avs', '.svslide', '.kfb'];
+
+export const isSlideFile = (name) => SLIDE_EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext));
+
 const PARALLEL = 2;
 const RETRY_FIRST_MS = 3000;
 const RETRY_MAX_MS = 60000;

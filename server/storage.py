@@ -2,7 +2,7 @@
 
 Сканы загружает администратор через веб-интерфейс, поэтому папкой управляет
 только приложение: файлы лежат под внутренними идентификаторами
-(`ab/ab12cd34ef56.svs`), исходные имена остаются в базе. Необязательный этап с
+(`ab/ab12cd34ef56.svs`, `ab/ab12cd34ef56.ndpi`), исходные имена остаются в базе. Необязательный этап с
 S3-совместимым бакетом добавит вторую реализацию, не трогая остальной код.
 """
 from __future__ import annotations
@@ -15,9 +15,21 @@ from pathlib import Path
 
 import openslide
 
+from . import kfb
 from .config import BASE_DIR, StorageConfig
 
-SLIDE_EXTENSION = ".svs"
+# Однофайловые форматы, которые читает OpenSlide, и KFB через ASlide (kfb.py).
+# Многофайловые (MRXS, VMS/VMU, DICOM, Trestle) не принимаются: загрузка идёт
+# по одному файлу. Часть форматов узнаётся по расширению (NDPI, KFB), поэтому
+# файл хранится со своим.
+SLIDE_EXTENSIONS = (".svs", ".ndpi", ".scn", ".tiff", ".tif", ".bif", ".czi", ".avs", ".svslide", ".kfb")
+KFB_EXTENSION = ".kfb"
+
+
+def slide_extension(name: str) -> str | None:
+    """Расширение скана в нижнем регистре или None, если такой формат не принимается."""
+    suffix = Path(name).suffix.lower()
+    return suffix if suffix in SLIDE_EXTENSIONS else None
 
 
 class StorageUnavailable(Exception):
@@ -41,12 +53,12 @@ class DiskSpace:
     free: int
 
 
-def key_for(slide_id: str) -> str:
-    """Ключ хранилища по внутреннему идентификатору слайда.
+def key_for(slide_id: str, extension: str = ".svs") -> str:
+    """Ключ хранилища по внутреннему идентификатору слайда и расширению формата.
 
     Первые два символа образуют подпапку: в одной папке не копятся тысячи файлов.
     """
-    return f"{slide_id[:2]}/{slide_id}{SLIDE_EXTENSION}"
+    return f"{slide_id[:2]}/{slide_id}{extension}"
 
 
 class Storage(ABC):
@@ -86,8 +98,8 @@ class LocalFolderStorage(Storage):
             raise StorageUnavailable(f"Папка хранилища недоступна: {self.root}")
         objects = []
         try:
-            for path in self.root.glob(f"**/*{SLIDE_EXTENSION}"):
-                if path.is_file():
+            for path in self.root.glob("**/*"):
+                if path.is_file() and path.suffix.lower() in SLIDE_EXTENSIONS:
                     stat = path.stat()
                     key = path.relative_to(self.root).as_posix()
                     objects.append(StoredObject(key, stat.st_size, stat.st_mtime))
@@ -96,9 +108,14 @@ class LocalFolderStorage(Storage):
         return sorted(objects, key=lambda o: o.key)
 
     def open_slide(self, key: str) -> openslide.OpenSlide:
+        path = self._path(key)
         try:
-            return openslide.OpenSlide(self._path(key))
+            if path.suffix.lower() == KFB_EXTENSION:
+                return kfb.KfbFile(str(path))
+            return openslide.OpenSlide(path)
         except (OSError, openslide.OpenSlideError) as exc:
+            raise StorageUnavailable(f"Не удалось открыть слайд: {exc}") from exc
+        except Exception as exc:  # чужая обёртка KFB может бросить что угодно
             raise StorageUnavailable(f"Не удалось открыть слайд: {exc}") from exc
 
     def put(self, key: str, source: Path) -> StoredObject:

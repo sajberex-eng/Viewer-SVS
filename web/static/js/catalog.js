@@ -2,7 +2,7 @@
 import { api, logout } from './api.js';
 import { confirmDialog, formDialog, pickerDialog } from './dialog.js';
 import { applyI18n, formatNumber, setLanguage, t } from './i18n.js';
-import { UploadQueue } from './upload.js';
+import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile } from './upload.js';
 
 const $ = (id) => document.getElementById(id);
 const MODES = ['admins', 'all', 'selected'];
@@ -319,6 +319,7 @@ function setUpAdmin() {
     const folder = folderById(currentFolder);
     if (folder) editAccess({ folder });
   });
+  $('fileInput').accept = SLIDE_EXTENSIONS.join(',');
   $('btnUpload').addEventListener('click', () => $('fileInput').click());
   $('fileInput').addEventListener('change', (event) => {
     enqueue([...event.target.files]);
@@ -514,15 +515,17 @@ async function editAccess({ folder, slide }) {
 const queue = new UploadQueue(renderUploads);
 
 function enqueue(files) {
-  const svs = files.filter((file) => file.name.toLowerCase().endsWith('.svs'));
-  const rejected = files.filter((file) => !svs.includes(file));
-  if (rejected.length) setNote(t('upload.onlySvs', { names: rejected.map((f) => f.name).join(', ') }), true);
-  if (!svs.length) return;
+  const accepted = files.filter((file) => isSlideFile(file.name));
+  const rejected = files.filter((file) => !accepted.includes(file));
+  if (rejected.length) {
+    setNote(t('upload.wrongFormat', { names: rejected.map((f) => f.name).join(', '), formats: SLIDE_EXTENSIONS.join(' ') }), true);
+  }
+  if (!accepted.length) return;
   if (currentFolder === null) {
     setNote(t('catalog.selectFolder'), true);
     return;
   }
-  queue.add(svs, currentFolder);
+  queue.add(accepted, currentFolder);
 }
 
 function setUpDropZone() {
@@ -574,7 +577,7 @@ async function loadPending() {
 function resumeUpload(state) {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.svs';
+  input.accept = SLIDE_EXTENSIONS.join(',');
   input.addEventListener('change', () => {
     const file = input.files[0];
     if (!file) return;

@@ -13,16 +13,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import kfb
 from .catalog import Catalog, CatalogError, new_slide_id
 from .db import Database
 from .slides import read_metadata
-from .storage import NotEnoughSpace, Storage, StorageUnavailable, key_for
+from .storage import KFB_EXTENSION, SLIDE_EXTENSIONS, NotEnoughSpace, Storage, StorageUnavailable, key_for, slide_extension
 
 log = logging.getLogger(__name__)
 
 PART_SIZE = 8 * 1024 * 1024  # 8 МБ: ТЗ Х-5 допускает 8–16
 STALE_DAYS = 3  # ТЗ Х-13, ужесточено под диск 30 ГБ
-ALLOWED_EXTENSION = ".svs"
 
 
 @dataclass(frozen=True)
@@ -87,8 +87,12 @@ class Uploads:
 
     def start(self, folder_id: int, original_name: str, size: int, user) -> dict:
         name = original_name.strip().replace("\\", "/").rsplit("/", 1)[-1]
-        if not name.lower().endswith(ALLOWED_EXTENSION):
-            raise UploadError("Принимаются только файлы .svs")
+        extension = slide_extension(name)
+        if extension is None:
+            raise UploadError(f"Этот формат не принимается. Можно: {', '.join(SLIDE_EXTENSIONS)}")
+        if extension == KFB_EXTENSION and not kfb.AVAILABLE:
+            # Проверка до передачи: иначе гигабайты уйдут зря и отклонятся в конце
+            raise UploadError("Чтение KFB на этом сервере не установлено")
         if size <= 0:
             raise UploadError("Файл пуст")
         if self._catalog.folder(folder_id) is None:
@@ -159,7 +163,7 @@ class Uploads:
             raise UploadError(f"Файл принят не полностью: {received} из {row['size']} байт", 409)
 
         slide_id = new_slide_id()
-        key = key_for(slide_id)
+        key = key_for(slide_id, slide_extension(row["original_name"]))
         try:
             stored = self._storage.put(key, path)
         except StorageUnavailable as exc:
@@ -173,7 +177,7 @@ class Uploads:
         except StorageUnavailable as exc:
             self._storage.delete(key)
             self._forget(upload_id)
-            raise UploadError(f"Это не похоже на скан Aperio SVS: {exc}") from exc
+            raise UploadError(f"Файл не открывается как скан: {exc}") from exc
 
         meta["size"] = stored.size
         meta["mtime"] = stored.mtime

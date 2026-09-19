@@ -15,7 +15,7 @@ import time
 
 from .access import MODES, AccessIndex
 from .db import Database
-from .storage import Storage, StorageUnavailable
+from .storage import Storage, StorageUnavailable, slide_extension
 from .slides import SlidePool
 
 log = logging.getLogger(__name__)
@@ -24,9 +24,9 @@ MAX_DEPTH = 5  # ТЗ Х-1: папки не глубже пяти уровней
 MAX_NAME_LENGTH = 100  # ТЗ Х-2
 STAIN_LABELS = {"HE": "H&E"}
 
-# <код случая>_<номер стекла>_<окраска>.svs, например P004512_S03_HE.svs:
+# <код случая>_<номер стекла>_<окраска>.<формат>, например P004512_S03_HE.svs:
 # если исходное имя такое, поля карточки заполняются сразу.
-NAME_PATTERN = re.compile(r"^([A-Za-z0-9-]+)_([A-Za-z0-9-]+)_([A-Za-z0-9-]+)\.svs$", re.IGNORECASE)
+NAME_PATTERN = re.compile(r"^([A-Za-z0-9-]+)_([A-Za-z0-9-]+)_([A-Za-z0-9-]+)\.[A-Za-z]+$")
 
 
 class CatalogError(Exception):
@@ -39,7 +39,10 @@ def new_slide_id() -> str:
 
 
 def parse_name(filename: str) -> tuple[str | None, str | None, str | None]:
-    match = NAME_PATTERN.match(filename.rsplit("/", 1)[-1])
+    name = filename.rsplit("/", 1)[-1]
+    if slide_extension(name) is None:
+        return None, None, None
+    match = NAME_PATTERN.match(name)
     return match.groups() if match else (None, None, None)
 
 

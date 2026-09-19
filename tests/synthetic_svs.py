@@ -3,10 +3,8 @@
 OpenSlide опознаёт такой файл как Aperio, читает размер пикселя и увеличение и
 отдаёт тайлы. Реальные сканы для тестов не нужны и не копируются.
 
-`with_label=True` добавляет миниатюру, второй уровень пирамиды и каталог с
-описанием label. Уровень пирамиды OpenSlide видит, а этикетку в таком файле
-опознавать отказывается, хотя структура повторяет настоящий SVS. Поэтому показ
-этикетки проверяется только на настоящем скане, а тесты проверяют права на неё.
+`with_label=True` добавляет миниатюру, второй уровень пирамиды и этикетку.
+Этикетку OpenSlide опознаёт по тегу NewSubfileType = 1, как в настоящем SVS.
 """
 from __future__ import annotations
 
@@ -16,6 +14,7 @@ from pathlib import Path
 
 from PIL import Image
 
+TAG_SUBFILE = 254  # NewSubfileType: по нему OpenSlide отличает этикетку (1) от миниатюры (0)
 TAG_WIDTH, TAG_LENGTH, TAG_BITS, TAG_COMPRESSION, TAG_PHOTOMETRIC = 256, 257, 258, 259, 262
 TAG_DESCRIPTION, TAG_STRIP_OFFSETS, TAG_SAMPLES, TAG_ROWS_PER_STRIP = 270, 273, 277, 278
 TAG_STRIP_COUNTS, TAG_PLANAR = 279, 284
@@ -48,13 +47,20 @@ def build_svs(
     objective: int = 20,
     mpp: float = 0.5,
     with_label: bool = False,
+    aperio: bool = True,
 ) -> Path:
+    """aperio=False даёт обычный пирамидальный TIFF без метаданных Aperio:
+    OpenSlide открывает его как generic-tiff, увеличения и этикетки у него нет."""
+    if not aperio and with_label:
+        raise ValueError("этикетка бывает только у синтетического Aperio")
     tiles_per_side = size // tile
     jpegs = [_tile_jpeg(tile, 40 + 30 * i) for i in range(tiles_per_side * tiles_per_side)]
     description = (
         f"Aperio Image Library v11.2.1\r\n{size}x{size} [0,0 {size}x{size}] ({tile}x{tile}) JPEG/RGB Q=70"
         f"|AppMag = {objective}|MPP = {mpp}"
     ).encode("ascii") + b"\x00"
+    if not aperio:
+        description = b"Synthetic tiled TIFF\x00"
     # В Aperio за основным изображением идёт миниатюра, и только потом этикетка,
     # поэтому оба каталога нужны: иначе OpenSlide принимает этикетку за миниатюру.
     extras = [
@@ -119,6 +125,7 @@ def build_svs(
             text_offset = put(text)
             bits = put(struct.pack("<3H", 8, 8, 8))
             extra_entries.append([
+                (TAG_SUBFILE, LONG, 1, 1 if text.split(b"\n")[1].startswith(b"label") else 0),
                 (TAG_WIDTH, LONG, 1, width),
                 (TAG_LENGTH, LONG, 1, height),
                 (TAG_BITS, SHORT, 3, bits),

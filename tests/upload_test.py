@@ -34,6 +34,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from server.auth import hash_password  # noqa: E402
 from server.config import StorageConfig  # noqa: E402
+from server import kfb  # noqa: E402
 from server.main import app  # noqa: E402
 from server.storage import DiskSpace, LocalFolderStorage, NotEnoughSpace  # noqa: E402
 from server.uploads import STALE_DAYS  # noqa: E402
@@ -88,8 +89,17 @@ def main() -> None:
         # ---------- кто может и что можно ----------
         body = {"folder_id": folder, "name": SECRET_NAME, "size": len(payload)}
         check("пользователь не начинает загрузку", alice.post("/api/uploads", json=body).status_code == 403)
-        check("не .svs отклоняется",
-              admin.post("/api/uploads", json={**body, "name": "scan.tiff"}).status_code == 400)
+        check("не скан (.jpg) отклоняется",
+              admin.post("/api/uploads", json={**body, "name": "photo.jpg"}).status_code == 400)
+        check("многофайловый формат (.mrxs) отклоняется",
+              admin.post("/api/uploads", json={**body, "name": "scan.mrxs"}).status_code == 400)
+        kfb_start = admin.post("/api/uploads", json={**body, "name": "scan.kfb"})
+        if kfb.AVAILABLE:  # образ Docker: KFB принимается
+            check("KFB принимается там, где установлено чтение KFB", kfb_start.status_code == 200)
+            admin.delete(f"/api/uploads/{kfb_start.json()['id']}")
+        else:  # Windows: библиотек KFBio нет
+            check("без чтения KFB загрузка .kfb отклоняется сразу, до передачи",
+                  kfb_start.status_code == 400 and "KFB" in kfb_start.text)
         check("пустой файл отклоняется", admin.post("/api/uploads", json={**body, "size": 0}).status_code == 400)
         check("несуществующая папка отклоняется",
               admin.post("/api/uploads", json={**body, "folder_id": 9999}).status_code == 400)
@@ -190,6 +200,11 @@ def main() -> None:
               f"({cards[second_id]['title']})")
         check("увеличение второго скана прочитано отдельно", cards[second_id]["objective"] == 40.0)
         second_info = admin.get(f"/api/slides/{second_id}").json()
+        check("этикетка второго скана найдена", second_info["has_label"] is True)
+        label = admin.get(f"/api/slides/{second_id}/label.jpg")
+        check("этикетка отдаётся и не кэшируется",
+              label.status_code == 200 and label.content[:2] == b"\xff\xd8"
+              and "no-store" in label.headers.get("cache-control", ""))
         # 1024 px: верхний уровень DeepZoom это 10, уровень 8 берётся с половинного слоя файла
         for level, name in ((10, "полное разрешение"), (8, "уменьшенный уровень")):
             response = admin.get(f"{second_info['tiles']['url']}{level}/0_0.jpg")
@@ -230,6 +245,24 @@ def main() -> None:
         resumed_id = admin.post(f"/api/uploads/{state5['id']}/complete").json()["slide_id"]
         check("продолженная загрузка завершается", bool(resumed_id))
         admin.delete(f"/api/slides/{resumed_id}")
+
+        # ---------- другой формат: обычный пирамидальный TIFF ----------
+        tif_payload = build_svs(WORK_DIR / "generic.tif", size=1024, aperio=False).read_bytes()
+        state_tif = admin.post("/api/uploads", json={
+            "folder_id": folder, "name": "P7_S2_PAS.TIF", "size": len(tif_payload)}).json()
+        send(admin, state_tif["id"], tif_payload, 0)
+        done_tif = admin.post(f"/api/uploads/{state_tif['id']}/complete")
+        check("TIFF принимается", done_tif.status_code == 200, f"({done_tif.text[:80]})")
+        tif_id = done_tif.json().get("slide_id", "")
+        tif_key = db.query_one("SELECT key FROM slides WHERE id = ?", (tif_id,))["key"]
+        check("файл хранится со своим расширением", tif_key.endswith(".tif") and (storage_root / tif_key).is_file(),
+              f"({tif_key})")
+        tif_info = admin.get(f"/api/slides/{tif_id}").json()
+        check("поля карточки разобраны из имени и у TIFF", tif_info.get("stain") == "PAS", f"({tif_info.get('stain')})")
+        tile = admin.get(f"{tif_info['tiles']['url']}10/0_0.jpg")
+        check("тайл TIFF отдаётся", tile.status_code == 200 and tile.content[:2] == b"\xff\xd8")
+        admin.delete(f"/api/slides/{tif_id}")
+        check("удаление стирает и файл TIFF", not (storage_root / tif_key).exists())
 
         # ---------- уборка брошенных ----------
         state6 = admin.post("/api/uploads", json={"folder_id": folder, "name": "stale.svs", "size": 4000}).json()
