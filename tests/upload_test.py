@@ -172,13 +172,23 @@ def main() -> None:
         check("в журнале есть загрузка", "slide.upload" in journal)
         check("в журнале нет исходного имени файла", "Иванов" not in journal)
 
-        # ---------- второй скан: нумерация названий ----------
-        second_payload = build_svs(WORK_DIR / "second.svs", objective=40, mpp=0.25).read_bytes()
+        # ---------- второй скан: нумерация названий и многоуровневый файл ----------
+        second_payload = build_svs(
+            WORK_DIR / "second.svs", size=1024, objective=40, mpp=0.25, with_label=True
+        ).read_bytes()
         state2 = admin.post("/api/uploads", json={"folder_id": folder, "name": "x.svs", "size": len(second_payload)}).json()
         send(admin, state2["id"], second_payload, 0)
         second_id = admin.post(f"/api/uploads/{state2['id']}/complete").json()["slide_id"]
-        titles = {s["id"]: s["title"] for s in admin.get("/api/catalog").json()["slides"]}
-        check("второй скан получил следующее название", titles[second_id] == "Скан 02", f"({titles[second_id]})")
+        cards = {s["id"]: s for s in admin.get("/api/catalog").json()["slides"]}
+        check("второй скан получил следующее название", cards[second_id]["title"] == "Скан 02",
+              f"({cards[second_id]['title']})")
+        check("увеличение второго скана прочитано отдельно", cards[second_id]["objective"] == 40.0)
+        second_info = admin.get(f"/api/slides/{second_id}").json()
+        # 1024 px: верхний уровень DeepZoom это 10, уровень 8 берётся с половинного слоя файла
+        for level, name in ((10, "полное разрешение"), (8, "уменьшенный уровень")):
+            response = admin.get(f"{second_info['tiles']['url']}{level}/0_0.jpg")
+            check(f"тайл многоуровневого скана, {name}",
+                  response.status_code == 200 and response.content[:2] == b"\xff\xd8", f"(уровень {level})")
 
         # ---------- файл, который не скан ----------
         junk = "это не скан, а просто текст".encode("utf-8") * 50

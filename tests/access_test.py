@@ -169,6 +169,9 @@ def main() -> None:
         check("несуществующий скан отвечает так же", bob.get("/api/slides/zzzzzzzzzzzz").status_code == 404)
         code = alice.get("/api/slides/aaaaaaaaaaaa").status_code
         check("свой скан доступен (файла нет, но не 404)", code != 404, f"(получено {code})")
+        # Право на этикетку проверяется до чтения файла, поэтому 404 здесь означал бы отказ
+        code = alice.get("/api/slides/aaaaaaaaaaaa/label.jpg").status_code
+        check("этикетка своего скана не отклоняется по правам", code != 404, f"(получено {code})")
 
         # ---------- исходное имя файла ----------
         db.execute("UPDATE slides SET original_name = ? WHERE id = ?", ("Иванов_И_И.svs", "aaaaaaaaaaaa"))

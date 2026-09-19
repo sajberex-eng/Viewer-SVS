@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Пользователи · HemCenterHistoDigital</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a href="/" class="topbar-logo-link" data-i18n-tip="top.catalog.tip"><img class="topbar-logo" src="/static/img/logo.svg" alt=""></a>
+    <h1 class="topbar-title" data-i18n="app.title"></h1>
+    <nav class="topbar-actions">
+      <a class="btn" href="/" data-i18n="top.catalog"></a>
+      <button class="btn tab-btn is-active" id="tabUsers" data-i18n="users.heading"></button>
+      <button class="btn tab-btn" id="tabGroups" data-i18n="groups.heading"></button>
+      <button class="btn tab-btn" id="tabJournal" data-i18n="journal.heading"></button>
+    </nav>
+    <div class="topbar-user">
+      <span id="userName"></span>
+      <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <p class="catalog-note" id="note" aria-live="polite"></p>
+
+    <section class="admin-section" id="usersSection">
+      <div class="catalog-toolbar">
+        <h2 data-i18n="users.heading"></h2>
+        <button class="btn btn-primary" id="btnAddUser" data-i18n="users.add"></button>
+      </div>
+      <table class="grid-table">
+        <thead>
+          <tr>
+            <th data-i18n="users.login"></th>
+            <th data-i18n="users.name"></th>
+            <th data-i18n="users.role"></th>
+            <th data-i18n="users.groupsOf"></th>
+            <th data-i18n="users.status"></th>
+            <th data-i18n="users.expires"></th>
+            <th data-i18n="users.lastLogin"></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="usersBody"></tbody>
+      </table>
+    </section>
+
+    <section class="admin-section" id="groupsSection" hidden>
+      <div class="catalog-toolbar">
+        <h2 data-i18n="groups.heading"></h2>
+        <button class="btn btn-primary" id="btnAddGroup" data-i18n="groups.add"></button>
+      </div>
+      <ul class="group-list" id="groupsList"></ul>
+    </section>
+
+    <section class="admin-section" id="journalSection" hidden>
+      <div class="catalog-toolbar">
+        <h2 data-i18n="journal.heading"></h2>
+        <select id="journalAction"></select>
+        <button class="btn" id="btnExport" data-i18n="journal.export"></button>
+      </div>
+      <table class="grid-table">
+        <thead>
+          <tr>
+            <th data-i18n="journal.time"></th>
+            <th data-i18n="journal.actor"></th>
+            <th data-i18n="journal.action"></th>
+            <th data-i18n="journal.object"></th>
+            <th data-i18n="journal.detail"></th>
+            <th data-i18n="journal.ip"></th>
+          </tr>
+        </thead>
+        <tbody id="journalBody"></tbody>
+      </table>
+      <button class="btn" id="btnMore" data-i18n="journal.more"></button>
+    </section>
+  </main>
+
+  <script type="module" src="/static/js/admin.js"></script>
+</body>
+</html>

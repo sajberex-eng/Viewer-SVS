@@ -3,29 +3,57 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Каталог · Вьювер гистосканов</title>
+  <title>Каталог · HemCenterHistoDigital</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
-<body>
+<body class="catalog-page">
   <header class="topbar">
     <img class="topbar-logo" src="/static/img/logo.svg" alt="">
     <h1 class="topbar-title" data-i18n="app.title"></h1>
-    <div class="topbar-actions"></div>
+    <nav class="topbar-actions">
+      <a class="btn" id="linkUsers" href="/admin" hidden data-i18n="catalog.users"></a>
+      <a class="btn" id="linkJournal" href="/admin#journal" hidden data-i18n="catalog.journal"></a>
+    </nav>
     <div class="topbar-user">
       <span id="userName"></span>
+      <button class="btn" id="btnProfile" data-i18n="common.profile"></button>
       <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
     </div>
   </header>
-  <main class="catalog-main">
-    <div class="catalog-toolbar">
-      <h2 data-i18n="catalog.heading"></h2>
-      <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search">
-      <button class="btn" id="btnRescan" hidden data-i18n="catalog.rescan" data-i18n-tip="catalog.rescan.tip"></button>
-    </div>
-    <p class="catalog-note" id="note" aria-live="polite"></p>
-    <ul class="catalog-grid" id="grid"></ul>
+
+  <main class="catalog-layout">
+    <aside class="tree-panel">
+      <div class="tree-head">
+        <h2 data-i18n="catalog.heading"></h2>
+        <button class="btn" id="btnNewFolder" hidden data-i18n="catalog.newFolder" data-i18n-tip="catalog.newFolder.tip"></button>
+      </div>
+      <ul class="tree" id="tree"></ul>
+      <p class="tree-space muted" id="space" hidden></p>
+    </aside>
+
+    <section class="catalog-main" id="dropZone">
+      <div class="catalog-toolbar">
+        <nav class="crumbs" id="crumbs" aria-label="Путь"></nav>
+        <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search">
+        <button class="btn" id="btnAccess" hidden data-i18n="catalog.access" data-i18n-tip="catalog.access.tip"></button>
+        <button class="btn btn-primary" id="btnUpload" hidden data-i18n="catalog.upload" data-i18n-tip="catalog.upload.tip"></button>
+        <input type="file" id="fileInput" accept=".svs" multiple hidden>
+      </div>
+      <p class="catalog-note" id="note" aria-live="polite"></p>
+      <ul class="catalog-grid" id="grid"></ul>
+      <div class="drop-hint" id="dropHint" hidden></div>
+    </section>
   </main>
+
+  <section class="upload-panel" id="uploadPanel" hidden aria-live="polite">
+    <div class="upload-head">
+      <h2 data-i18n="upload.heading"></h2>
+      <button class="btn" id="btnClearUploads" data-i18n="upload.clear"></button>
+    </div>
+    <ul class="upload-list" id="uploadList"></ul>
+  </section>
+
   <script type="module" src="/static/js/catalog.js"></script>
 </body>
 </html>

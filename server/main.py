@@ -254,6 +254,12 @@ def create_app() -> FastAPI:
     def viewer_page(request: Request):
         return protected_page(request, "viewer.html")
 
+    @app.get("/admin")
+    def admin_page(request: Request):
+        # Данные отдаёт API, и каждый его маршрут требует роль администратора;
+        # страница сама по себе ничего не раскрывает.
+        return protected_page(request, "admin.html")
+
     @app.get("/robots.txt")
     def robots():
         return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")

@@ -56,6 +56,7 @@ async function main() {
   initTileStatus(viewer);
   initTopbar(viewer, slide, adjustPanel, user);
   initMinimapToggle(viewer);
+  initLabelPanel(slide);
   initHotkeys(viewer, slide);
 
   viewer.addHandler('open', () => {
@@ -353,6 +354,48 @@ function initMinimapToggle(viewer) {
       viewer.navigator.updateSize();
       viewer.navigator.update(viewer.viewport);
     }
+  });
+}
+
+// ---------- этикетка стекла ----------
+
+// На этикетке бывают персональные данные, поэтому панель закрыта по умолчанию,
+// изображение запрашивается только по нажатию, а сервер отдаёт его без кэша.
+function initLabelPanel(slide) {
+  const button = $('btnLabel');
+  const panel = $('labelPanel');
+  const image = $('labelImage');
+  if (!slide.has_label) {
+    button.hidden = false;
+    button.disabled = true;
+    button.title = t('top.label.none');
+    return;
+  }
+  button.hidden = false;
+
+  let rotation = 0;
+  let loaded = false;
+  const setOpen = (open) => {
+    panel.hidden = !open;
+    button.classList.toggle('is-active', open);
+    button.setAttribute('aria-expanded', String(open));
+    if (open && !loaded) {
+      loaded = true;
+      image.src = `/api/slides/${encodeURIComponent(slide.id)}/label.jpg`;
+    }
+  };
+
+  image.addEventListener('error', () => {
+    image.hidden = true;
+    $('labelError').hidden = false;
+    $('labelError').textContent = t('label.failed');
+  });
+  button.addEventListener('click', () => setOpen(panel.hidden));
+  $('labelClose').addEventListener('click', () => setOpen(false));
+  $('labelRotate').addEventListener('click', () => {
+    rotation = (rotation + 90) % 360;
+    image.style.transform = `rotate(${rotation}deg)`;
+    image.classList.toggle('is-sideways', rotation % 180 !== 0);
   });
 }
 

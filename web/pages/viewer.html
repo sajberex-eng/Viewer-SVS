@@ -16,6 +16,7 @@
       <button class="btn" id="btnAdjust" aria-expanded="false" aria-controls="adjustPanel" data-i18n-tip="top.adjust.tip">
         <span data-i18n="top.adjust"></span><span class="saved-dot" id="adjustSavedDot" hidden data-i18n-tip="top.adjust.saved"></span>
       </button>
+      <button class="btn" id="btnLabel" hidden aria-expanded="false" aria-controls="labelPanel" data-i18n="top.label" data-i18n-tip="top.label.tip"></button>
       <button class="btn" id="btnReset" data-i18n="top.reset" data-i18n-tip="top.reset.tip"></button>
       <button class="btn" id="btnFullscreen" data-i18n="top.fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
       <div class="popover-anchor">
@@ -62,6 +63,16 @@
         <button class="icon-btn minimap-toggle" id="minimapToggle" aria-expanded="true" aria-controls="navigator" data-i18n-tip="minimap.toggle.tip">▾</button>
         <div class="minimap-view" id="navigator"></div>
       </div>
+
+      <aside class="label-panel" id="labelPanel" hidden>
+        <div class="label-head">
+          <span data-i18n="label.heading"></span>
+          <button class="icon-btn" id="labelRotate" data-i18n-tip="label.rotate.tip">⟳</button>
+          <button class="icon-btn" id="labelClose" data-i18n-tip="label.close.tip">×</button>
+        </div>
+        <img class="label-image" id="labelImage" alt="">
+        <p class="label-error muted" id="labelError" hidden></p>
+      </aside>
 
       <div class="scalebar" id="scalebar" hidden>
         <div class="scalebar-line" id="scalebarLine"></div>
