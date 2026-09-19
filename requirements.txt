@@ -1,0 +1,8 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+openslide-python>=1.4
+openslide-bin>=4.0
+pillow>=11.0
+pyyaml>=6.0
+itsdangerous>=2.2
+bcrypt>=4.2

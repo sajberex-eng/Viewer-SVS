@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Каталог · Вьювер гистосканов</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 class="topbar-title" data-i18n="app.title"></h1>
+    <div class="topbar-actions"></div>
+    <div class="topbar-user">
+      <span id="userName"></span>
+      <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
+    </div>
+  </header>
+  <main class="catalog-main">
+    <div class="catalog-toolbar">
+      <h2 data-i18n="catalog.heading"></h2>
+      <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search">
+      <button class="btn" id="btnRescan" hidden data-i18n="catalog.rescan" data-i18n-tip="catalog.rescan.tip"></button>
+    </div>
+    <p class="catalog-note" id="note" aria-live="polite"></p>
+    <ul class="catalog-grid" id="grid"></ul>
+  </main>
+  <script type="module" src="/static/js/catalog.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# Развёртывание на одном VPS: вьювер и обратный прокси с автоматическим HTTPS.
+# Перед запуском: задать VIEWER_DOMAIN и VIEWER_SECRET_KEY в файле .env, положить config.yaml рядом.
+services:
+  viewer:
+    build: .
+    restart: unless-stopped
+    environment:
+      VIEWER_SECRET_KEY: ${VIEWER_SECRET_KEY:?задайте VIEWER_SECRET_KEY в .env}
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - viewer-data:/app/data
+      # Папка сканов на диске VPS (пополняется по SFTP); сервису доступна только для чтения.
+      - /mnt/slides:/mnt/slides:ro
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      VIEWER_DOMAIN: ${VIEWER_DOMAIN:?задайте VIEWER_DOMAIN в .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  viewer-data:
+  caddy-data:

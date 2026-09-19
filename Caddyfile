@@ -1,0 +1,4 @@
+{$VIEWER_DOMAIN} {
+	encode gzip
+	reverse_proxy viewer:8000
+}

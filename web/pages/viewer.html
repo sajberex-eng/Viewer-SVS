@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Вьювер гистосканов</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="viewer-page">
+  <header class="topbar">
+    <h1 class="topbar-title" id="slideTitle"></h1>
+    <nav class="topbar-actions">
+      <a class="btn" href="/" data-i18n="top.catalog" data-i18n-tip="top.catalog.tip"></a>
+      <button class="btn" id="btnAdjust" aria-expanded="false" aria-controls="adjustPanel" data-i18n-tip="top.adjust.tip">
+        <span data-i18n="top.adjust"></span><span class="saved-dot" id="adjustSavedDot" hidden data-i18n-tip="top.adjust.saved"></span>
+      </button>
+      <button class="btn" id="btnReset" data-i18n="top.reset" data-i18n-tip="top.reset.tip"></button>
+      <button class="btn" id="btnFullscreen" data-i18n="top.fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
+      <div class="popover-anchor">
+        <button class="btn" id="btnLink" hidden aria-expanded="false" aria-controls="linkPopover" data-i18n="top.link" data-i18n-tip="top.link.tip"></button>
+        <div class="popover" id="linkPopover" hidden>
+          <input type="text" id="linkUrl" readonly aria-label="URL">
+          <label class="check"><input type="checkbox" id="linkWithAdjust"> <span data-i18n="link.withAdjust"></span></label>
+          <div class="popover-row">
+            <span class="muted" data-i18n="link.note"></span>
+            <button class="btn btn-primary" id="linkCopy" data-i18n="link.copy"></button>
+          </div>
+        </div>
+      </div>
+    </nav>
+    <div class="topbar-user">
+      <span id="userName"></span>
+      <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <aside class="slides-panel" id="slidesPanel">
+      <div class="slides-panel-head">
+        <span class="slides-panel-title" data-i18n="slides.heading"></span>
+        <button class="icon-btn" id="slidesToggle" aria-expanded="true" aria-controls="slidesList" data-i18n-tip="slides.toggle.tip">‹</button>
+      </div>
+      <ul class="slides-list" id="slidesList"></ul>
+    </aside>
+
+    <main class="stage" id="stage">
+      <div id="osd" class="osd"></div>
+
+      <div class="zoom-panel" id="zoomPanel" role="toolbar" aria-orientation="vertical">
+        <div class="zoom-buttons" id="zoomButtons"></div>
+        <input type="range" class="zoom-slider" id="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
+        <output class="zoom-current" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
+        <div class="zoom-rotate">
+          <button class="icon-btn" id="rotateLeft" data-i18n-tip="zoom.rotateLeft.tip">⟲</button>
+          <button class="icon-btn" id="rotateRight" data-i18n-tip="zoom.rotateRight.tip">⟳</button>
+        </div>
+      </div>
+
+      <div class="minimap" id="minimap">
+        <button class="icon-btn minimap-toggle" id="minimapToggle" aria-expanded="true" aria-controls="navigator" data-i18n-tip="minimap.toggle.tip">▾</button>
+        <div class="minimap-view" id="navigator"></div>
+      </div>
+
+      <div class="scalebar" id="scalebar" hidden>
+        <div class="scalebar-line" id="scalebarLine"></div>
+        <span id="scalebarLabel"></span>
+      </div>
+
+      <div class="stage-message" id="stageMessage" role="alert" hidden>
+        <p id="stageMessageText"></p>
+        <button class="btn btn-primary" id="stageRetry" data-i18n="viewer.retry"></button>
+      </div>
+    </main>
+
+    <aside class="adjust-panel" id="adjustPanel" hidden>
+      <div class="adjust-head">
+        <h2 data-i18n="adjust.heading"></h2>
+        <button class="icon-btn" id="adjustClose" data-i18n-tip="adjust.close.tip">×</button>
+      </div>
+      <div class="adjust-row adjust-row-preset">
+        <label for="adjustPreset" data-i18n="adjust.preset"></label>
+        <select id="adjustPreset">
+          <option value="custom" data-i18n="adjust.preset.custom" hidden></option>
+          <option value="original" data-i18n="adjust.preset.original"></option>
+          <option value="pale" data-i18n="adjust.preset.pale"></option>
+          <option value="overstained" data-i18n="adjust.preset.overstained"></option>
+        </select>
+      </div>
+      <div id="adjustSliders"></div>
+      <div class="adjust-actions">
+        <button class="btn" id="adjustCompare" data-i18n="adjust.compare" data-i18n-tip="adjust.compare.tip"></button>
+        <button class="btn" id="adjustPipette" data-i18n="adjust.pipette" data-i18n-tip="adjust.pipette.tip"></button>
+        <button class="btn" id="adjustResetAll" data-i18n="adjust.resetAll" data-i18n-tip="adjust.resetAll.tip"></button>
+      </div>
+      <p class="adjust-hint" id="adjustHint" aria-live="polite"></p>
+      <p class="muted" data-i18n="adjust.order"></p>
+    </aside>
+  </div>
+
+  <footer class="statusbar">
+    <span id="statusSize"></span>
+    <span id="statusCursor"></span>
+    <span id="statusMag"></span>
+    <span id="statusMpp"></span>
+    <span class="status-tiles" id="statusTiles" aria-live="polite"></span>
+  </footer>
+
+  <script src="/static/vendor/openseadragon.min.js"></script>
+  <script type="module" src="/static/js/viewer.js"></script>
+</body>
+</html>
