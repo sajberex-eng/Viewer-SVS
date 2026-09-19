@@ -230,6 +230,8 @@ def create_app() -> FastAPI:
             "objective": row["objective"],
             "mpp": row["mpp"],
             "size_bytes": row["size"],
+            # Формат по расширению внутреннего ключа (SVS, KFB…): имени файла в нём нет
+            "format": Path(row["key"]).suffix.lstrip(".").upper(),
             "has_label": bool(row["has_label"]),
             "added_at": utc_iso(row["added_at"]),
         }

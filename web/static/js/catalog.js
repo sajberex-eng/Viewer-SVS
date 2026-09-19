@@ -264,7 +264,9 @@ function card(slide) {
 
   const details = document.createElement('span');
   details.className = 'muted';
-  const scan = slide.objective ? t('catalog.scan', { objective: `${formatNumber(slide.objective)}×` }) : '';
+  // «H&E · KFB 40× · 432 МБ»: окраска, формат файла с увеличением сканирования, размер
+  const objective = slide.objective ? `${formatNumber(slide.objective)}×` : '';
+  const scan = [slide.format, objective].filter(Boolean).join(' ');
   details.textContent = [slide.stain, scan, sizeText(slide.size_bytes)].filter(Boolean).join(' · ');
 
   link.append(image, title, details);
@@ -714,6 +716,7 @@ function fillUpload(row, task) {
   else if (task.status === 'waiting') label.textContent = t('upload.waiting');
   else label.textContent = task.detail || `${Math.round(task.progress * 100)}%`;
   label.classList.toggle('is-error', task.status === 'error');
+  label.title = label.textContent; // длинное сообщение сервера обрезается: целиком оно в подсказке
   const running = task.status === 'running' || task.status === 'waiting';
   row.querySelector('.upload-actions .icon-btn').hidden = !running;
   row.querySelector('.upload-retry').hidden = task.status !== 'error';

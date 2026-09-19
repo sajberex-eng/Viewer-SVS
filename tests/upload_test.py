@@ -255,6 +255,8 @@ def main() -> None:
         check("TIFF принимается", done_tif.status_code == 200, f"({done_tif.text[:80]})")
         tif_id = done_tif.json().get("slide_id", "")
         tif_key = db.query_one("SELECT key FROM slides WHERE id = ?", (tif_id,))["key"]
+        check("формат виден в карточке, имя файла — нет",
+              {s["id"]: s for s in admin.get("/api/catalog").json()["slides"]}[tif_id].get("format") == "TIF")
         check("файл хранится со своим расширением", tif_key.endswith(".tif") and (storage_root / tif_key).is_file(),
               f"({tif_key})")
         tif_info = admin.get(f"/api/slides/{tif_id}").json()

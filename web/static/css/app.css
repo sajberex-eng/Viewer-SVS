@@ -503,8 +503,11 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .label-head { display: flex; align-items: center; gap: 4px; font-size: 12px; margin-bottom: 4px; }
 .label-head span { margin-right: auto; }
-.label-image { display: block; width: 100%; background: #fafafa; transition: transform 0.15s; }
-.label-image.is-sideways { max-height: 208px; width: auto; margin: 0 auto; }
+/* Поворот через transform не меняет места, которое картинка занимает в потоке,
+   поэтому рамку и размер картинки считает slide-view.js: повёрнутая этикетка
+   любой формы остаётся внутри панели. */
+.label-frame { position: relative; overflow: hidden; background: #fafafa; }
+.label-image { position: absolute; top: 50%; left: 50%; max-width: none; transform: translate(-50%, -50%); transition: transform 0.15s; }
 .label-error { margin: 4px 0 0; }
 .btn.is-active { background: var(--brand-tint); border-color: var(--brand); color: var(--brand); }
 

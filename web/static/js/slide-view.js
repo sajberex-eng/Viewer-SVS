@@ -210,7 +210,7 @@ export class SlideView {
   // На этикетке бывают персональные данные, поэтому панель закрыта по умолчанию,
   // изображение запрашивается только по нажатию, а сервер отдаёт его без кэша.
   #initLabel() {
-    const { paneLabel, labelPanel, labelImage, labelError, labelClose, labelRotate } = this.parts;
+    const { paneLabel, labelPanel, labelFrame, labelImage, labelError, labelClose, labelRotate } = this.parts;
     paneLabel.hidden = false;
     if (!this.slide.has_label) {
       paneLabel.disabled = true;
@@ -219,6 +219,23 @@ export class SlideView {
     }
     let rotation = 0;
     let loaded = false;
+    // Этикетка вписывается в ширину панели при любом повороте; слишком высокая
+    // (узкая этикетка боком) ограничивается по высоте.
+    const LABEL_MAX_HEIGHT = 320;
+    const layout = () => {
+      const { naturalWidth, naturalHeight } = labelImage;
+      const frameWidth = labelFrame.clientWidth;
+      if (!naturalWidth || !frameWidth) return;
+      const sideways = rotation % 180 !== 0;
+      // размеры на экране после поворота
+      const [shownW, shownH] = sideways ? [naturalHeight, naturalWidth] : [naturalWidth, naturalHeight];
+      const scale = Math.min(frameWidth / shownW, LABEL_MAX_HEIGHT / shownH);
+      labelFrame.style.height = `${Math.round(shownH * scale)}px`;
+      labelImage.style.width = `${naturalWidth * scale}px`;
+      labelImage.style.height = `${naturalHeight * scale}px`;
+      labelImage.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+    };
+    labelImage.addEventListener('load', layout);
     this.toggleLabel = (open = labelPanel.hidden) => {
       labelPanel.hidden = !open;
       paneLabel.classList.toggle('is-active', open);
@@ -226,9 +243,10 @@ export class SlideView {
         loaded = true;
         labelImage.src = `/api/slides/${encodeURIComponent(this.slide.id)}/label.jpg`;
       }
+      if (open) layout(); // пока панель скрыта, ширина рамки равна нулю
     };
     labelImage.addEventListener('error', () => {
-      labelImage.hidden = true;
+      labelFrame.hidden = true;
       labelError.hidden = false;
       labelError.textContent = t('label.failed');
     });
@@ -236,8 +254,7 @@ export class SlideView {
     labelClose.addEventListener('click', () => this.toggleLabel(false));
     labelRotate.addEventListener('click', () => {
       rotation = (rotation + 90) % 360;
-      labelImage.style.transform = `rotate(${rotation}deg)`;
-      labelImage.classList.toggle('is-sideways', rotation % 180 !== 0);
+      layout();
     });
   }
 
