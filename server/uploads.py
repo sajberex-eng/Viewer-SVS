@@ -45,7 +45,16 @@ class UploadState:
 
 
 class UploadError(Exception):
-    """Ошибка загрузки, понятная администратору."""
+    """Ошибка загрузки, понятная администратору.
+
+    Код ответа говорит странице, лечится ли ошибка повтором (ЗГ-1):
+    409 — сверить принятое с сервером и продолжать, 503 — подождать;
+    400, 403, 404 — повтор не поможет, загрузка останавливается.
+    """
+
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
 
 
 class Uploads:
@@ -62,9 +71,9 @@ class Uploads:
     def _row(self, upload_id: str, user):
         row = self._db.query_one("SELECT * FROM uploads WHERE id = ?", (upload_id,))
         if row is None:
-            raise UploadError("Загрузка не найдена: возможно, она была отменена")
+            raise UploadError("Загрузка не найдена: возможно, она была отменена", 404)
         if row["user_id"] != user["id"]:
-            raise UploadError("Эту загрузку начал другой администратор")
+            raise UploadError("Эту загрузку начал другой администратор", 403)
         return row
 
     def pending(self, user) -> list[dict]:
@@ -126,11 +135,11 @@ class Uploads:
         received = self._actual_size(upload_id)
         if offset != received:
             # Клиент отстал или забежал вперёд: сообщаем, откуда продолжать
-            raise UploadError(f"Часть не на своём месте, продолжайте с байта {received}")
+            raise UploadError(f"Часть не на своём месте, продолжайте с байта {received}", 409)
         if received + len(data) > row["size"]:
             raise UploadError("Передано больше, чем заявленный размер файла")
         if checksum and hashlib.sha256(data).hexdigest() != checksum:
-            raise UploadError("Часть повреждена при передаче, повторите её")
+            raise UploadError("Часть повреждена при передаче, повторите её", 409)
 
         with path.open("ab") as handle:
             handle.write(data)
@@ -147,14 +156,14 @@ class Uploads:
         path = self._path(upload_id)
         received = self._actual_size(upload_id)
         if received != row["size"]:
-            raise UploadError(f"Файл принят не полностью: {received} из {row['size']} байт")
+            raise UploadError(f"Файл принят не полностью: {received} из {row['size']} байт", 409)
 
         slide_id = new_slide_id()
         key = key_for(slide_id)
         try:
             stored = self._storage.put(key, path)
         except StorageUnavailable as exc:
-            raise UploadError(str(exc)) from exc
+            raise UploadError(str(exc), 503) from exc
 
         # Метаданные читаются уже из хранилища: так проверяется и то, что файл
         # на месте, и то, что он вообще открывается как скан.

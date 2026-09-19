@@ -38,7 +38,6 @@ class StoredObject:
 @dataclass(frozen=True)
 class DiskSpace:
     total: int
-    used: int
     free: int
 
 
@@ -73,7 +72,6 @@ class LocalFolderStorage(Storage):
         self.root = path if path.is_absolute() else BASE_DIR / path
         self.reserve_bytes = int(config.reserve_gb * 1e9)
         self.max_upload_bytes = int(config.max_upload_gb * 1e9)
-        self.warn_free_bytes = int(config.warn_free_gb * 1e9)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
@@ -132,7 +130,7 @@ class LocalFolderStorage(Storage):
             usage = shutil.disk_usage(self.root)
         except OSError as exc:
             raise StorageUnavailable(f"Не удалось узнать свободное место: {exc}") from exc
-        return DiskSpace(usage.total, usage.used, usage.free)
+        return DiskSpace(usage.total, usage.free)
 
     def check_can_accept(self, size: int) -> None:
         """Хватит ли места на файл указанного размера с учётом неприкосновенного резерва."""

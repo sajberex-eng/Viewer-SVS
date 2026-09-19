@@ -11,7 +11,6 @@ const STRINGS = {
     'login.failed': 'Не удалось войти',
     'common.logout': 'Выход',
     'common.loading': 'Загрузка…',
-    'common.ready': 'Готово',
     'common.error': 'Ошибка',
     'common.networkError': 'Нет связи с сервером. Проверьте подключение и повторите.',
     'common.cancel': 'Отмена',
@@ -44,14 +43,13 @@ const STRINGS = {
     'catalog.deleteFolder': 'Удалить папку',
     'catalog.dropHere': 'Отпустите файлы, чтобы загрузить их в папку «{folder}»',
     'catalog.selectFolder': 'Выберите папку слева, чтобы загрузить в неё сканы.',
+    'catalog.selectFolderAccess': 'Выберите папку слева, чтобы настроить доступ к ней.',
     'catalog.space': 'Свободно {free} из {total}',
     'catalog.spaceLow': 'Мало места: свободно {free}. Удалите ненужные сканы.',
     'catalog.users': 'Пользователи',
     'catalog.journal': 'Журнал',
-    'catalog.openViewer': 'Открыть',
     'catalog.edit': 'Изменить',
     'catalog.move': 'Переместить',
-    'catalog.deleteSlide': 'Удалить скан',
 
     'folder.nameLabel': 'Название папки',
     'folder.nameHint': 'Без фамилий, ИИН, дат рождения и номеров историй болезни.',
@@ -83,9 +81,10 @@ const STRINGS = {
     'access.users': 'Пользователи',
     'access.adminsAlways': 'Администраторы видят всё всегда.',
     'access.inheritedFrom': 'Сейчас режим унаследован от папки выше.',
-    'access.badge.admins': 'только администраторы',
+    'access.badge.admins': 'админы',
     'access.badge.all': 'все',
-    'access.badge.selected': 'выбранные: {n}',
+    'access.badge.selected': 'выбранные',
+    'access.badge.tip': 'Кому доступно: {mode}',
 
     'upload.heading': 'Загрузка сканов',
     'upload.clear': 'Убрать завершённые',
@@ -95,7 +94,9 @@ const STRINGS = {
     'upload.speed': '{mbs} МБ/с, осталось {left}',
     'upload.leftSeconds': '{n} с',
     'upload.leftMinutes': '{n} мин',
-    'upload.retrying': 'Обрыв связи, продолжаю с места остановки (попытка {n})',
+    'upload.offline': 'Нет связи с сервером, жду. Следующая попытка через {n} с',
+    'upload.sessionExpired': 'Сессия истекла: войдите снова в новой вкладке и нажмите «Повторить»',
+    'upload.retry': 'Повторить',
     'upload.paused': 'Прервана на {done}%, осталось {left}',
     'upload.resume': 'Продолжить',
     'upload.wrongFile': 'Это другой файл. Чтобы продолжить, выберите тот же: {name}',
@@ -106,7 +107,6 @@ const STRINGS = {
     'upload.cancel.tip': 'Отменить загрузку',
 
     'users.heading': 'Пользователи',
-    'users.groups': 'Группы',
     'users.add': 'Новый пользователь',
     'users.login': 'Логин',
     'users.name': 'Имя',
@@ -190,7 +190,6 @@ const STRINGS = {
     'profile.done': 'Пароль изменён',
     'top.catalog': 'Каталог',
     'top.catalog.tip': 'Вернуться к списку сканов',
-    'top.label': 'Этикетка',
     'top.label.tip': 'Показать этикетку стекла',
     'top.label.none': 'У этого скана нет этикетки',
     'label.heading': 'Этикетка стекла',
@@ -312,4 +311,12 @@ export function applyI18n(root = document) {
 
 export function formatNumber(value, digits = 0) {
   return value.toLocaleString(current, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+
+// Время от сервера приходит в UTC с отметкой «Z» и показывается по часам
+// пользователя: «19.09.2026, 19:42» (ИН-1).
+export function formatDateTime(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso ?? '';
+  return date.toLocaleString(current, { dateStyle: 'short', timeStyle: 'short' });
 }

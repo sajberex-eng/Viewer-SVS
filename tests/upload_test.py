@@ -106,12 +106,13 @@ def main() -> None:
         check("первая часть принята", first.status_code == 200 and first.json()["received"] == part)
 
         wrong = send(admin, upload_id, payload[part * 2 : part * 3], part * 2)
-        check("часть не на своём месте отклоняется и называет нужный байт",
-              wrong.status_code == 400 and str(part) in wrong.text, f"({wrong.json()['detail'][:50]})")
+        # 409: повтором лечится — страница сверяется с сервером и продолжает (ЗГ-1)
+        check("часть не на своём месте отклоняется (409) и называет нужный байт",
+              wrong.status_code == 409 and str(part) in wrong.text, f"({wrong.json()['detail'][:50]})")
 
         broken = admin.put(f"/api/uploads/{upload_id}?offset={part}", content=payload[part : part * 2],
                            headers={"x-part-sha256": "0" * 64})
-        check("часть с неверной контрольной суммой отклоняется", broken.status_code == 400)
+        check("часть с неверной контрольной суммой отклоняется (409)", broken.status_code == 409)
 
         # Обрыв связи: клиент начинает то же самое заново и узнаёт, с чего продолжать
         resumed = admin.post("/api/uploads", json=body).json()
@@ -129,9 +130,12 @@ def main() -> None:
               [p.name for p in uploads_dir.glob("*.part")] == [f"{upload_id}.part"])
 
         premature = admin.post("/api/uploads", json={**body, "name": "Другой.svs"}).json()
-        check("незаконченный файл нельзя завершить",
-              admin.post(f"/api/uploads/{premature['id']}/complete").status_code == 400)
+        check("незаконченный файл нельзя завершить (409)",
+              admin.post(f"/api/uploads/{premature['id']}/complete").status_code == 409)
         admin.delete(f"/api/uploads/{premature['id']}")
+        # 404: повтор не поможет, страница останавливает загрузку с ошибкой (ЗГ-1)
+        check("часть удалённой загрузки отвечает 404",
+              send(admin, premature["id"], b"x", 0).status_code == 404)
 
         done = admin.post(f"/api/uploads/{upload_id}/complete")
         check("загрузка завершена", done.status_code == 200, f"({done.text[:80]})")
@@ -249,7 +253,7 @@ def main() -> None:
 
     # ---------- нехватка места ----------
     storage = LocalFolderStorage(StorageConfig(root=str(WORK_DIR / "space"), reserve_gb=2, max_upload_gb=4))
-    storage.space = lambda: DiskSpace(30 * 10**9, 27 * 10**9, 3 * 10**9)  # свободно 3 ГБ
+    storage.space = lambda: DiskSpace(30 * 10**9, 3 * 10**9)  # всего 30 ГБ, свободно 3 ГБ
     try:
         storage.check_can_accept(2 * 10**9)
         check("при нехватке места загрузка отклоняется", False)

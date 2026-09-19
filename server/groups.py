@@ -96,11 +96,6 @@ def set_members(db: Database, group_id: int, user_ids: list[int]) -> None:
         )
 
 
-def user_group_ids(db: Database, user_id: int) -> list[int]:
-    rows = db.query("SELECT group_id FROM user_group_members WHERE user_id = ? ORDER BY group_id", (user_id,))
-    return [row["group_id"] for row in rows]
-
-
 def set_user_groups(db: Database, user_id: int, group_ids: list[int]) -> None:
     wanted = list(dict.fromkeys(group_ids))
     if wanted:

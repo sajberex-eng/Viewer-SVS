@@ -4,8 +4,14 @@ import { ApiError, api } from './api.js';
 import { t } from './i18n.js';
 
 const PARALLEL = 2;
-const RETRY_PAUSE_MS = 3000;
-const MAX_RETRIES = 5;
+const RETRY_FIRST_MS = 3000;
+const RETRY_MAX_MS = 60000;
+
+// Ответы, после которых стоит просто подождать и повторить: нет связи (0),
+// сервер перезапускается (Caddy отвечает 502–504), хранилище временно
+// недоступно (503). 409 значит «сверься с сервером», остальное окончательно:
+// нет места, загрузка удалена, файл отклонён, сессия истекла (ЗГ-1).
+const TEMPORARY = new Set([0, 408, 429, 500, 502, 503, 504]);
 
 // Контрольная сумма части (ТЗ Х-5). Web Crypto доступен только в защищённом
 // контексте: по HTTPS и на localhost. Если его нет, часть уходит без суммы,
@@ -24,6 +30,43 @@ function speedText(bytesPerSecond, remainingBytes) {
     ? t('upload.leftMinutes', { n: Math.ceil(seconds / 60) })
     : t('upload.leftSeconds', { n: Math.max(seconds, 1) });
   return t('upload.speed', { mbs: mbs.toFixed(1), left });
+}
+
+// Пауза до следующей попытки; событие браузера «связь появилась» её прерывает.
+function waitForRetry(ms) {
+  return new Promise((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      removeEventListener('online', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    addEventListener('online', done);
+  });
+}
+
+// Запрос загрузки. В отличие от api(), истёкшая сессия не уводит со страницы:
+// загрузка останавливается, а после входа в другой вкладке её можно повторить.
+// Когда браузер замечает, что связь пропала, запрос обрывается сразу, а не
+// висит до тайм-аута соединения.
+async function request(path, { method = 'POST', body, headers } = {}) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  addEventListener('offline', abort);
+  let response;
+  try {
+    response = await fetch(path, { method, body, headers, credentials: 'same-origin', signal: controller.signal });
+  } catch {
+    throw new ApiError(0, t('common.networkError'));
+  } finally {
+    removeEventListener('offline', abort);
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = response.status === 401 ? t('upload.sessionExpired') : data.detail;
+    throw new ApiError(response.status, typeof message === 'string' ? message : t('common.error'));
+  }
+  return data;
 }
 
 class Task {
@@ -50,21 +93,34 @@ class Task {
     this.queue.changed();
   }
 
+  // «Повторить» у загрузки с ошибкой (ЗГ-2): файл ещё открыт на странице,
+  // сервер помнит принятое, поэтому загрузка продолжается с места остановки.
+  retry() {
+    if (this.status !== 'error') return;
+    this.status = 'waiting';
+    this.detail = '';
+    this.queue.changed();
+    this.queue.pump();
+  }
+
   async run() {
     this.status = 'running';
+    this.detail = '';
     this.queue.changed();
     try {
-      const state = await api('/api/uploads', {
-        method: 'POST',
-        body: { folder_id: this.folderId, name: this.file.name, size: this.file.size },
-      });
-      this.uploadId = state.id;
-      this.sent = state.received; // докачка после обрыва связи
-      await this.sendParts(state.part_size);
-      if (this.cancelled) return;
-      const done = await api(`/api/uploads/${this.uploadId}/complete`, { method: 'POST' });
+      const partSize = await this.patiently(() => this.sync());
+      for (;;) {
+        await this.sendParts(partSize);
+        if (this.cancelled) return;
+        try {
+          await this.patiently(() => request(`/api/uploads/${this.uploadId}/complete`));
+          break;
+        } catch (error) {
+          if (error.status !== 409) throw error;
+          await this.patiently(() => this.sync()); // сервер принял не всё: досылаем
+        }
+      }
       this.status = 'done';
-      this.slideId = done.slide_id;
     } catch (error) {
       if (this.cancelled) return;
       this.status = 'error';
@@ -73,10 +129,41 @@ class Task {
     this.queue.changed();
   }
 
+  // Начать загрузку или узнать у сервера, сколько уже принято: докачка
+  // идёт с последнего подтверждённого байта.
+  async sync() {
+    const state = await request('/api/uploads', {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: this.folderId, name: this.file.name, size: this.file.size }),
+    });
+    this.uploadId = state.id;
+    this.sent = state.received;
+    return state.part_size;
+  }
+
+  // Повторяет действие, пока ошибка временная. Пауза растёт от 3 секунд
+  // до минуты; число попыток не ограничено (ЗГ-1).
+  async patiently(action) {
+    let pause = RETRY_FIRST_MS;
+    for (;;) {
+      try {
+        const result = await action();
+        if (pause !== RETRY_FIRST_MS) this.detail = '';
+        return result;
+      } catch (error) {
+        if (this.cancelled || !TEMPORARY.has(error.status)) throw error;
+        this.detail = t('upload.offline', { n: Math.round(pause / 1000) });
+        this.queue.changed();
+        await waitForRetry(pause);
+        if (this.cancelled) throw error;
+        pause = Math.min(pause * 2, RETRY_MAX_MS);
+      }
+    }
+  }
+
   async sendParts(partSize) {
     let started = performance.now();
     let startedAt = this.sent;
-    let failures = 0;
 
     while (this.sent < this.file.size && !this.cancelled) {
       const chunk = this.file.slice(this.sent, this.sent + partSize);
@@ -88,24 +175,14 @@ class Task {
       }
       const checksum = await sha256hex(buffer);
       try {
-        const received = await this.sendOne(buffer, checksum);
-        this.sent = received;
-        failures = 0;
+        this.sent = await this.patiently(() => this.sendOne(buffer, checksum));
       } catch (error) {
-        // Обрыв связи: ждём и продолжаем с того места, которое подтвердил сервер
-        if (++failures > MAX_RETRIES) throw error;
-        this.detail = t('upload.retrying', { n: failures });
-        this.queue.changed();
-        await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
-        const fresh = await api('/api/uploads', {
-          method: 'POST',
-          body: { folder_id: this.folderId, name: this.file.name, size: this.file.size },
-        }).catch(() => null);
-        if (fresh) {
-          this.uploadId = fresh.id;
-          this.sent = fresh.received;
-        }
-        this.detail = '';
+        if (error.status !== 409) throw error;
+        // Часть повреждена или сервер принял не столько, сколько мы думали:
+        // сверяемся и продолжаем с подтверждённого места
+        await this.patiently(() => this.sync());
+        started = performance.now();
+        startedAt = this.sent;
         continue;
       }
       const elapsed = (performance.now() - started) / 1000;
@@ -120,17 +197,8 @@ class Task {
 
   async sendOne(buffer, checksum) {
     const headers = checksum ? { 'x-part-sha256': checksum } : {};
-    const response = await fetch(`/api/uploads/${this.uploadId}?offset=${this.sent}`, {
-      method: 'PUT',
-      body: buffer,
-      headers,
-      credentials: 'same-origin',
-    });
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new ApiError(response.status, data.detail || t('common.error'));
-    }
-    return (await response.json()).received;
+    const state = await request(`/api/uploads/${this.uploadId}?offset=${this.sent}`, { method: 'PUT', body: buffer, headers });
+    return state.received;
   }
 }
 
@@ -139,6 +207,12 @@ export class UploadQueue {
     this.tasks = [];
     this.onChange = onChange;
     this.running = 0;
+    // Уход со страницы обрывает загрузку: браузер переспрашивает (ЗГ-3)
+    addEventListener('beforeunload', (event) => {
+      if (!this.active.length) return;
+      event.preventDefault();
+      event.returnValue = ''; // старые браузеры задают вопрос только так
+    });
   }
 
   changed() {

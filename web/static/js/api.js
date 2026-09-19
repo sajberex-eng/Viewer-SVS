@@ -7,7 +7,7 @@ export class ApiError extends Error {
   }
 }
 
-export function goToLogin() {
+function goToLogin() {
   const next = encodeURIComponent(location.pathname + location.search);
   location.href = `/login?next=${next}`;
 }

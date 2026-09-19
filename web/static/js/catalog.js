@@ -73,6 +73,17 @@ function renderTree() {
   root.append(folderRow({ id: null, name: t('catalog.root') }, 0));
   const list = [root, ...childrenOf(null).flatMap((folder) => branch(folder, 1))];
   $('tree').replaceChildren(...list);
+  if (user.role === 'admin') updateFolderButtons();
+}
+
+// В корне («Все папки») загружать и настраивать доступ некуда: кнопки
+// неактивны, подсказка говорит, что сделать (ИН-4).
+function updateFolderButtons() {
+  const inRoot = currentFolder === null;
+  $('btnUpload').disabled = inRoot;
+  $('btnUpload').title = t(inRoot ? 'catalog.selectFolder' : 'catalog.upload.tip');
+  $('btnAccess').disabled = inRoot;
+  $('btnAccess').title = t(inRoot ? 'catalog.selectFolderAccess' : 'catalog.access.tip');
 }
 
 function branch(folder, depth) {
@@ -153,9 +164,10 @@ function accessBadge(item) {
     badge.textContent = '';
     return badge;
   }
+  // Короткая подпись помещается в строку дерева, полная — в подсказке (ИН-5)
   badge.classList.add(`badge-${mode}`);
-  badge.textContent = mode === 'admins' ? t('access.badge.admins') : t('access.badge.all');
-  if (mode === 'selected') badge.textContent = t('access.selected').toLowerCase();
+  badge.textContent = t(`access.badge.${mode}`);
+  badge.title = t('access.badge.tip', { mode: t(`access.${mode}`) });
   return badge;
 }
 
@@ -306,7 +318,6 @@ function setUpAdmin() {
   $('btnAccess').addEventListener('click', () => {
     const folder = folderById(currentFolder);
     if (folder) editAccess({ folder });
-    else setNote(t('catalog.selectFolder'), true);
   });
   $('btnUpload').addEventListener('click', () => $('fileInput').click());
   $('fileInput').addEventListener('change', (event) => {
@@ -526,7 +537,11 @@ function setUpDropZone() {
       : t('catalog.selectFolder');
     $('dropHint').hidden = false;
   });
-  zone.addEventListener('dragover', (event) => event.preventDefault());
+  zone.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    // В корне курсор показывает «сюда нельзя», подсказка уже видна
+    if (currentFolder === null) event.dataTransfer.dropEffect = 'none';
+  });
   zone.addEventListener('dragleave', () => {
     depth = Math.max(0, depth - 1);
     if (!depth) $('dropHint').hidden = true;
@@ -680,7 +695,9 @@ function uploadRow(task) {
   cancel.textContent = '×';
   cancel.title = t('upload.cancel.tip');
   cancel.addEventListener('click', () => task.cancel());
-  item.querySelector('.upload-actions').append(cancel);
+  // Файл ещё открыт на странице: повтор без выбора файла (ЗГ-2)
+  const retry = actionButton(t('upload.retry'), () => task.retry(), 'upload-retry');
+  item.querySelector('.upload-actions').append(retry, cancel);
   return item;
 }
 
@@ -696,6 +713,7 @@ function fillUpload(row, task) {
   label.classList.toggle('is-error', task.status === 'error');
   const running = task.status === 'running' || task.status === 'waiting';
   row.querySelector('.upload-actions .icon-btn').hidden = !running;
+  row.querySelector('.upload-retry').hidden = task.status !== 'error';
 }
 
 // ---------- профиль ----------

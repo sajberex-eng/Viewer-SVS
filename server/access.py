@@ -29,7 +29,6 @@ class Source:
     kind: str  # 'slide' | 'folder'
     id: object
     mode: str
-    inherited: bool
 
 
 class AccessIndex:
@@ -65,22 +64,19 @@ class AccessIndex:
 
     def folder_source(self, folder_id: int | None) -> Source | None:
         """Ближайшая папка вверх по дереву, у которой режим задан явно."""
-        inherited = False
         for _ in range(MAX_DEPTH):
             if folder_id is None:
                 return None
             mode = self._mode.get(folder_id)
             if mode is not None:
-                return Source("folder", folder_id, mode, inherited)
+                return Source("folder", folder_id, mode)
             folder_id = self._parent.get(folder_id)
-            inherited = True
         return None
 
     def slide_source(self, slide_row) -> Source | None:
         if slide_row["access_mode"] is not None:
-            return Source("slide", slide_row["id"], slide_row["access_mode"], False)
-        source = self.folder_source(slide_row["folder_id"])
-        return None if source is None else Source(source.kind, source.id, source.mode, True)
+            return Source("slide", slide_row["id"], slide_row["access_mode"])
+        return self.folder_source(slide_row["folder_id"])
 
     # ---------- проверки ----------
 

@@ -53,7 +53,7 @@
     <div class="panes-wrap">
       <!-- Панель увеличений одна на весь экран: в режиме сравнения она задаёт
            одинаковый масштаб обеим половинам, чтобы их можно было сопоставить -->
-      <div class="zoom-panel" id="zoomPanel" role="toolbar" aria-orientation="vertical">
+      <div class="zoom-panel" role="toolbar" aria-orientation="vertical">
         <div class="zoom-buttons" id="zoomButtons"></div>
         <input type="range" class="zoom-slider" id="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
         <output class="zoom-current" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
@@ -68,7 +68,7 @@
     <aside class="adjust-panel" id="adjustPanel" hidden>
       <div class="adjust-head">
         <h2 data-i18n="adjust.heading"></h2>
-        <span class="adjust-target muted" id="adjustTarget" hidden></span>
+        <span class="muted" id="adjustTarget" hidden></span>
         <button class="icon-btn" id="adjustClose" data-i18n-tip="adjust.close.tip">×</button>
       </div>
       <div class="adjust-row adjust-row-preset">

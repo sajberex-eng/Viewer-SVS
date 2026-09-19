@@ -1,7 +1,7 @@
 // Экраны администратора: учётные записи, группы и журнал действий.
 import { api, logout } from './api.js';
 import { confirmDialog, formDialog, passwordDialog, pickerDialog } from './dialog.js';
-import { applyI18n, setLanguage, t } from './i18n.js';
+import { applyI18n, formatDateTime, setLanguage, t } from './i18n.js';
 
 const $ = (id) => document.getElementById(id);
 const JOURNAL_PAGE = 200;
@@ -94,7 +94,7 @@ function renderUsers() {
       cell(row.role === 'admin' ? '—' : groupNames(row.group_ids)),
       cell(t(`users.status.${row.status}`)),
       cell(row.expires_at || t('common.unlimited'), expired ? 'is-error' : ''),
-      cell(row.last_login_at || t('common.never')),
+      cell(row.last_login_at ? formatDateTime(row.last_login_at) : t('common.never')),
     );
     const actions = document.createElement('td');
     actions.className = 'row-actions';
@@ -403,7 +403,7 @@ function renderJournal() {
   const rows = journalRows.map((row) => {
     const tr = document.createElement('tr');
     tr.append(
-      cell(row.at),
+      cell(formatDateTime(row.at)),
       cell(row.actor),
       cell(t(`action.${row.action}`)),
       cell(row.object_type ? `${row.object_type} ${row.object_id ?? ''}`.trim() : ''),
@@ -416,11 +416,31 @@ function renderJournal() {
   if (!journalRows.length) setNote(t('journal.empty'));
 }
 
+// Время в CSV местное, в сортируемом виде «2026-09-19 19:42:05»;
+// пояс один на весь файл и указан в заголовке столбца (ИН-1).
+function localTimestamp(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso ?? '';
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+    + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function utcOffsetLabel() {
+  const minutes = -new Date().getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  const pad = (number) => String(number).padStart(2, '0');
+  return `UTC${minutes < 0 ? '-' : '+'}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+}
+
 function exportJournal() {
   const header = ['at', 'actor', 'action', 'object_type', 'object_id', 'detail', 'ip'];
   const escape = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
-  const lines = [header.join(';')];
-  for (const row of journalRows) lines.push(header.map((key) => escape(row[key])).join(';'));
+  const titles = header.map((key) => (key === 'at' ? `at (${utcOffsetLabel()})` : key));
+  const lines = [titles.map(escape).join(';')];
+  for (const row of journalRows) {
+    lines.push(header.map((key) => escape(key === 'at' ? localTimestamp(row.at) : row[key])).join(';'));
+  }
   // BOM: иначе Excel читает кириллицу как кракозябры
   const blob = new Blob([`﻿${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8' });
   const link = document.createElement('a');

@@ -67,6 +67,7 @@ h1, h2 { margin: 0; font-weight: 600; }
 .btn:disabled, .zoom-btn:disabled { color: #a0a0a0; cursor: default; }
 .btn-primary { background: var(--brand); border-color: var(--brand); color: var(--accent-text); }
 .btn-primary:hover:not(:disabled) { background: var(--brand-dark); }
+.btn-primary:disabled { background: var(--brand-tint); border-color: var(--brand-tint); color: #8a90b8; }
 .icon-btn { width: 26px; height: 26px; padding: 0; line-height: 1; font-size: 16px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -399,9 +400,6 @@ input[type="range"] { accent-color: var(--accent); }
   color: var(--muted);
   white-space: nowrap;
   padding: 0 4px;
-  max-width: 96px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .tree-row:hover .badge { display: none; }  /* уступает место кнопкам действий */
 .badge-admins { color: var(--brand-accent); }

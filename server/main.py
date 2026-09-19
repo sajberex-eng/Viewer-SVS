@@ -36,7 +36,7 @@ from .auth import (
 )
 from .catalog import Catalog, CatalogError, slide_title
 from .config import BASE_DIR, load_secret_key, load_settings
-from .db import Database
+from .db import Database, utc_iso
 from .slides import LABEL_IMAGE, SlidePool
 from .storage import StorageUnavailable, create_storage
 from .tilecache import TileCache
@@ -194,7 +194,7 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError):
-        return JSONResponse(status_code=400, content={"detail": str(exc)})
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
 
     class FreshStatic(StaticFiles):
         """Статика с обязательной перепроверкой версии.
@@ -231,7 +231,7 @@ def create_app() -> FastAPI:
             "mpp": row["mpp"],
             "size_bytes": row["size"],
             "has_label": bool(row["has_label"]),
-            "added_at": row["added_at"],
+            "added_at": utc_iso(row["added_at"]),
         }
         if user["role"] == "admin":
             info["original_name"] = row["original_name"]
@@ -579,7 +579,7 @@ def create_app() -> FastAPI:
             "status": row["status"],
             "expires_at": row["expires_at"],
             "group_ids": memberships.get(row["id"], []),
-            "last_login_at": row["last_login_at"],
+            "last_login_at": utc_iso(row["last_login_at"]),
         }
 
     def memberships() -> dict[int, list[int]]:
@@ -771,7 +771,7 @@ def create_app() -> FastAPI:
         )
         return [
             {
-                "at": row["at"], "actor": row["actor"], "action": row["action"],
+                "at": utc_iso(row["at"]), "actor": row["actor"], "action": row["action"],
                 "object_type": row["object_type"], "object_id": row["object_id"],
                 "detail": row["detail"], "ip": row["ip"],
             }
