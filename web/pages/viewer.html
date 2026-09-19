@@ -13,10 +13,13 @@
     <h1 class="topbar-title" id="slideTitle"></h1>
     <nav class="topbar-actions">
       <a class="btn" href="/" data-i18n="top.catalog" data-i18n-tip="top.catalog.tip"></a>
+      <button class="btn" id="btnCompare" data-i18n="top.compare" data-i18n-tip="top.compare.tip"></button>
+      <button class="btn" id="btnLink2" hidden data-i18n="compare.link" data-i18n-tip="compare.link.tip"></button>
+      <button class="btn" id="btnSwap" hidden data-i18n="compare.swap" data-i18n-tip="compare.swap.tip"></button>
+      <button class="btn" id="btnSingle" hidden data-i18n="compare.single" data-i18n-tip="compare.single.tip"></button>
       <button class="btn" id="btnAdjust" aria-expanded="false" aria-controls="adjustPanel" data-i18n-tip="top.adjust.tip">
         <span data-i18n="top.adjust"></span><span class="saved-dot" id="adjustSavedDot" hidden data-i18n-tip="top.adjust.saved"></span>
       </button>
-      <button class="btn" id="btnLabel" hidden aria-expanded="false" aria-controls="labelPanel" data-i18n="top.label" data-i18n-tip="top.label.tip"></button>
       <button class="btn" id="btnReset" data-i18n="top.reset" data-i18n-tip="top.reset.tip"></button>
       <button class="btn" id="btnFullscreen" data-i18n="top.fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
       <div class="popover-anchor">
@@ -46,48 +49,13 @@
       <ul class="slides-list" id="slidesList"></ul>
     </aside>
 
-    <main class="stage" id="stage">
-      <div id="osd" class="osd"></div>
-
-      <div class="zoom-panel" id="zoomPanel" role="toolbar" aria-orientation="vertical">
-        <div class="zoom-buttons" id="zoomButtons"></div>
-        <input type="range" class="zoom-slider" id="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
-        <output class="zoom-current" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
-        <div class="zoom-rotate">
-          <button class="icon-btn" id="rotateLeft" data-i18n-tip="zoom.rotateLeft.tip">⟲</button>
-          <button class="icon-btn" id="rotateRight" data-i18n-tip="zoom.rotateRight.tip">⟳</button>
-        </div>
-      </div>
-
-      <div class="minimap" id="minimap">
-        <button class="icon-btn minimap-toggle" id="minimapToggle" aria-expanded="true" aria-controls="navigator" data-i18n-tip="minimap.toggle.tip">▾</button>
-        <div class="minimap-view" id="navigator"></div>
-      </div>
-
-      <aside class="label-panel" id="labelPanel" hidden>
-        <div class="label-head">
-          <span data-i18n="label.heading"></span>
-          <button class="icon-btn" id="labelRotate" data-i18n-tip="label.rotate.tip">⟳</button>
-          <button class="icon-btn" id="labelClose" data-i18n-tip="label.close.tip">×</button>
-        </div>
-        <img class="label-image" id="labelImage" alt="">
-        <p class="label-error muted" id="labelError" hidden></p>
-      </aside>
-
-      <div class="scalebar" id="scalebar" hidden>
-        <div class="scalebar-line" id="scalebarLine"></div>
-        <span id="scalebarLabel"></span>
-      </div>
-
-      <div class="stage-message" id="stageMessage" role="alert" hidden>
-        <p id="stageMessageText"></p>
-        <button class="btn btn-primary" id="stageRetry" data-i18n="viewer.retry"></button>
-      </div>
-    </main>
+    <!-- Половины экрана создаются из шаблона: одна в обычном режиме, две при сравнении -->
+    <div class="panes" id="panes"></div>
 
     <aside class="adjust-panel" id="adjustPanel" hidden>
       <div class="adjust-head">
         <h2 data-i18n="adjust.heading"></h2>
+        <span class="adjust-target muted" id="adjustTarget" hidden></span>
         <button class="icon-btn" id="adjustClose" data-i18n-tip="adjust.close.tip">×</button>
       </div>
       <div class="adjust-row adjust-row-preset">
@@ -104,6 +72,7 @@
         <button class="btn" id="adjustCompare" data-i18n="adjust.compare" data-i18n-tip="adjust.compare.tip"></button>
         <button class="btn" id="adjustPipette" data-i18n="adjust.pipette" data-i18n-tip="adjust.pipette.tip"></button>
         <button class="btn" id="adjustResetAll" data-i18n="adjust.resetAll" data-i18n-tip="adjust.resetAll.tip"></button>
+        <button class="btn" id="adjustBoth" hidden data-i18n="adjust.applyBoth" data-i18n-tip="adjust.applyBoth.tip"></button>
       </div>
       <p class="adjust-hint" id="adjustHint" aria-live="polite"></p>
       <p class="muted" data-i18n="adjust.order"></p>
@@ -117,6 +86,54 @@
     <span id="statusMpp"></span>
     <span class="status-tiles" id="statusTiles" aria-live="polite"></span>
   </footer>
+
+  <template id="paneTemplate">
+    <section class="pane">
+      <div class="pane-head">
+        <span class="pane-title" data-role="title"></span>
+        <button class="icon-btn" data-role="paneLabel" hidden data-i18n-tip="top.label.tip">🏷</button>
+        <button class="icon-btn" data-role="paneClose" hidden data-i18n-tip="compare.close.tip">×</button>
+      </div>
+      <main class="stage" data-role="stage">
+        <div class="osd" data-role="osd"></div>
+
+        <div class="zoom-panel" data-role="zoomPanel" role="toolbar" aria-orientation="vertical">
+          <div class="zoom-buttons" data-role="zoomButtons"></div>
+          <input type="range" class="zoom-slider" data-role="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
+          <output class="zoom-current" data-role="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
+          <div class="zoom-rotate">
+            <button class="icon-btn" data-role="rotateLeft" data-i18n-tip="zoom.rotateLeft.tip">⟲</button>
+            <button class="icon-btn" data-role="rotateRight" data-i18n-tip="zoom.rotateRight.tip">⟳</button>
+          </div>
+        </div>
+
+        <div class="minimap" data-role="minimap">
+          <button class="icon-btn minimap-toggle" data-role="minimapToggle" aria-expanded="true" data-i18n-tip="minimap.toggle.tip">▾</button>
+          <div class="minimap-view" data-role="navigator"></div>
+        </div>
+
+        <aside class="label-panel" data-role="labelPanel" hidden>
+          <div class="label-head">
+            <span data-i18n="label.heading"></span>
+            <button class="icon-btn" data-role="labelRotate" data-i18n-tip="label.rotate.tip">⟳</button>
+            <button class="icon-btn" data-role="labelClose" data-i18n-tip="label.close.tip">×</button>
+          </div>
+          <img class="label-image" data-role="labelImage" alt="">
+          <p class="label-error muted" data-role="labelError" hidden></p>
+        </aside>
+
+        <div class="scalebar" data-role="scalebar" hidden>
+          <div class="scalebar-line" data-role="scalebarLine"></div>
+          <span data-role="scalebarLabel"></span>
+        </div>
+
+        <div class="stage-message" data-role="stageMessage" role="alert" hidden>
+          <p data-role="stageMessageText"></p>
+          <button class="btn btn-primary" data-role="stageRetry" data-i18n="viewer.retry"></button>
+        </div>
+      </main>
+    </section>
+  </template>
 
   <script src="/static/vendor/openseadragon.min.js"></script>
   <script type="module" src="/static/js/viewer.js"></script>

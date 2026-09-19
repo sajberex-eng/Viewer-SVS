@@ -1,18 +1,26 @@
-import { ImageAdjuster, isDefault } from './adjust.js';
+// Вьювер: одна половина экрана в обычном режиме и две в режиме сравнения.
+// Всё, что относится к одному скану, живёт в SlideView; здесь — общие панели,
+// активная половина, связанная навигация и ссылка на поле зрения.
+import { isDefault } from './adjust.js';
 import { AdjustPanel } from './adjust-panel.js';
 import { api, logout } from './api.js';
+import { pickerDialog } from './dialog.js';
 import { applyI18n, formatNumber, setLanguage, t } from './i18n.js';
+import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
 
-const FIXED_MAGNIFICATIONS = [2, 4, 10, 20, 40]; // горячие клавиши 1–5
-const MAX_DIGITAL_ZOOM = 2; // зум не дальше 2× от увеличения сканирования (Н-2)
-const SCALEBAR_MAX_PX = 180;
 const PAN_STEP = 0.2; // доля видимой области на одно нажатие стрелки
-const ZOOM_STEP = 1.3;
-const SLIDER_STEPS = 1000;
-const LINK_ROLES = ['teacher', 'admin'];
+const MIN_COMPARE_WIDTH = 1280; // ТЗ С-13
+const SPLIT_LIMITS = [30, 70]; // проценты, ТЗ С-2
 
 const $ = (id) => document.getElementById(id);
-const { Point } = OpenSeadragon;
+
+let user = null;
+let panes = []; // одна или две половины
+let active = null;
+let linked = false;
+let linkOffset = null; // взаимное положение половин в момент связывания
+let adjustPanel = null;
+let split = 50;
 
 setLanguage('ru');
 applyI18n();
@@ -20,214 +28,272 @@ main();
 
 async function main() {
   const query = new URLSearchParams(location.search);
-  const user = await api('/api/me');
+  user = await api('/api/me');
   $('userName').textContent = user.name || user.login;
   $('btnLogout').addEventListener('click', logout);
-  $('stageRetry').addEventListener('click', () => location.reload());
 
   const slideId = query.get('slide');
-  if (!slideId) return showMessage(t('viewer.noSlide'), { retry: false });
+  if (!slideId) return showPageMessage(t('viewer.noSlide'));
 
-  let slide;
-  try {
-    slide = await api(`/api/slides/${encodeURIComponent(slideId)}`);
-  } catch (error) {
-    return showMessage(error.status === 404 ? t('viewer.notFound') : error.message, { retry: error.status !== 404 });
-  }
+  const slide = await loadSlide(slideId);
+  if (!slide) return;
 
   document.title = `${slide.title} · ${t('app.title')}`;
-  $('slideTitle').textContent = slide.title;
-  initSlidesPanel(slide);
-  initStatusBar(slide);
-
-  const viewer = createViewer(slide);
-  const adjuster = new ImageAdjuster(viewer);
-  const adjustPanel = new AdjustPanel({
+  adjustPanel = new AdjustPanel({
     panel: $('adjustPanel'),
-    adjuster,
-    viewer,
-    storageKey: `svsviewer:adjust:${user.login}:${slide.id}`,
     onChange: (values) => { $('adjustSavedDot').hidden = isDefault(values); },
   });
+  initSlidesPanel(slide);
+  initTopbar();
+  initHotkeys();
 
-  initZoomPanel(viewer, slide);
-  initScalebar(viewer, slide);
-  initCursorReadout(viewer, slide);
-  initTileStatus(viewer);
-  initTopbar(viewer, slide, adjustPanel, user);
-  initMinimapToggle(viewer);
-  initLabelPanel(slide);
-  initHotkeys(viewer, slide);
-
-  viewer.addHandler('open', () => {
-    restoreView(viewer, slide, query);
-    adjustPanel.loadSaved();
+  const first = addPane(slide);
+  setActive(first);
+  first.viewer.addHandler('open', () => {
+    restoreView(first, query, '');
     const shared = query.get('adj') && AdjustPanel.deserialize(query.get('adj'));
     if (shared) adjustPanel.setValues(shared, { save: false });
   });
-  viewer.addHandler('open-failed', () => showMessage(t('viewer.storageDown')));
-}
 
-function createViewer(slide) {
-  const viewer = OpenSeadragon({
-    element: $('osd'),
-    drawer: 'canvas', // 2D-canvas служит источником для шейдера коррекций (adjust.js)
-    tileSources: {
-      Image: {
-        xmlns: 'http://schemas.microsoft.com/deepzoom/2008',
-        Url: slide.tiles.url,
-        Format: slide.tiles.format,
-        Overlap: String(slide.tiles.overlap),
-        TileSize: String(slide.tiles.tile_size),
-        Size: { Width: String(slide.width), Height: String(slide.height) },
-      },
-    },
-    showNavigationControl: false,
-    showNavigator: true,
-    navigatorId: 'navigator',
-    navigatorDisplayRegionColor: '#d12f2f',
-    maxZoomPixelRatio: MAX_DIGITAL_ZOOM,
-    minZoomImageRatio: 1,
-    preserveImageSizeOnResize: true,
-    animationTime: 0.5,
-    zoomPerScroll: ZOOM_STEP,
-    timeout: 60000, // первый тайл большого слайда на медленном канале приходит не сразу
-    gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true },
-    gestureSettingsTouch: { clickToZoom: false, dblClickToZoom: true },
-  });
-  // Клавиатуру целиком обрабатывает initHotkeys, иначе действия выполнялись бы дважды.
-  viewer.addHandler('canvas-key', (event) => { event.preventDefaultAction = true; });
-  return viewer;
-}
-
-// ---------- увеличение ----------
-
-const imageZoom = (viewer) => viewer.viewport.viewportToImageZoom(viewer.viewport.getZoom(true));
-
-function magnificationLabel(viewer, slide) {
-  // Без объектива и размера пикселя показывается процент от полного разрешения (Н-4).
-  if (!slide.objective) return `${formatNumber(imageZoom(viewer) * 100)} %`;
-  return `${formatNumber(slide.objective * imageZoom(viewer), 1)}×`;
-}
-
-function zoomToMagnification(viewer, slide, magnification) {
-  viewer.viewport.zoomTo(viewer.viewport.imageToViewportZoom(magnification / slide.objective));
-  viewer.viewport.applyConstraints();
-}
-
-function initZoomPanel(viewer, slide) {
-  const buttons = $('zoomButtons');
-  const fit = document.createElement('button');
-  fit.className = 'zoom-btn';
-  fit.textContent = t('zoom.fit');
-  fit.title = t('zoom.fit.tip');
-  fit.addEventListener('click', () => viewer.viewport.goHome());
-  buttons.append(fit);
-
-  FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
-    const button = document.createElement('button');
-    button.className = 'zoom-btn';
-    button.textContent = `${magnification}×`;
-    // Кнопки выше увеличения сканирования неактивны: скан 20× не предлагает 40× (Н-1).
-    button.disabled = !slide.objective || magnification > slide.objective;
-    button.title = button.disabled ? t('zoom.unavailable.tip') : t('zoom.fixed.tip', { mag: magnification, key: index + 1 });
-    button.addEventListener('click', () => zoomToMagnification(viewer, slide, magnification));
-    buttons.append(button);
-  });
-
-  // Ползунок логарифмический: одинаковый ход даёт одинаковую кратность зума.
-  const slider = $('zoomSlider');
-  const range = () => [viewer.viewport.getMinZoom(), viewer.viewport.getMaxZoom()];
-  let dragging = false;
-  slider.addEventListener('input', () => {
-    dragging = true;
-    const [min, max] = range();
-    viewer.viewport.zoomTo(min * (max / min) ** (slider.value / SLIDER_STEPS), null, true);
-  });
-  slider.addEventListener('change', () => { dragging = false; });
-
-  const update = () => {
-    const label = magnificationLabel(viewer, slide);
-    $('zoomCurrent').textContent = label;
-    $('statusMag').textContent = t('status.mag', { mag: label });
-    if (!dragging) {
-      const [min, max] = range();
-      slider.value = max > min ? (SLIDER_STEPS * Math.log(viewer.viewport.getZoom(true) / min)) / Math.log(max / min) : 0;
+  // Ссылка на два скана открывает сразу режим сравнения (С-11)
+  const secondId = query.get('slide2');
+  if (secondId) {
+    const second = await loadSlide(secondId, { silent: true });
+    if (!second) {
+      showNote(t('compare.noAccess'));
+    } else {
+      const pane = addPane(second);
+      pane.viewer.addHandler('open', () => {
+        restoreView(pane, query, '2');
+        // Связь включается, когда открылись обе половины: порядок не гарантирован
+        if (query.get('link') === '1') whenAllOpen(() => setLinked(true));
+      });
+      applyCompareLayout();
     }
+  }
+}
+
+async function loadSlide(id, { silent = false } = {}) {
+  try {
+    return await api(`/api/slides/${encodeURIComponent(id)}`);
+  } catch (error) {
+    if (silent) return null;
+    showPageMessage(error.status === 404 ? t('viewer.notFound') : error.message);
+    return null;
+  }
+}
+
+// ---------- половины ----------
+
+function addPane(slide) {
+  const fragment = $('paneTemplate').content.cloneNode(true);
+  const element = fragment.querySelector('.pane');
+  $('panes').append(element);
+
+  const view = new SlideView({
+    slide,
+    container: element,
+    storageKey: `svsviewer:adjust:${user.login}:${slide.id}`,
+    onActivate: setActive,
+    onViewChange: onPaneChanged,
+    onClose: panes.length ? closePane : null,
+    onPickWhite: (pane, position) => (active === pane ? adjustPanel.pickWhite(position) : false),
+  });
+  view.viewer.addHandler('open', () => {
+    if (active !== view) view.applySavedAdjust(); // активную настроит панель
+  });
+  panes.push(view);
+  return view;
+}
+
+function closePane(view) {
+  panes = panes.filter((pane) => pane !== view);
+  view.destroy();
+  setLinked(false);
+  setActive(panes[0]);
+  applyCompareLayout();
+}
+
+function setActive(view) {
+  if (!view || active === view) return;
+  active = view;
+  for (const pane of panes) pane.setActive(panes.length > 1 && pane === view);
+  $('slideTitle').textContent = view.slide.title;
+  document.title = `${view.slide.title} · ${t('app.title')}`;
+  adjustPanel.attachTo({ adjuster: view.adjuster, viewer: view.viewer, storageKey: view.storageKey });
+  $('adjustTarget').textContent = t('adjust.target', { title: view.slide.title });
+  $('adjustTarget').hidden = panes.length < 2;
+  updateStatusBar();
+  markCurrentThumb();
+}
+
+// ---------- связанная навигация (С-6, С-7) ----------
+
+function setLinked(value) {
+  // Связывать можно только открытые половины: у неоткрытой ещё нет координат
+  linked = value && panes.length === 2 && panes.every((pane) => pane.viewer.isOpen());
+  $('btnLink2').classList.toggle('is-active', linked);
+  $('btnLink2').textContent = linked ? t('compare.unlink') : t('compare.link');
+  if (!linked) {
+    linkOffset = null;
+    return;
+  }
+  // Связь относительная по положению: запоминаем, как половины стоят сейчас,
+  // и держим это смещение — пользователь сначала совмещает участки вручную (С-6).
+  // Увеличение, наоборот, уравнивается: 10× слева это 10× справа (С-7).
+  const [a, b] = panes;
+  linkOffset = {
+    dx: b.centerMicrons.x - a.centerMicrons.x,
+    dy: b.centerMicrons.y - a.centerMicrons.y,
+    rotation: b.rotation - a.rotation,
   };
-  for (const event of ['open', 'animation', 'resize']) viewer.addHandler(event, update);
-
-  const rotate = (degrees) => viewer.viewport.setRotation(viewer.viewport.getRotation() + degrees);
-  $('rotateLeft').addEventListener('click', () => rotate(-90));
-  $('rotateRight').addEventListener('click', () => rotate(90));
+  if (a.magnification && b.magnification) b.setMagnification(a.magnification, true);
 }
 
-// ---------- масштабная линейка ----------
-
-function initScalebar(viewer, slide) {
-  if (!slide.mpp) return;
-  $('scalebar').hidden = false;
-  const update = () => {
-    const micronsPerPixel = slide.mpp / imageZoom(viewer);
-    const maxLength = micronsPerPixel * SCALEBAR_MAX_PX;
-    const magnitude = 10 ** Math.floor(Math.log10(maxLength));
-    const length = [5, 2, 1].find((n) => n * magnitude <= maxLength) * magnitude;
-    $('scalebarLine').style.width = `${length / micronsPerPixel}px`;
-    $('scalebarLabel').textContent = length >= 1000
-      ? `${formatNumber(length / 1000, length % 1000 ? 1 : 0)} ${t('unit.mm')}`
-      : `${formatNumber(length, length < 1 ? 1 : 0)} ${t('unit.um')}`;
-  };
-  for (const event of ['open', 'animation', 'resize']) viewer.addHandler(event, update);
-}
-
-// ---------- строка состояния ----------
-
-function initStatusBar(slide) {
-  $('statusSize').textContent = t('status.size', { w: formatNumber(slide.width), h: formatNumber(slide.height) });
-  $('statusMpp').textContent = slide.mpp ? t('status.mpp', { mpp: formatNumber(slide.mpp, 4) }) : t('status.mpp.unknown');
-}
-
-function initCursorReadout(viewer, slide) {
-  const readout = $('statusCursor');
-  viewer.element.addEventListener('pointermove', (event) => {
-    if (!viewer.isOpen()) return;
-    const rect = viewer.element.getBoundingClientRect();
-    const point = viewer.viewport.viewerElementToImageCoordinates(new Point(event.clientX - rect.left, event.clientY - rect.top));
-    const inside = point.x >= 0 && point.y >= 0 && point.x < slide.width && point.y < slide.height;
-    readout.textContent = inside ? t('status.cursor', { x: formatNumber(Math.floor(point.x)), y: formatNumber(Math.floor(point.y)) }) : '';
-  }, true);
-  viewer.element.addEventListener('pointerleave', () => { readout.textContent = ''; });
-}
-
-function initTileStatus(viewer) {
-  const status = $('statusTiles');
-  let failed = false;
-  let checking = false;
-  viewer.addHandler('open', () => {
-    viewer.world.getItemAt(0).addHandler('fully-loaded-change', (event) => {
-      if (event.fullyLoaded) failed = false;
-      status.classList.toggle('is-error', failed);
-      status.textContent = event.fullyLoaded ? '' : t(failed ? 'status.tilesError' : 'status.tilesLoading');
+function whenAllOpen(action) {
+  const pending = panes.filter((pane) => !pane.viewer.isOpen());
+  if (!pending.length) return action();
+  let left = pending.length;
+  for (const pane of pending) {
+    pane.viewer.addOnceHandler('open', () => {
+      if (--left === 0) action();
     });
+  }
+}
+
+let syncing = false;
+
+function onPaneChanged(view) {
+  if (active === view) updateStatusBar();
+  if (!linked || syncing || panes.length !== 2) return;
+  const [a, b] = panes;
+  const [source, target] = view === a ? [a, b] : [b, a];
+  const sign = view === a ? 1 : -1;
+
+  syncing = true;
+  try {
+    // Без анимации: вторая половина следует сразу, иначе она догоняла бы первую
+    const center = source.centerMicrons;
+    // Одинаковое увеличение в микроскопических единицах, а не одинаковый зум:
+    // у сканов 20× и 40× разный размер пикселя (С-7)
+    if (source.magnification && target.magnification) target.setMagnification(source.magnification, true);
+    target.panToMicrons({ x: center.x + sign * linkOffset.dx, y: center.y + sign * linkOffset.dy }, true);
+    const rotation = source.rotation + sign * linkOffset.rotation;
+    if (Math.abs(target.rotation - rotation) > 0.01) target.setRotation(rotation, true);
+  } finally {
+    syncing = false;
+  }
+}
+
+// ---------- режим сравнения ----------
+
+function applyCompareLayout() {
+  const comparing = panes.length > 1;
+  document.body.classList.toggle('is-comparing', comparing);
+  $('panes').style.gridTemplateColumns = comparing ? `${split}fr 6px ${100 - split}fr` : '1fr';
+  for (const id of ['btnSwap', 'btnSingle', 'btnLink2']) $(id).hidden = !comparing;
+  $('adjustBoth').hidden = !comparing;
+  $('adjustTarget').hidden = !comparing;
+  $('btnCompare').hidden = comparing;
+  if (comparing) ensureSplitter();
+  else $('splitter')?.remove();
+  for (const pane of panes) {
+    pane.setActive(comparing && pane === active);
+    pane.parts.paneClose.hidden = !comparing;
+    pane.resize(); // у ещё не открытого слайда области просмотра нет
+  }
+}
+
+function ensureSplitter() {
+  if ($('splitter')) return;
+  const splitter = document.createElement('div');
+  splitter.className = 'splitter';
+  splitter.id = 'splitter';
+  splitter.title = t('compare.splitter.tip');
+  $('panes').insertBefore(splitter, panes[1].element);
+
+  const move = (event) => {
+    const rect = $('panes').getBoundingClientRect();
+    const percent = ((event.clientX - rect.left) / rect.width) * 100;
+    split = Math.min(Math.max(percent, SPLIT_LIMITS[0]), SPLIT_LIMITS[1]);
+    $('panes').style.gridTemplateColumns = `${split}fr 6px ${100 - split}fr`;
+  };
+  const stop = () => {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', stop);
+    for (const pane of panes) pane.resize();
+  };
+  splitter.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', stop);
   });
-  viewer.addHandler('tile-load-failed', async () => {
-    failed = true;
-    status.classList.add('is-error');
-    status.textContent = t('status.tilesError');
-    if (checking) return;
-    checking = true;
-    try {
-      await api('/api/me'); // истёкшая сессия уводит на страницу входа
-    } catch {
-      // сеть недоступна: сообщение об ошибке уже показано
-    }
-    setTimeout(() => { checking = false; }, 10000);
+  splitter.addEventListener('dblclick', () => {
+    split = 50;
+    $('panes').style.gridTemplateColumns = '50fr 6px 50fr';
+    for (const pane of panes) pane.resize();
   });
 }
 
-// ---------- верхняя панель ----------
+async function startCompare() {
+  if (innerWidth < MIN_COMPARE_WIDTH) return showNote(t('compare.tooNarrow'));
+  const catalog = await api('/api/catalog');
+  const current = new Set(panes.map((pane) => pane.slide.id));
+  const options = catalog.slides.filter((row) => !current.has(row.id));
+  if (!options.length) return showNote(t('compare.nothingToCompare'));
 
-function initTopbar(viewer, slide, adjustPanel, user) {
+  const folders = new Map(catalog.folders.map((row) => [row.id, row.name]));
+  const chosen = await pickerDialog({
+    title: t('compare.pick'),
+    submitLabel: t('compare.open'),
+    sections: [{
+      name: 'slide',
+      items: options.map((row) => ({
+        id: row.id,
+        label: row.title,
+        hint: folders.get(row.folder_id) ?? '',
+        checked: false,
+      })),
+    }],
+    onSubmit: (values) => {
+      if (values.slide.length !== 1) throw new Error(t('compare.pickOne'));
+      return values;
+    },
+  });
+  if (!chosen) return;
+
+  const slide = await loadSlide(String(chosen.slide[0]), { silent: true });
+  if (!slide) return showNote(t('compare.noAccess'));
+  const pane = addPane(slide);
+  applyCompareLayout();
+  setActive(pane);
+}
+
+function leaveCompare() {
+  if (panes.length < 2) return;
+  const keep = active ?? panes[0];
+  for (const pane of panes.filter((item) => item !== keep)) pane.destroy();
+  panes = [keep];
+  setLinked(false);
+  setActive(keep);
+  applyCompareLayout();
+}
+
+function swapPanes() {
+  if (panes.length !== 2) return;
+  panes.reverse();
+  const container = $('panes');
+  container.insertBefore(panes[0].element, $('splitter'));
+  container.append(panes[1].element);
+  panes[0].parts.paneClose.hidden = true;
+  panes[1].parts.paneClose.hidden = false;
+  if (linked) setLinked(true); // взаимное положение пересчитывается заново
+  for (const pane of panes) pane.resize();
+}
+
+// ---------- верхняя панель и строка состояния ----------
+
+function initTopbar() {
   const panel = $('adjustPanel');
   const toggleAdjust = (open = panel.hidden) => {
     panel.hidden = !open;
@@ -235,13 +301,26 @@ function initTopbar(viewer, slide, adjustPanel, user) {
   };
   $('btnAdjust').addEventListener('click', () => toggleAdjust());
   $('adjustClose').addEventListener('click', () => toggleAdjust(false));
-  $('btnReset').addEventListener('click', () => resetView(viewer));
+  $('btnReset').addEventListener('click', () => active?.resetView());
   $('btnFullscreen').addEventListener('click', toggleFullscreen);
+  $('btnCompare').addEventListener('click', startCompare);
+  $('btnSingle').addEventListener('click', leaveCompare);
+  $('btnSwap').addEventListener('click', swapPanes);
+  $('btnLink2').addEventListener('click', () => setLinked(!linked));
+  $('adjustBoth').addEventListener('click', () => {
+    for (const pane of panes) {
+      if (pane !== active) pane.adjustPanel.setValues(adjustPanel.values);
+    }
+  });
+  addEventListener('resize', () => {
+    if (panes.length > 1 && innerWidth < MIN_COMPARE_WIDTH) leaveCompare();
+  });
 
-  if (!LINK_ROLES.includes(user.role)) return;
+  // Ссылка доступна всем: открыть её сможет только тот, у кого есть доступ
+  // к этим сканам, это проверяет сервер (Д-5).
   const button = $('btnLink');
   const popover = $('linkPopover');
-  const refresh = () => { $('linkUrl').value = buildLink(viewer, slide, $('linkWithAdjust').checked ? adjustPanel : null); };
+  const refresh = () => { $('linkUrl').value = buildLink($('linkWithAdjust').checked); };
   button.hidden = false;
   button.addEventListener('click', () => {
     popover.hidden = !popover.hidden;
@@ -271,9 +350,34 @@ function initTopbar(viewer, slide, adjustPanel, user) {
   });
 }
 
-function resetView(viewer) {
-  viewer.viewport.setRotation(0);
-  viewer.viewport.goHome();
+function updateStatusBar() {
+  if (!active) return;
+  const { slide } = active;
+  $('statusSize').textContent = t('status.size', { w: formatNumber(slide.width), h: formatNumber(slide.height) });
+  $('statusMpp').textContent = slide.mpp ? t('status.mpp', { mpp: formatNumber(slide.mpp, 4) }) : t('status.mpp.unknown');
+  $('statusMag').textContent = t('status.mag', { mag: active.magnificationLabel() });
+  const status = $('statusTiles');
+  status.textContent = active.tilesStatus;
+  status.classList.toggle('is-error', active.tilesFailed);
+}
+
+function showNote(text) {
+  const status = $('statusTiles');
+  status.textContent = text;
+  status.classList.add('is-error');
+  setTimeout(() => {
+    if (status.textContent === text) {
+      status.textContent = '';
+      status.classList.remove('is-error');
+    }
+  }, 6000);
+}
+
+function showPageMessage(text) {
+  const message = document.createElement('p');
+  message.className = 'page-message';
+  message.textContent = text;
+  $('panes').append(message);
 }
 
 function toggleFullscreen() {
@@ -285,31 +389,41 @@ function toggleFullscreen() {
   }
 }
 
-// ---------- ссылка на поле зрения (Н-9) ----------
+// ---------- ссылка на поле зрения (Н-9, С-11) ----------
 
-function buildLink(viewer, slide, adjustPanel) {
-  const center = viewer.viewport.viewportToImageCoordinates(viewer.viewport.getCenter(true));
-  const query = new URLSearchParams({ slide: slide.id, x: Math.round(center.x), y: Math.round(center.y) });
-  if (slide.objective) query.set('m', (slide.objective * imageZoom(viewer)).toFixed(2));
-  else query.set('z', imageZoom(viewer).toFixed(4));
-  const rotation = viewer.viewport.getRotation();
-  if (rotation) query.set('r', rotation);
-  if (adjustPanel && !isDefault(adjustPanel.values)) query.set('adj', adjustPanel.serialize());
+function buildLink(withAdjust) {
+  const query = new URLSearchParams();
+  panes.forEach((pane, index) => {
+    const suffix = index ? '2' : '';
+    const center = pane.viewer.viewport.viewportToImageCoordinates(pane.viewer.viewport.getCenter(true));
+    query.set(`slide${suffix}`, pane.slide.id);
+    query.set(`x${suffix}`, Math.round(center.x));
+    query.set(`y${suffix}`, Math.round(center.y));
+    if (pane.slide.objective) query.set(`m${suffix}`, pane.magnification.toFixed(2));
+    else query.set(`z${suffix}`, pane.imageZoom.toFixed(4));
+    if (pane.rotation) query.set(`r${suffix}`, pane.rotation);
+    if (withAdjust && !isDefault(pane.adjustPanel.values)) {
+      query.set(`adj${suffix}`, pane.adjustPanel.serialize());
+    }
+  });
+  if (linked) query.set('link', '1');
   return `${location.origin}/viewer?${query}`;
 }
 
-function restoreView(viewer, slide, query) {
+function restoreView(pane, query, suffix) {
   const number = (name) => (query.has(name) ? Number(query.get(name)) : NaN);
-  const { viewport } = viewer;
-  const [x, y, m, z, r] = ['x', 'y', 'm', 'z', 'r'].map(number);
+  const { viewport } = pane.viewer;
+  const [x, y, m, z, r] = ['x', 'y', 'm', 'z', 'r'].map((key) => number(key + suffix));
   if (Number.isFinite(r)) viewport.setRotation(r, true);
-  const zoom = Number.isFinite(m) && slide.objective ? m / slide.objective : z;
+  const zoom = Number.isFinite(m) && pane.slide.objective ? m / pane.slide.objective : z;
   if (zoom > 0) viewport.zoomTo(viewport.imageToViewportZoom(zoom), null, true);
   if (Number.isFinite(x) && Number.isFinite(y)) viewport.panTo(viewport.imageToViewportCoordinates(x, y), true);
   viewport.applyConstraints(true);
+  const shared = query.get(`adj${suffix}`) && AdjustPanel.deserialize(query.get(`adj${suffix}`));
+  if (shared) pane.adjustPanel.setValues(shared, { save: false });
 }
 
-// ---------- панели ----------
+// ---------- панель стёкол ----------
 
 function initSlidesPanel(slide) {
   const list = $('slidesList');
@@ -318,7 +432,7 @@ function initSlidesPanel(slide) {
     const link = document.createElement('a');
     link.href = `/viewer?slide=${encodeURIComponent(sibling.id)}`;
     link.className = 'slide-thumb';
-    if (sibling.id === slide.id) link.setAttribute('aria-current', 'true');
+    link.dataset.slide = sibling.id;
     const image = document.createElement('img');
     image.src = `/api/slides/${encodeURIComponent(sibling.id)}/thumbnail.jpg`;
     image.alt = '';
@@ -326,12 +440,18 @@ function initSlidesPanel(slide) {
     const caption = document.createElement('span');
     caption.textContent = sibling.title;
     link.append(image, caption);
+    // В режиме сравнения щелчок заменяет скан в активной половине (С-10)
+    link.addEventListener('click', async (event) => {
+      if (panes.length < 2) return;
+      event.preventDefault();
+      await replaceActive(sibling.id);
+    });
     item.append(link);
     list.append(item);
   }
-  list.querySelector('[aria-current]')?.scrollIntoView({ block: 'nearest' });
+  markCurrentThumb();
 
-  // На планшете панель свёрнута по умолчанию.
+  // На планшете и в режиме сравнения панель свёрнута по умолчанию.
   const panel = $('slidesPanel');
   const toggle = $('slidesToggle');
   const setCollapsed = (collapsed) => {
@@ -343,101 +463,61 @@ function initSlidesPanel(slide) {
   toggle.addEventListener('click', () => setCollapsed(!panel.classList.contains('is-collapsed')));
 }
 
-function initMinimapToggle(viewer) {
-  const minimap = $('minimap');
-  const toggle = $('minimapToggle');
-  toggle.addEventListener('click', () => {
-    const collapsed = minimap.classList.toggle('is-collapsed');
-    toggle.textContent = collapsed ? '▸' : '▾';
-    toggle.setAttribute('aria-expanded', String(!collapsed));
-    if (!collapsed) {
-      viewer.navigator.updateSize();
-      viewer.navigator.update(viewer.viewport);
-    }
-  });
+async function replaceActive(slideId) {
+  const slide = await loadSlide(slideId, { silent: true });
+  if (!slide) return showNote(t('compare.noAccess'));
+  const index = panes.indexOf(active);
+  const neighbour = panes[index ? 0 : 1];
+  active.destroy();
+  panes.splice(index, 1);
+  const pane = addPane(slide);
+  // Новая половина встаёт на своё место: слева или справа от разделителя
+  if (index === 0) $('panes').insertBefore(pane.element, $('splitter'));
+  setLinked(false);
+  panes = index === 0 ? [pane, neighbour] : [neighbour, pane];
+  setActive(pane);
+  applyCompareLayout();
 }
 
-// ---------- этикетка стекла ----------
-
-// На этикетке бывают персональные данные, поэтому панель закрыта по умолчанию,
-// изображение запрашивается только по нажатию, а сервер отдаёт его без кэша.
-function initLabelPanel(slide) {
-  const button = $('btnLabel');
-  const panel = $('labelPanel');
-  const image = $('labelImage');
-  if (!slide.has_label) {
-    button.hidden = false;
-    button.disabled = true;
-    button.title = t('top.label.none');
-    return;
+function markCurrentThumb() {
+  const shown = new Set(panes.map((pane) => pane.slide.id));
+  for (const link of $('slidesList').querySelectorAll('.slide-thumb')) {
+    link.toggleAttribute('aria-current', shown.has(link.dataset.slide));
   }
-  button.hidden = false;
-
-  let rotation = 0;
-  let loaded = false;
-  const setOpen = (open) => {
-    panel.hidden = !open;
-    button.classList.toggle('is-active', open);
-    button.setAttribute('aria-expanded', String(open));
-    if (open && !loaded) {
-      loaded = true;
-      image.src = `/api/slides/${encodeURIComponent(slide.id)}/label.jpg`;
-    }
-  };
-
-  image.addEventListener('error', () => {
-    image.hidden = true;
-    $('labelError').hidden = false;
-    $('labelError').textContent = t('label.failed');
-  });
-  button.addEventListener('click', () => setOpen(panel.hidden));
-  $('labelClose').addEventListener('click', () => setOpen(false));
-  $('labelRotate').addEventListener('click', () => {
-    rotation = (rotation + 90) % 360;
-    image.style.transform = `rotate(${rotation}deg)`;
-    image.classList.toggle('is-sideways', rotation % 180 !== 0);
-  });
 }
 
 // ---------- горячие клавиши (Н-8) ----------
 
-function initHotkeys(viewer, slide) {
-  const pan = (dx, dy) => {
-    const { viewport } = viewer;
-    const bounds = viewport.getBounds();
-    const step = Math.min(bounds.width, bounds.height) * PAN_STEP;
-    viewport.panBy(new Point(dx * step, dy * step).rotate(-viewport.getRotation()));
-    viewport.applyConstraints();
-  };
-  const zoomBy = (factor) => {
-    viewer.viewport.zoomBy(factor);
-    viewer.viewport.applyConstraints();
-  };
+function initHotkeys() {
   // Коды клавиш не зависят от раскладки: F и R работают и в русской.
   const actions = {
-    Digit0: () => viewer.viewport.goHome(),
-    Numpad0: () => viewer.viewport.goHome(),
-    Equal: () => zoomBy(ZOOM_STEP),
-    NumpadAdd: () => zoomBy(ZOOM_STEP),
-    Minus: () => zoomBy(1 / ZOOM_STEP),
-    NumpadSubtract: () => zoomBy(1 / ZOOM_STEP),
-    ArrowLeft: () => pan(-1, 0),
-    ArrowRight: () => pan(1, 0),
-    ArrowUp: () => pan(0, -1),
-    ArrowDown: () => pan(0, 1),
+    Digit0: () => active?.viewer.viewport.goHome(),
+    Numpad0: () => active?.viewer.viewport.goHome(),
+    Equal: () => active?.zoomBy(ZOOM_STEP),
+    NumpadAdd: () => active?.zoomBy(ZOOM_STEP),
+    Minus: () => active?.zoomBy(1 / ZOOM_STEP),
+    NumpadSubtract: () => active?.zoomBy(1 / ZOOM_STEP),
+    ArrowLeft: () => active?.panByFraction(-1, 0, PAN_STEP),
+    ArrowRight: () => active?.panByFraction(1, 0, PAN_STEP),
+    ArrowUp: () => active?.panByFraction(0, -1, PAN_STEP),
+    ArrowDown: () => active?.panByFraction(0, 1, PAN_STEP),
     KeyF: toggleFullscreen,
-    KeyR: () => resetView(viewer),
+    KeyR: () => active?.resetView(),
+    Tab: () => {
+      if (panes.length > 1) setActive(panes[(panes.indexOf(active) + 1) % panes.length]);
+    },
   };
   FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
     const action = () => {
-      if (slide.objective && magnification <= slide.objective) zoomToMagnification(viewer, slide, magnification);
+      const slide = active?.slide;
+      if (slide?.objective && magnification <= slide.objective) active.zoomToMagnification(magnification);
     };
     actions[`Digit${index + 1}`] = action;
     actions[`Numpad${index + 1}`] = action;
   });
 
   document.addEventListener('keydown', (event) => {
-    if (event.ctrlKey || event.altKey || event.metaKey || !viewer.isOpen()) return;
+    if (event.ctrlKey || event.altKey || event.metaKey || !active?.viewer.isOpen()) return;
     // В полях ввода клавиши принадлежат полю; у ползунков остаются только стрелки.
     if (event.target.closest('input:not([type=range], [type=checkbox]), select, textarea')) return;
     if (event.target.matches('input[type=range]') && event.code.startsWith('Arrow')) return;
@@ -446,10 +526,4 @@ function initHotkeys(viewer, slide) {
     event.preventDefault();
     action();
   });
-}
-
-function showMessage(text, { retry = true } = {}) {
-  $('stageMessageText').textContent = text;
-  $('stageRetry').hidden = !retry;
-  $('stageMessage').hidden = false;
 }

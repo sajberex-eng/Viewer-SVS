@@ -150,6 +150,30 @@ input[type="range"] { accent-color: var(--accent); }
 .slides-panel.is-collapsed .slides-panel-title,
 .slides-panel.is-collapsed .slides-list { display: none; }
 
+/* ---------- половины экрана (раздел 8 ТЗ) ---------- */
+
+.panes { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr; }
+.pane { display: flex; flex-direction: column; min-width: 0; position: relative; }
+.pane-head {
+  display: none;  /* в обычном режиме заголовок половины не нужен */
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.pane-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-comparing .pane-head { display: flex; }
+.is-comparing .pane.is-active .pane-head { background: var(--brand-tint); box-shadow: inset 0 2px 0 var(--brand); }
+.is-comparing .pane.is-active { outline: 2px solid var(--brand); outline-offset: -2px; }
+
+.splitter { background: var(--border); cursor: col-resize; }
+.splitter:hover { background: var(--brand); }
+
+.page-message { margin: auto; color: var(--muted); }
+
 .stage { position: relative; flex: 1; min-width: 0; background: var(--stage); }
 .osd { position: absolute; inset: 0; }
 .osd.is-picking, .osd.is-picking * { cursor: crosshair !important; }

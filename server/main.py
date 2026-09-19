@@ -193,7 +193,20 @@ def create_app() -> FastAPI:
     async def upload_error(request: Request, exc: UploadError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+    class FreshStatic(StaticFiles):
+        """Статика с обязательной перепроверкой версии.
+
+        Без этого браузер держит в кэше прежние скрипты, и после обновления
+        сервиса часть пользователей продолжает работать со старым кодом.
+        Файл всё равно передаётся один раз: при совпадении ETag ответ пустой.
+        """
+
+        def file_response(self, *args, **kwargs):
+            response = super().file_response(*args, **kwargs)
+            response.headers["Cache-Control"] = "no-cache"
+            return response
+
+    app.mount("/static", FreshStatic(directory=WEB_DIR / "static"), name="static")
 
     # ---------- представление данных ----------
 

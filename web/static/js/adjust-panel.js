@@ -3,14 +3,35 @@ import { t } from './i18n.js';
 
 const BACKGROUND_MIN_LEVEL = 140; // темнее этого участок фоном стекла не считается
 
-// Панель ползунков. Настройки хранятся в браузере отдельно для пользователя и слайда (И-7).
+// Настройки хранятся в браузере отдельно для пользователя и слайда (И-7).
+export function loadSavedValues(storageKey) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey));
+    if (!saved) return null;
+    return Object.fromEntries(PARAMS.map((p) => [p.id, clampParam(p, Number(saved[p.id] ?? p.def))]));
+  } catch {
+    return null; // повреждённая или недоступная запись
+  }
+}
+
+export function saveValues(storageKey, values) {
+  try {
+    if (isDefault(values)) localStorage.removeItem(storageKey);
+    else localStorage.setItem(storageKey, JSON.stringify(values));
+  } catch {
+    // хранилище браузера недоступно (приватный режим): настройки живут до закрытия страницы
+  }
+}
+
+// Панель ползунков. Она одна на странице и переключается между половинами
+// экрана: в режиме сравнения ползунки действуют на активную половину (С-4).
 export class AdjustPanel {
-  constructor({ panel, adjuster, viewer, storageKey, onChange }) {
+  constructor({ panel, onChange }) {
     this.panel = panel;
-    this.adjuster = adjuster;
-    this.viewer = viewer;
-    this.storageKey = storageKey;
     this.onChange = onChange;
+    this.adjuster = null;
+    this.viewer = null;
+    this.storageKey = null;
     this.values = { ...DEFAULTS };
     this.controls = {};
     this.presetSelect = panel.querySelector('#adjustPreset');
@@ -22,20 +43,29 @@ export class AdjustPanel {
     this._bindPipette(panel.querySelector('#adjustPipette'));
     panel.querySelector('#adjustResetAll').addEventListener('click', () => this.setValues(DEFAULTS));
     this._refresh();
+  }
 
-    if (!adjuster.supported) {
-      this.hint.textContent = t('adjust.noWebgl');
-      panel.querySelectorAll('input, select, button:not(#adjustClose)').forEach((el) => { el.disabled = true; });
-    }
+  // Переключение на другую половину: ползунки показывают её настройки.
+  attachTo({ adjuster, viewer, storageKey }) {
+    if (this.picking) this._stopPicking();
+    this.adjuster = adjuster;
+    this.viewer = viewer;
+    this.storageKey = storageKey;
+    this.values = loadSavedValues(storageKey) ?? { ...DEFAULTS };
+    this._refresh();
+    adjuster.setValues(this.values);
+    this.onChange(this.values);
+
+    const unsupported = !adjuster.supported;
+    if (unsupported) this.hint.textContent = t('adjust.noWebgl');
+    this.panel.querySelectorAll('input, select, button:not(#adjustClose)').forEach((el) => {
+      el.disabled = unsupported;
+    });
   }
 
   loadSaved() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(this.storageKey));
-      if (saved) this.setValues(saved, { save: false });
-    } catch {
-      // повреждённая или недоступная запись: остаются значения по умолчанию
-    }
+    const saved = loadSavedValues(this.storageKey);
+    if (saved) this.setValues(saved, { save: false });
   }
 
   setValues(values, { save = true } = {}) {
@@ -43,8 +73,8 @@ export class AdjustPanel {
       if (values[param.id] !== undefined) this.values[param.id] = clampParam(param, Number(values[param.id]));
     }
     this._refresh();
-    this.adjuster.setValues(this.values);
-    if (save) this._save();
+    this.adjuster?.setValues(this.values);
+    if (save) saveValues(this.storageKey, this.values);
     this.onChange(this.values);
   }
 
@@ -57,15 +87,6 @@ export class AdjustPanel {
     const numbers = text.split(',').map(Number);
     if (numbers.length !== PARAMS.length || numbers.some(Number.isNaN)) return null;
     return Object.fromEntries(PARAMS.map((p, i) => [p.id, numbers[i]]));
-  }
-
-  _save() {
-    try {
-      if (isDefault(this.values)) localStorage.removeItem(this.storageKey);
-      else localStorage.setItem(this.storageKey, JSON.stringify(this.values));
-    } catch {
-      // хранилище браузера недоступно (приватный режим): настройки живут до закрытия страницы
-    }
   }
 
   _refresh() {
@@ -129,35 +150,41 @@ export class AdjustPanel {
   }
 
   // Пипетка белого: баланс каналов выравнивает цвет пустого фона до нейтрального (И-9).
+  // Щелчок ловится на уровне страницы, поэтому пипетка работает и после
+  // переключения на другую половину экрана.
   _bindPipette(button) {
-    const stop = () => {
-      this.picking = false;
-      button.classList.remove('is-active');
-      this.viewer.element.classList.remove('is-picking');
-      this.hint.textContent = '';
-    };
+    this.pipetteButton = button;
     button.addEventListener('click', () => {
-      if (this.picking) return stop();
+      if (this.picking) return this._stopPicking();
       this.picking = true;
       button.classList.add('is-active');
-      this.viewer.element.classList.add('is-picking');
+      this.viewer?.element.classList.add('is-picking');
       this.hint.textContent = t('adjust.pipette.hint');
     });
     document.addEventListener('keydown', (event) => {
-      if (event.code === 'Escape' && this.picking) stop();
+      if (event.code === 'Escape' && this.picking) this._stopPicking();
     });
-    this.viewer.addHandler('canvas-click', (event) => {
-      if (!this.picking || !event.quick) return;
-      event.preventDefaultAction = true;
-      const color = this.adjuster.sampleSource(event.position);
-      if (!color || Math.max(...color) < BACKGROUND_MIN_LEVEL) {
-        this.hint.textContent = t('adjust.pipette.dark');
-        return;
-      }
-      const target = Math.max(...color);
-      const [red, green, blue] = color.map((channel) => gainToBalance(target / channel));
-      stop();
-      this.setValues({ red, green, blue });
-    });
+  }
+
+  // Вызывается половиной экрана при щелчке по изображению.
+  pickWhite(position) {
+    if (!this.picking) return false;
+    const color = this.adjuster.sampleSource(position);
+    if (!color || Math.max(...color) < BACKGROUND_MIN_LEVEL) {
+      this.hint.textContent = t('adjust.pipette.dark');
+      return true;
+    }
+    const target = Math.max(...color);
+    const [red, green, blue] = color.map((channel) => gainToBalance(target / channel));
+    this._stopPicking();
+    this.setValues({ red, green, blue });
+    return true;
+  }
+
+  _stopPicking() {
+    this.picking = false;
+    this.pipetteButton.classList.remove('is-active');
+    this.viewer?.element.classList.remove('is-picking');
+    this.hint.textContent = '';
   }
 }
