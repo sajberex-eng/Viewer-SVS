@@ -74,6 +74,7 @@ def main() -> None:
     make_user("user-a")
     make_user("user-b")
     user_a_id = db.query_one("SELECT id FROM users WHERE login = 'user-a'")["id"]
+    user_b_id = db.query_one("SELECT id FROM users WHERE login = 'user-b'")["id"]
 
     # Жизненный цикл приложения запускается один раз; остальные клиенты нужны
     # только ради отдельных наборов cookie.
@@ -116,6 +117,45 @@ def main() -> None:
         check("скан со своим режимом остаётся закрытым", "bbbbbbbbbbbb" not in slides)
         check("другому пользователю подпапка не видна", inner not in catalog_ids(bob)[0])
 
+        # ---------- группы ----------
+        listing = admin.get("/api/groups").json()
+        by_name = {g["name"]: g["id"] for g in listing["groups"]}
+        check("заведены группы Патологи, Гематологи, Резиденты",
+              set(by_name) == {"Патологи", "Гематологи", "Резиденты"}, f"({sorted(by_name)})")
+        check("«Администраторы» показана как встроенная роль", listing["administrators"]["builtin"] is True)
+        pathologists, residents = by_name["Патологи"], by_name["Резиденты"]
+
+        admin.post("/api/access", json={"folder_id": inner, "mode": "selected",
+                                        "user_ids": [user_a_id], "group_ids": [pathologists]})
+        check("пользователь вне группы доступа не получает", inner not in catalog_ids(bob)[0])
+        admin.put(f"/api/groups/{pathologists}/members", json={"user_ids": [user_b_id]})
+        check("после добавления в группу папка видна сразу", inner in catalog_ids(bob)[0])
+        check("и её сканы тоже", "cccccccccccc" in catalog_ids(bob)[1])
+        check("группа не открывает закрытый отдельно скан", "bbbbbbbbbbbb" not in catalog_ids(bob)[1])
+        check("тайл через группу доступен", bob.get("/api/slides/cccccccccccc/tiles/8/0_0.jpg").status_code != 404)
+        admin.put(f"/api/groups/{pathologists}/members", json={"user_ids": []})
+        check("после исключения из группы доступ пропадает сразу", inner not in catalog_ids(bob)[0])
+        check("тайл после исключения: 404", bob.get("/api/slides/cccccccccccc/tiles/8/0_0.jpg").status_code == 404)
+
+        # Пользователь в двух группах: действует объединение разрешений
+        admin.put(f"/api/groups/{pathologists}/members", json={"user_ids": [user_b_id]})
+        admin.put(f"/api/groups/{residents}/members", json={"user_ids": [user_b_id]})
+        check("в двух группах доступ по одной из них", inner in catalog_ids(bob)[0])
+        admin.delete(f"/api/groups/{pathologists}")
+        check("после удаления группы доступ через неё пропадает", inner not in catalog_ids(bob)[0])
+        check("прямое разрешение другого пользователя не задето", inner in catalog_ids(alice)[0])
+        check("разрешения удалённой группы стёрты",
+              db.query_one("SELECT count(*) AS n FROM group_grants")["n"] == 0)
+
+        check("название «Администраторы» зарезервировано",
+              admin.post("/api/groups", json={"name": "администраторы"}).status_code == 400)
+        check("повтор названия группы без учёта регистра отклоняется",
+              admin.post("/api/groups", json={"name": "РЕЗИДЕНТЫ"}).status_code == 400)
+        check("пользователь не управляет группами", alice.post("/api/groups", json={"name": "Х"}).status_code == 403)
+        created_group = admin.post("/api/groups", json={"name": "Резиденты 2026"})
+        check("администратор создаёт свою группу", created_group.status_code == 200)
+        admin.post("/api/access", json={"folder_id": inner, "mode": "selected", "user_ids": [user_a_id]})
+
         # ---------- прямые запросы в обход каталога ----------
         for name, path in (
             ("сведения", "/api/slides/bbbbbbbbbbbb"),
@@ -149,14 +189,21 @@ def main() -> None:
         fresh = TestClient(app)
         first = fresh.post("/api/login", json={"login": "новый", "password": created.json()["password"]})
         check("вход с выданным паролем", first.status_code == 200)
-        check("требуется сменить пароль", first.json()["must_change_password"] is True)
-        check("до смены пароля каталог закрыт", fresh.get("/api/catalog").status_code == 403)
+        check("каталог открыт сразу, принудительной смены пароля нет", fresh.get("/api/catalog").status_code == 200)
+        second_device = TestClient(app)
+        second_device.post("/api/login", json={"login": "новый", "password": created.json()["password"]})
+        check("та же запись на втором устройстве", second_device.get("/api/catalog").status_code == 200)
         changed = fresh.post(
             "/api/password",
             json={"current_password": created.json()["password"], "new_password": "мой-новый-пароль"},
         )
-        check("смена пароля", changed.status_code == 200)
+        check("пользователь меняет пароль сам", changed.status_code == 200)
         check("после смены каталог открыт", fresh.get("/api/catalog").status_code == 200)
+        check("после смены пароля прежние сессии прекращаются", second_device.get("/api/catalog").status_code == 401)
+        short = fresh.post(
+            "/api/password", json={"current_password": "мой-новый-пароль", "new_password": "короткий"}
+        )
+        check("слишком короткий новый пароль отклоняется", short.status_code == 400)
 
         admin.patch(f"/api/users/{new_id}", json={"status": "blocked"})
         blocked = TestClient(app)

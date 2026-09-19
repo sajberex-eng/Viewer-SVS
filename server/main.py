@@ -13,9 +13,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import audit
+from . import groups as groupsvc
 from .access import AccessIndex
 from .auth import (
     LoginThrottle,
@@ -23,7 +25,6 @@ from .auth import (
     authenticate,
     generate_password,
     hash_password,
-    require_active_user,
     require_admin,
     require_user,
     revoke_sessions,
@@ -38,6 +39,7 @@ from .db import Database
 from .slides import LABEL_IMAGE, SlidePool
 from .storage import StorageUnavailable, create_storage
 from .tilecache import TileCache
+from .uploads import PART_SIZE, UploadError, Uploads
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ class AccessRequest(BaseModel):
     slide_id: str | None = None
     mode: str | None = None
     user_ids: list[int] = Field(default_factory=list)
+    group_ids: list[int] = Field(default_factory=list)
 
 
 class UserRequest(BaseModel):
@@ -98,6 +101,7 @@ class UserRequest(BaseModel):
     name: str = ""
     role: str = "user"
     expires_at: str | None = None
+    group_ids: list[int] = Field(default_factory=list)
 
 
 class UserPatch(BaseModel):
@@ -106,6 +110,21 @@ class UserPatch(BaseModel):
     status: str | None = None
     expires_at: str | None = None
     clear_expiry: bool = False
+    group_ids: list[int] | None = None
+
+
+class GroupRequest(BaseModel):
+    name: str
+
+
+class MembersRequest(BaseModel):
+    user_ids: list[int] = Field(default_factory=list)
+
+
+class UploadStart(BaseModel):
+    folder_id: int
+    name: str
+    size: int
 
 
 def create_app() -> FastAPI:
@@ -114,6 +133,7 @@ def create_app() -> FastAPI:
     storage = create_storage(settings.storage)
     pool = SlidePool(storage, settings.tiles, settings.open_slides)
     catalog = Catalog(db, storage, pool, settings.check_minutes)
+    uploads = Uploads(db, storage, catalog, settings.uploads_dir)
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +141,9 @@ def create_app() -> FastAPI:
     def initial_check() -> None:
         try:
             log.info("Хранилище проверено: %s", catalog.check_integrity())
+            removed = uploads.cleanup_stale()
+            if removed:
+                log.info("Удалено брошенных загрузок: %s", removed)
         except StorageUnavailable as exc:
             log.warning("Хранилище недоступно при запуске: %s", exc)
 
@@ -160,6 +183,10 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(CatalogError)
     async def catalog_error(request: Request, exc: CatalogError):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(UploadError)
+    async def upload_error(request: Request, exc: UploadError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
@@ -253,12 +280,7 @@ def create_app() -> FastAPI:
         start_session(request, user)
         db.execute("UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?", (user["id"],))
         audit.log(db, request, audit.LOGIN_OK, user=user)
-        return {
-            "login": user["login"],
-            "role": user["role"],
-            "name": user["name"],
-            "must_change_password": bool(user["must_change_password"]),
-        }
+        return {"login": user["login"], "role": user["role"], "name": user["name"]}
 
     @app.post("/api/logout")
     def logout(request: Request):
@@ -270,12 +292,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/me")
     def me(user=Depends(require_user)):
-        return {
-            "login": user["login"],
-            "role": user["role"],
-            "name": user["name"],
-            "must_change_password": bool(user["must_change_password"]),
-        }
+        return {"login": user["login"], "role": user["role"], "name": user["name"]}
 
     @app.post("/api/password")
     def change_password(body: PasswordRequest, request: Request, user=Depends(require_user)):
@@ -293,7 +310,7 @@ def create_app() -> FastAPI:
     # ---------- каталог ----------
 
     @app.get("/api/catalog")
-    def catalog_tree(user=Depends(require_active_user)):
+    def catalog_tree(user=Depends(require_user)):
         """Папки и сканы, доступные этому пользователю."""
         catalog.check_if_stale()
         access = access_for(user)
@@ -315,7 +332,7 @@ def create_app() -> FastAPI:
         }
 
     @app.get("/api/slides/{slide_id}")
-    def slide_info(slide_id: str, request: Request, user=Depends(require_active_user)):
+    def slide_info(slide_id: str, request: Request, user=Depends(require_user)):
         row = require_slide(slide_id, user)
         audit.log(db, request, audit.SLIDE_OPEN, user=user, object_type="slide", object_id=slide_id)
         info = slide_summary(row, user)
@@ -336,7 +353,7 @@ def create_app() -> FastAPI:
     # ---------- изображения ----------
 
     @app.get("/api/slides/{slide_id}/tiles/{level:int}/{col:int}_{row:int}.jpg")
-    def tile(slide_id: str, level: int, col: int, row: int, user=Depends(require_active_user)):
+    def tile(slide_id: str, level: int, col: int, row: int, user=Depends(require_user)):
         slide_row = require_slide(slide_id, user)
         cfg = settings.tiles
         namespace = (
@@ -366,7 +383,7 @@ def create_app() -> FastAPI:
         return Response(data, media_type="image/jpeg", headers=headers)
 
     @app.get("/api/slides/{slide_id}/thumbnail.jpg")
-    def thumbnail(slide_id: str, user=Depends(require_active_user)):
+    def thumbnail(slide_id: str, user=Depends(require_user)):
         slide_row = require_slide(slide_id, user)
         path: Path = settings.thumbs_dir / f"{slide_id}-{int(slide_row['mtime'])}.jpg"
         if not path.exists():
@@ -382,7 +399,7 @@ def create_app() -> FastAPI:
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
     @app.get("/api/slides/{slide_id}/label.jpg")
-    def label(slide_id: str, request: Request, user=Depends(require_active_user)):
+    def label(slide_id: str, request: Request, user=Depends(require_user)):
         """Этикетка стекла: на ней бывают персональные данные, поэтому без кэша в браузере."""
         slide_row = require_slide(slide_id, user)
         if not slide_row["has_label"]:
@@ -469,6 +486,7 @@ def create_app() -> FastAPI:
             return {
                 "mode": row["access_mode"],
                 "user_ids": catalog.granted_user_ids(folder_id=folder_id),
+                "group_ids": catalog.granted_group_ids(folder_id=folder_id),
                 "inherited_from": source.id if source else None,
                 "inherited_mode": source.mode if source else None,
             }
@@ -479,6 +497,7 @@ def create_app() -> FastAPI:
         return {
             "mode": row["access_mode"],
             "user_ids": catalog.granted_user_ids(slide_id=slide_id),
+            "group_ids": catalog.granted_group_ids(slide_id=slide_id),
             "inherited_from": source.id if source else None,
             "inherited_mode": source.mode if source else None,
         }
@@ -487,7 +506,7 @@ def create_app() -> FastAPI:
     def set_access(body: AccessRequest, request: Request, user=Depends(require_admin)):
         catalog.set_access(
             folder_id=body.folder_id, slide_id=body.slide_id, mode=body.mode,
-            user_ids=body.user_ids, actor=user,
+            user_ids=body.user_ids, group_ids=body.group_ids, actor=user,
         )
         audit.log(
             db, request, audit.ACCESS_CHANGE, user=user,
@@ -515,7 +534,7 @@ def create_app() -> FastAPI:
 
     # ---------- пользователи ----------
 
-    def user_summary(row) -> dict:
+    def user_summary(row, memberships: dict[int, list[int]]) -> dict:
         return {
             "id": row["id"],
             "login": row["login"],
@@ -523,16 +542,23 @@ def create_app() -> FastAPI:
             "role": row["role"],
             "status": row["status"],
             "expires_at": row["expires_at"],
-            "must_change_password": bool(row["must_change_password"]),
+            "group_ids": memberships.get(row["id"], []),
             "last_login_at": row["last_login_at"],
         }
+
+    def memberships() -> dict[int, list[int]]:
+        result: dict[int, list[int]] = {}
+        for row in db.query("SELECT group_id, user_id FROM user_group_members ORDER BY group_id"):
+            result.setdefault(row["user_id"], []).append(row["group_id"])
+        return result
 
     def admin_count() -> int:
         return db.query_one("SELECT count(*) AS n FROM users WHERE role = 'admin' AND status = 'active'")["n"]
 
     @app.get("/api/users")
     def list_users(user=Depends(require_admin)):
-        return [user_summary(row) for row in db.query("SELECT * FROM users ORDER BY login")]
+        groups_of = memberships()
+        return [user_summary(row, groups_of) for row in db.query("SELECT * FROM users ORDER BY login")]
 
     @app.post("/api/users")
     def create_user(body: UserRequest, request: Request, user=Depends(require_admin)):
@@ -541,17 +567,18 @@ def create_app() -> FastAPI:
             raise HTTPException(400, "Укажите логин")
         if body.role not in ("user", "admin"):
             raise HTTPException(400, "Неизвестная роль")
+        known_groups = {g["id"] for g in groupsvc.list_groups(db)}
+        if not set(body.group_ids) <= known_groups:
+            raise HTTPException(400, "Группа не найдена")
         password = generate_password()
         try:
             user_id = db.insert(
-                """
-                INSERT INTO users (login, password_hash, role, name, expires_at, must_change_password)
-                VALUES (?, ?, ?, ?, ?, 1)
-                """,
+                "INSERT INTO users (login, password_hash, role, name, expires_at) VALUES (?, ?, ?, ?, ?)",
                 (login_name, hash_password(password), body.role, body.name.strip() or login_name, body.expires_at),
             )
         except sqlite3.IntegrityError as exc:
             raise HTTPException(400, "Пользователь с таким логином уже есть") from exc
+        groupsvc.set_user_groups(db, user_id, body.group_ids)
         audit.log(db, request, audit.USER_CREATE, user=user, object_type="user", object_id=user_id, detail=login_name)
         # Пароль показывается администратору один раз и нигде не сохраняется
         return {"id": user_id, "login": login_name, "password": password}
@@ -577,6 +604,8 @@ def create_app() -> FastAPI:
             "UPDATE users SET name = ?, role = ?, status = ?, expires_at = ? WHERE id = ?",
             (body.name if body.name is not None else target["name"], role, status, expires_at, user_id),
         )
+        if body.group_ids is not None:
+            groupsvc.set_user_groups(db, user_id, body.group_ids)
         if status == "blocked" or role != target["role"]:
             revoke_sessions(db, user_id)  # изменение действует сразу
         audit.log(db, request, audit.USER_UPDATE, user=user, object_type="user", object_id=user_id)
@@ -588,7 +617,7 @@ def create_app() -> FastAPI:
         if target is None:
             raise HTTPException(404, "Пользователь не найден")
         password = generate_password()
-        set_password(db, user_id, password, must_change=True)
+        set_password(db, user_id, password)
         audit.log(db, request, audit.USER_RESET_PASSWORD, user=user, object_type="user", object_id=user_id)
         return {"login": target["login"], "password": password}
 
@@ -606,6 +635,76 @@ def create_app() -> FastAPI:
             db, request, audit.USER_DELETE, user=user, object_type="user",
             object_id=user_id, detail=target["login"],
         )
+        return {"ok": True}
+
+    # ---------- группы ----------
+
+    @app.get("/api/groups")
+    def list_groups(user=Depends(require_admin)):
+        return {"groups": groupsvc.list_groups(db), "administrators": groupsvc.administrators(db)}
+
+    @app.post("/api/groups")
+    def create_group(body: GroupRequest, request: Request, user=Depends(require_admin)):
+        group_id = groupsvc.create_group(db, body.name)
+        audit.log(db, request, audit.GROUP_CREATE, user=user, object_type="group", object_id=group_id, detail=body.name)
+        return {"id": group_id}
+
+    @app.patch("/api/groups/{group_id}")
+    def rename_group(group_id: int, body: GroupRequest, request: Request, user=Depends(require_admin)):
+        groupsvc.rename_group(db, group_id, body.name)
+        audit.log(db, request, audit.GROUP_RENAME, user=user, object_type="group", object_id=group_id)
+        return {"ok": True}
+
+    @app.put("/api/groups/{group_id}/members")
+    def set_group_members(group_id: int, body: MembersRequest, request: Request, user=Depends(require_admin)):
+        groupsvc.set_members(db, group_id, body.user_ids)
+        audit.log(
+            db, request, audit.GROUP_MEMBERS, user=user, object_type="group", object_id=group_id,
+            detail=f"участников: {len(set(body.user_ids))}",
+        )
+        return {"ok": True}
+
+    @app.delete("/api/groups/{group_id}")
+    def delete_group(group_id: int, request: Request, user=Depends(require_admin)):
+        groupsvc.delete_group(db, group_id)
+        audit.log(db, request, audit.GROUP_DELETE, user=user, object_type="group", object_id=group_id)
+        return {"ok": True}
+
+    # ---------- загрузка сканов: только администратор ----------
+
+    @app.get("/api/uploads")
+    def pending_uploads(user=Depends(require_admin)):
+        """Незавершённые загрузки этого администратора: после обрыва связи их можно продолжить."""
+        return uploads.pending(user)
+
+    @app.post("/api/uploads")
+    def start_upload(body: UploadStart, request: Request, user=Depends(require_admin)):
+        state = uploads.start(body.folder_id, body.name, body.size, user)
+        if state["received"] == 0:
+            audit.log(
+                db, request, audit.UPLOAD_START, user=user, object_type="upload", object_id=state["id"],
+                detail=f"{body.size / 1e6:.0f} МБ",  # имя файла в журнал не пишется
+            )
+        return state
+
+    @app.put("/api/uploads/{upload_id}")
+    async def upload_part(upload_id: str, offset: int, request: Request, user=Depends(require_admin)):
+        length = int(request.headers.get("content-length") or 0)
+        if length <= 0 or length > 2 * PART_SIZE:
+            raise HTTPException(413, "Часть файла слишком большая или пустая")
+        data = await request.body()
+        checksum = request.headers.get("x-part-sha256")
+        return await run_in_threadpool(uploads.accept_part, upload_id, offset, data, checksum, user)
+
+    @app.post("/api/uploads/{upload_id}/complete")
+    def complete_upload(upload_id: str, request: Request, user=Depends(require_admin)):
+        slide_id = uploads.complete(upload_id, user)
+        audit.log(db, request, audit.SLIDE_UPLOAD, user=user, object_type="slide", object_id=slide_id)
+        return {"slide_id": slide_id}
+
+    @app.delete("/api/uploads/{upload_id}")
+    def cancel_upload(upload_id: str, user=Depends(require_admin)):
+        uploads.cancel(upload_id, user)
         return {"ok": True}
 
     # ---------- журнал ----------

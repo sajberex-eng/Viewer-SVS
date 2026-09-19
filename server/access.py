@@ -3,7 +3,8 @@
 Режим доступа («только администраторы», «все пользователи», «выбранные»)
 задаётся у папки или у отдельного скана. Свой режим заменяет унаследованный,
 а не дополняет его: внутри папки «для всех» можно закрыть одну подпапку.
-Разрешения для режима «выбранные» действуют там же, где задан сам режим.
+Разрешения для режима «выбранные» действуют там же, где задан сам режим и
+выдаются пользователям и группам. Администраторы видят всё всегда.
 """
 from __future__ import annotations
 
@@ -43,7 +44,18 @@ class AccessIndex:
         self._folder_grants: set[int] = set()
         self._slide_grants: set[str] = set()
         if user is not None and not self.is_admin:
-            for row in db.query("SELECT folder_id, slide_id FROM access_grants WHERE user_id = ?", (user["id"],)):
+            # Право пользователя это объединение прямых разрешений и разрешений всех его групп
+            rows = db.query("SELECT folder_id, slide_id FROM access_grants WHERE user_id = ?", (user["id"],))
+            rows += db.query(
+                """
+                SELECT g.folder_id, g.slide_id
+                  FROM group_grants g
+                  JOIN user_group_members m ON m.group_id = g.group_id
+                 WHERE m.user_id = ?
+                """,
+                (user["id"],),
+            )
+            for row in rows:
                 if row["folder_id"] is not None:
                     self._folder_grants.add(row["folder_id"])
                 else:

@@ -29,6 +29,11 @@ USER_CREATE = "user.create"
 USER_UPDATE = "user.update"
 USER_DELETE = "user.delete"
 USER_RESET_PASSWORD = "user.reset_password"
+GROUP_CREATE = "group.create"
+GROUP_RENAME = "group.rename"
+GROUP_MEMBERS = "group.members"
+GROUP_DELETE = "group.delete"
+UPLOAD_START = "upload.start"
 
 
 def client_ip(request: Request) -> str:

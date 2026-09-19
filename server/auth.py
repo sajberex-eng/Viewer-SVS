@@ -14,7 +14,7 @@ from .db import Database
 
 ROLES = ("user", "admin")
 MAX_PASSWORD_BYTES = 72  # ограничение bcrypt
-MIN_PASSWORD_LENGTH = 10  # пароль, который задаёт себе пользователь (ТЗ П-4)
+MIN_PASSWORD_LENGTH = 10  # пароль, который пользователь задаёт себе (ТЗ П-4)
 GENERATED_PASSWORD_BYTES = 12  # выдаваемый администратором пароль длиннее (ТЗ П-3)
 
 # Хэш случайной строки: проверка для несуществующего логина занимает то же время.
@@ -123,33 +123,18 @@ def require_user(request: Request):
     return user
 
 
-def require_active_user(request: Request):
-    """Пользователь, который уже сменил выданный пароль.
-
-    Пока пароль не сменён, доступны только выход и смена пароля.
-    """
-    user = require_user(request)
-    if user["must_change_password"]:
-        raise HTTPException(status_code=403, detail="Сначала задайте свой пароль")
-    return user
-
-
 def require_admin(request: Request):
-    user = require_active_user(request)
+    user = require_user(request)
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     return user
 
 
-def set_password(db: Database, user_id: int, password: str, must_change: bool = False) -> None:
+def set_password(db: Database, user_id: int, password: str) -> None:
     """Смена пароля обрывает все сессии этого пользователя."""
     db.execute(
-        """
-        UPDATE users
-           SET password_hash = ?, must_change_password = ?, session_epoch = session_epoch + 1
-         WHERE id = ?
-        """,
-        (hash_password(password), int(must_change), user_id),
+        "UPDATE users SET password_hash = ?, session_epoch = session_epoch + 1 WHERE id = ?",
+        (hash_password(password), user_id),
     )
 
 

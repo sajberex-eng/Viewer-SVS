@@ -47,16 +47,13 @@ def main() -> None:
         if args.command == "add-user":
             password = generate_password() if args.generate else read_password()
             db.execute(
-                """
-                INSERT INTO users (login, password_hash, role, name, must_change_password)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (args.login, hash_password(password), args.role, args.name or args.login, int(args.generate)),
+                "INSERT INTO users (login, password_hash, role, name) VALUES (?, ?, ?, ?)",
+                (args.login, hash_password(password), args.role, args.name or args.login),
             )
             print(f"Создан пользователь {args.login} ({args.role})")
             if args.generate:
                 print(f"Пароль: {password}")
-                print("Передайте его пользователю: при первом входе он задаст свой.")
+                print("Передайте его пользователю; сменить его можно в профиле.")
         elif args.command == "set-password":
             row = db.query_one("SELECT id FROM users WHERE login = ?", (args.login,))
             if row is None:

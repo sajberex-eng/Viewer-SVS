@@ -1,8 +1,10 @@
 """SQLite-каталог: папки, слайды, пользователи, права доступа, журнал.
 
-Схема версионируется через PRAGMA user_version. Версия 1 (этап 2 ТЗ) заменила
-плоский список слайдов деревом папок с правами; база редакции 2 переносится
-автоматически при первом запуске.
+Схема версионируется через PRAGMA user_version:
+  1  дерево папок и права вместо плоского списка слайдов (база редакции 2
+     переносится автоматически);
+  2  незавершённые загрузки;
+  3  группы пользователей; обязательной смены выданного пароля больше нет.
 """
 from __future__ import annotations
 
@@ -10,7 +12,12 @@ import sqlite3
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
+
+# Группы, которые заводятся при создании базы. Дальше администратор
+# сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
+# не хранятся: это роль admin, у которой доступ есть всегда.
+DEFAULT_GROUPS = ("Патологи", "Гематологи", "Резиденты")
 
 # Папка для слайдов из базы редакции 2, где прав доступа ещё не было.
 # Режим «только администраторы»: пока админ не решит иначе, их никто не видит.
@@ -25,7 +32,6 @@ CREATE TABLE users (
     name                 TEXT NOT NULL DEFAULT '',
     status               TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'blocked')),
     expires_at           TEXT,
-    must_change_password INTEGER NOT NULL DEFAULT 0,
     -- растёт при блокировке, смене и сбросе пароля: старые сессии сразу перестают действовать
     session_epoch        INTEGER NOT NULL DEFAULT 0,
     last_login_at        TEXT,
@@ -101,6 +107,59 @@ CREATE TABLE audit_log (
 
 CREATE INDEX audit_log_at ON audit_log(at);
 """
+
+# Версия 2: незавершённые загрузки. Файл принимается частями и дописывается
+# в конец, поэтому после обрыва связи докачка идёт с последней принятой части.
+UPLOADS_SCHEMA = """
+CREATE TABLE uploads (
+    id            TEXT PRIMARY KEY,
+    folder_id     INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    original_name TEXT NOT NULL,
+    size          INTEGER NOT NULL,
+    received      INTEGER NOT NULL DEFAULT 0,
+    user_id       INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    started_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
+
+# Версия 3: группы. Разрешения групп лежат отдельно от разрешений пользователей,
+# форма у них одинаковая: «на папку» либо «на скан».
+GROUPS_SCHEMA = """
+CREATE TABLE user_groups (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE user_group_members (
+    group_id INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (group_id, user_id)
+);
+
+CREATE INDEX user_group_members_user ON user_group_members(user_id);
+
+CREATE TABLE group_grants (
+    id         INTEGER PRIMARY KEY,
+    group_id   INTEGER NOT NULL REFERENCES user_groups(id) ON DELETE CASCADE,
+    folder_id  INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+    slide_id   TEXT REFERENCES slides(id) ON DELETE CASCADE,
+    granted_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    granted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK ((folder_id IS NULL) <> (slide_id IS NULL))
+);
+
+CREATE UNIQUE INDEX group_grants_folder ON group_grants(group_id, folder_id) WHERE folder_id IS NOT NULL;
+CREATE UNIQUE INDEX group_grants_slide  ON group_grants(group_id, slide_id)  WHERE slide_id IS NOT NULL;
+"""
+
+# Схема для чистой установки: всегда последняя версия
+SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA
+
+
+def _seed_groups(conn: sqlite3.Connection) -> None:
+    conn.executemany("INSERT INTO user_groups (name) VALUES (?)", [(name,) for name in DEFAULT_GROUPS])
 
 
 class SchemaTooNew(RuntimeError):
@@ -254,8 +313,19 @@ class Database:
             with conn:
                 if not _tables(conn):
                     conn.executescript(SCHEMA)
-                elif version == 0:
-                    _migrate_v0_to_v1(conn)
+                    _seed_groups(conn)
+                else:
+                    if version == 0:
+                        _migrate_v0_to_v1(conn)
+                        version = 1
+                    if version == 1:
+                        conn.executescript(UPLOADS_SCHEMA)
+                        version = 2
+                    if version == 2:
+                        conn.executescript(GROUPS_SCHEMA)
+                        _seed_groups(conn)
+                        # Обязательной смены пароля больше нет (решение заказчика)
+                        conn.execute("ALTER TABLE users DROP COLUMN must_change_password")
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

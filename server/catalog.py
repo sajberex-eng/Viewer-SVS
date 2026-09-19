@@ -238,12 +238,26 @@ class Catalog:
 
     # ---------- права ----------
 
-    def set_access(self, *, folder_id: int | None, slide_id: str | None, mode: str | None, user_ids: list[int], actor) -> None:
-        """Режим доступа и список выбранных пользователей для папки или скана."""
+    def set_access(
+        self,
+        *,
+        folder_id: int | None,
+        slide_id: str | None,
+        mode: str | None,
+        user_ids: list[int],
+        group_ids: list[int] | None = None,
+        actor,
+    ) -> None:
+        """Режим доступа и список выбранных пользователей и групп для папки или скана."""
+        group_ids = group_ids or []
         if (folder_id is None) == (slide_id is None):
             raise CatalogError("Доступ задаётся либо папке, либо скану")
         if mode is not None and mode not in MODES:
             raise CatalogError("Неизвестный режим доступа")
+        if group_ids:
+            known = {row["id"] for row in self._db.query("SELECT id FROM user_groups")}
+            if not set(group_ids) <= known:
+                raise CatalogError("Группа не найдена")
         if folder_id is not None:
             row = self.folder(folder_id)
             if row is None:
@@ -257,21 +271,33 @@ class Catalog:
             if folder_id is not None:
                 conn.execute("UPDATE folders SET access_mode = ? WHERE id = ?", (mode, folder_id))
                 conn.execute("DELETE FROM access_grants WHERE folder_id = ?", (folder_id,))
+                conn.execute("DELETE FROM group_grants WHERE folder_id = ?", (folder_id,))
             else:
                 conn.execute("UPDATE slides SET access_mode = ? WHERE id = ?", (mode, slide_id))
                 conn.execute("DELETE FROM access_grants WHERE slide_id = ?", (slide_id,))
+                conn.execute("DELETE FROM group_grants WHERE slide_id = ?", (slide_id,))
             if mode == "selected":
                 conn.executemany(
                     "INSERT INTO access_grants (user_id, folder_id, slide_id, granted_by) VALUES (?, ?, ?, ?)",
                     [(uid, folder_id, slide_id, actor["id"]) for uid in dict.fromkeys(user_ids)],
                 )
+                conn.executemany(
+                    "INSERT INTO group_grants (group_id, folder_id, slide_id, granted_by) VALUES (?, ?, ?, ?)",
+                    [(gid, folder_id, slide_id, actor["id"]) for gid in dict.fromkeys(group_ids)],
+                )
 
     def granted_user_ids(self, *, folder_id: int | None = None, slide_id: str | None = None) -> list[int]:
+        return self._granted("access_grants", "user_id", folder_id, slide_id)
+
+    def granted_group_ids(self, *, folder_id: int | None = None, slide_id: str | None = None) -> list[int]:
+        return self._granted("group_grants", "group_id", folder_id, slide_id)
+
+    def _granted(self, table: str, column: str, folder_id: int | None, slide_id: str | None) -> list[int]:
         if folder_id is not None:
-            rows = self._db.query("SELECT user_id FROM access_grants WHERE folder_id = ?", (folder_id,))
+            rows = self._db.query(f"SELECT {column} AS who FROM {table} WHERE folder_id = ?", (folder_id,))
         else:
-            rows = self._db.query("SELECT user_id FROM access_grants WHERE slide_id = ?", (slide_id,))
-        return [row["user_id"] for row in rows]
+            rows = self._db.query(f"SELECT {column} AS who FROM {table} WHERE slide_id = ?", (slide_id,))
+        return [row["who"] for row in rows]
 
     # ---------- целостность ----------
 
