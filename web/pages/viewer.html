@@ -50,7 +50,20 @@
     </aside>
 
     <!-- Половины экрана создаются из шаблона: одна в обычном режиме, две при сравнении -->
-    <div class="panes" id="panes"></div>
+    <div class="panes-wrap">
+      <!-- Панель увеличений одна на весь экран: в режиме сравнения она задаёт
+           одинаковый масштаб обеим половинам, чтобы их можно было сопоставить -->
+      <div class="zoom-panel" id="zoomPanel" role="toolbar" aria-orientation="vertical">
+        <div class="zoom-buttons" id="zoomButtons"></div>
+        <input type="range" class="zoom-slider" id="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
+        <output class="zoom-current" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
+        <div class="zoom-rotate">
+          <button class="icon-btn" id="rotateLeft" data-i18n-tip="zoom.rotateLeft.tip">⟲</button>
+          <button class="icon-btn" id="rotateRight" data-i18n-tip="zoom.rotateRight.tip">⟳</button>
+        </div>
+      </div>
+      <div class="panes" id="panes"></div>
+    </div>
 
     <aside class="adjust-panel" id="adjustPanel" hidden>
       <div class="adjust-head">
@@ -91,21 +104,12 @@
     <section class="pane">
       <div class="pane-head">
         <span class="pane-title" data-role="title"></span>
+        <output class="pane-zoom" data-role="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
         <button class="icon-btn" data-role="paneLabel" hidden data-i18n-tip="top.label.tip">🏷</button>
         <button class="icon-btn" data-role="paneClose" hidden data-i18n-tip="compare.close.tip">×</button>
       </div>
       <main class="stage" data-role="stage">
         <div class="osd" data-role="osd"></div>
-
-        <div class="zoom-panel" data-role="zoomPanel" role="toolbar" aria-orientation="vertical">
-          <div class="zoom-buttons" data-role="zoomButtons"></div>
-          <input type="range" class="zoom-slider" data-role="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
-          <output class="zoom-current" data-role="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
-          <div class="zoom-rotate">
-            <button class="icon-btn" data-role="rotateLeft" data-i18n-tip="zoom.rotateLeft.tip">⟲</button>
-            <button class="icon-btn" data-role="rotateRight" data-i18n-tip="zoom.rotateRight.tip">⟳</button>
-          </div>
-        </div>
 
         <div class="minimap" data-role="minimap">
           <button class="icon-btn minimap-toggle" data-role="minimapToggle" aria-expanded="true" data-i18n-tip="minimap.toggle.tip">▾</button>

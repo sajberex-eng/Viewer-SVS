@@ -48,6 +48,7 @@ async function main() {
   });
   initSlidesPanel(slide);
   initTopbar();
+  initZoomPanel();
   initHotkeys();
 
   const first = addPane(slide);
@@ -277,6 +278,9 @@ async function startCompare() {
   const slide = await loadSlide(String(chosen.slide[0]), { silent: true });
   if (!slide) return showNote(t('compare.noAccess'));
   const pane = addPane(slide);
+  // Новая половина открывается на «вписать» уже в своей ширине: иначе масштаб
+  // считается по прежнему размеру и половины стартуют с разного увеличения.
+  pane.viewer.addOnceHandler('open', () => requestAnimationFrame(() => pane.viewer.viewport.goHome(true)));
   applyCompareLayout();
   setActive(pane);
 }
@@ -301,6 +305,67 @@ function swapPanes() {
   panes[1].parts.paneClose.hidden = false;
   if (linked) setLinked(true); // взаимное положение пересчитывается заново
   for (const pane of panes) pane.resize();
+}
+
+// ---------- панель увеличений: одна на обе половины ----------
+
+// Кнопки и ползунок действуют сразу на все открытые половины: в режиме
+// сравнения масштаб должен быть одинаковым, иначе сканы не сопоставить.
+function initZoomPanel() {
+  const buttons = $('zoomButtons');
+  const fit = document.createElement('button');
+  fit.className = 'zoom-btn';
+  fit.textContent = t('zoom.fit');
+  fit.title = t('zoom.fit.tip');
+  fit.addEventListener('click', () => forEachPane((pane) => pane.viewer.viewport.goHome(true)));
+  buttons.append(fit);
+
+  FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
+    const button = document.createElement('button');
+    button.className = 'zoom-btn';
+    button.textContent = `${magnification}×`;
+    button.dataset.magnification = magnification;
+    button.title = t('zoom.fixed.tip', { mag: magnification, key: index + 1 });
+    button.addEventListener('click', () => zoomAllTo(magnification));
+    buttons.append(button);
+  });
+
+  const slider = $('zoomSlider');
+  slider.addEventListener('input', () => {
+    sliderDragging = true;
+    forEachPane((pane) => pane.zoomToSliderPosition(slider.value));
+  });
+  slider.addEventListener('change', () => { sliderDragging = false; });
+  $('rotateLeft').addEventListener('click', () => forEachPane((pane) => pane.rotateBy(-90)));
+  $('rotateRight').addEventListener('click', () => forEachPane((pane) => pane.rotateBy(90)));
+}
+
+let sliderDragging = false;
+
+// Действие применяется ко всем половинам; при связанной навигации хватает
+// первой, остальные подтянутся сами.
+function forEachPane(action) {
+  for (const pane of linked ? panes.slice(0, 1) : panes) action(pane);
+}
+
+function zoomAllTo(magnification) {
+  forEachPane((pane) => {
+    // Скан 20× не может показать 40×: он останется на своём пределе (Н-1)
+    if (pane.slide.objective) pane.zoomToMagnification(Math.min(magnification, pane.slide.objective * 2));
+  });
+}
+
+function updateZoomPanel() {
+  if (!active) return;
+  $('zoomCurrent').textContent = active.magnificationLabel();
+  if (!sliderDragging) $('zoomSlider').value = active.sliderPosition;
+  // Кнопка неактивна, если ни одна половина такого увеличения не даёт
+  const best = Math.max(...panes.map((pane) => pane.slide.objective || 0));
+  for (const button of $('zoomButtons').querySelectorAll('[data-magnification]')) {
+    const magnification = Number(button.dataset.magnification);
+    button.disabled = !best || magnification > best;
+    if (button.disabled) button.title = t('zoom.unavailable.tip');
+  }
 }
 
 // ---------- верхняя панель и строка состояния ----------
@@ -364,6 +429,7 @@ function initTopbar() {
 
 function updateStatusBar() {
   if (!active) return;
+  updateZoomPanel();
   const { slide } = active;
   $('statusSize').textContent = t('status.size', { w: formatNumber(slide.width), h: formatNumber(slide.height) });
   $('statusMpp').textContent = slide.mpp ? t('status.mpp', { mpp: formatNumber(slide.mpp, 4) }) : t('status.mpp.unknown');
@@ -508,28 +574,27 @@ function markCurrentThumb() {
 
 function initHotkeys() {
   // Коды клавиш не зависят от раскладки: F и R работают и в русской.
+  // Увеличение меняется у обеих половин, как и кнопками панели; движение
+  // стрелками остаётся у активной, чтобы можно было совместить участки.
   const actions = {
-    Digit0: () => active?.viewer.viewport.goHome(),
-    Numpad0: () => active?.viewer.viewport.goHome(),
-    Equal: () => active?.zoomBy(ZOOM_STEP),
-    NumpadAdd: () => active?.zoomBy(ZOOM_STEP),
-    Minus: () => active?.zoomBy(1 / ZOOM_STEP),
-    NumpadSubtract: () => active?.zoomBy(1 / ZOOM_STEP),
+    Digit0: () => forEachPane((pane) => pane.viewer.viewport.goHome(true)),
+    Numpad0: () => forEachPane((pane) => pane.viewer.viewport.goHome(true)),
+    Equal: () => forEachPane((pane) => pane.zoomBy(ZOOM_STEP)),
+    NumpadAdd: () => forEachPane((pane) => pane.zoomBy(ZOOM_STEP)),
+    Minus: () => forEachPane((pane) => pane.zoomBy(1 / ZOOM_STEP)),
+    NumpadSubtract: () => forEachPane((pane) => pane.zoomBy(1 / ZOOM_STEP)),
     ArrowLeft: () => active?.panByFraction(-1, 0, PAN_STEP),
     ArrowRight: () => active?.panByFraction(1, 0, PAN_STEP),
     ArrowUp: () => active?.panByFraction(0, -1, PAN_STEP),
     ArrowDown: () => active?.panByFraction(0, 1, PAN_STEP),
     KeyF: toggleFullscreen,
-    KeyR: () => active?.resetView(),
+    KeyR: () => forEachPane((pane) => pane.resetView()),
     Tab: () => {
       if (panes.length > 1) setActive(panes[(panes.indexOf(active) + 1) % panes.length]);
     },
   };
   FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
-    const action = () => {
-      const slide = active?.slide;
-      if (slide?.objective && magnification <= slide.objective) active.zoomToMagnification(magnification);
-    };
+    const action = () => zoomAllTo(magnification);
     actions[`Digit${index + 1}`] = action;
     actions[`Numpad${index + 1}`] = action;
   });

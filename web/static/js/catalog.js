@@ -34,8 +34,10 @@ async function main() {
   if (user.role === 'admin') await loadPending();
 }
 
-async function load() {
-  setNote(t('common.loading'));
+// silent: обновление в фоне, после загрузки скана. Надпись «Загрузка…» в этом
+// случае только мигает поверх каталога, ничего не сообщая.
+async function load({ silent = false } = {}) {
+  if (!silent) setNote(t('common.loading'));
   try {
     const data = await api('/api/catalog');
     folders = data.folders;
@@ -179,9 +181,17 @@ function descendants(folderId) {
   return result;
 }
 
+let shownSignature = '';
+
 function renderSlides() {
   const list = visibleSlides();
-  $('grid').replaceChildren(...list.map(card));
+  // Карточки пересоздаются, только если список действительно изменился: иначе
+  // миниатюры перезапрашиваются и заметно мигают при каждом обновлении.
+  const signature = list.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}`).join('|');
+  if (signature !== shownSignature) {
+    shownSignature = signature;
+    $('grid').replaceChildren(...list.map(card));
+  }
   renderCrumbs();
   if (list.length) setNote('');
   else if ($('search').value.trim()) setNote(t('catalog.nothingFound'));
@@ -612,7 +622,7 @@ function renderUploads(tasks) {
     reloadTimer = setTimeout(() => {
       reloadTimer = null;
       loadPending();
-      load();
+      load({ silent: true });
     }, 400);
   }
 }

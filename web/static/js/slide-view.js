@@ -38,7 +38,7 @@ export class SlideView {
 
     this.viewer = this.#createViewer();
     this.adjuster = new ImageAdjuster(this.viewer);
-    this.#initZoomPanel();
+    this.#initZoomReadout();
     this.#initScalebar();
     this.#initMinimap();
     this.#initLabel();
@@ -64,6 +64,12 @@ export class SlideView {
       showNavigator: true,
       navigatorElement: this.parts.navigator,
       navigatorDisplayRegionColor: '#d12f2f',
+      // Размер задаём сами: иначе мини-карта растёт от ширины окна и в режиме
+      // сравнения вылезает за свою половину
+      navigatorMaintainSizeRatio: false,
+      navigatorAutoResize: false,
+      navigatorWidth: 220,
+      navigatorHeight: 150,
       maxZoomPixelRatio: MAX_DIGITAL_ZOOM,
       minZoomImageRatio: 1,
       preserveImageSizeOnResize: true,
@@ -101,10 +107,13 @@ export class SlideView {
     return `${formatNumber(this.magnification, 1)}×`;
   }
 
-  zoomToMagnification(magnification) {
+  // Кнопки фиксированных увеличений переключают сразу, без плавного перехода:
+  // так быстрее и предсказуемее, а пустых областей не возникает — до подхода
+  // чётких тайлов OpenSeadragon показывает растянутые с предыдущего уровня (Н-6).
+  zoomToMagnification(magnification, immediately = true) {
     const { viewport } = this.viewer;
-    viewport.zoomTo(viewport.imageToViewportZoom(magnification / this.slide.objective));
-    viewport.applyConstraints();
+    viewport.zoomTo(viewport.imageToViewportZoom(magnification / this.slide.objective), null, immediately);
+    viewport.applyConstraints(immediately);
   }
 
   zoomBy(factor) {
@@ -125,58 +134,34 @@ export class SlideView {
     this.viewer.viewport.goHome();
   }
 
-  #initZoomPanel() {
-    const buttons = this.parts.zoomButtons;
-    const fit = document.createElement('button');
-    fit.className = 'zoom-btn';
-    fit.textContent = t('zoom.fit');
-    fit.title = t('zoom.fit.tip');
-    fit.addEventListener('click', () => this.viewer.viewport.goHome());
-    buttons.append(fit);
-
-    FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
-      const button = document.createElement('button');
-      button.className = 'zoom-btn';
-      button.textContent = `${magnification}×`;
-      // Кнопки выше увеличения сканирования неактивны: скан 20× не предлагает 40× (Н-1).
-      button.disabled = !this.slide.objective || magnification > this.slide.objective;
-      button.title = button.disabled
-        ? t('zoom.unavailable.tip')
-        : t('zoom.fixed.tip', { mag: magnification, key: index + 1 });
-      button.addEventListener('click', () => this.zoomToMagnification(magnification));
-      buttons.append(button);
-    });
-
-    // Ползунок логарифмический: одинаковый ход даёт одинаковую кратность зума.
-    const slider = this.parts.zoomSlider;
-    const range = () => [this.viewer.viewport.getMinZoom(), this.viewer.viewport.getMaxZoom()];
-    let dragging = false;
-    slider.addEventListener('input', () => {
-      dragging = true;
-      const [min, max] = range();
-      this.viewer.viewport.zoomTo(min * (max / min) ** (slider.value / SLIDER_STEPS), null, true);
-    });
-    slider.addEventListener('change', () => { dragging = false; });
-
+  // Управление увеличением общее на весь экран (см. viewer.js), а в заголовке
+  // половины видно её текущее увеличение: так сразу заметно, сопоставимы ли они.
+  #initZoomReadout() {
     this.updateZoomReadout = () => {
       this.parts.zoomCurrent.textContent = this.magnificationLabel();
-      if (!dragging) {
-        const [min, max] = range();
-        slider.value = max > min
-          ? (SLIDER_STEPS * Math.log(this.viewer.viewport.getZoom(true) / min)) / Math.log(max / min)
-          : 0;
-      }
+      this.onViewChange?.(this);
     };
     for (const event of ['open', 'animation', 'resize']) {
       this.viewer.addHandler(event, this.updateZoomReadout);
     }
+  }
 
-    const rotate = (degrees) => {
-      const { viewport } = this.viewer;
-      viewport.setRotation(viewport.getRotation() + degrees);
-    };
-    this.parts.rotateLeft.addEventListener('click', () => rotate(-90));
-    this.parts.rotateRight.addEventListener('click', () => rotate(90));
+  // Положение ползунка: логарифмическое, одинаковый ход даёт одинаковую кратность.
+  get sliderPosition() {
+    const { viewport } = this.viewer;
+    const [min, max] = [viewport.getMinZoom(), viewport.getMaxZoom()];
+    return max > min ? (SLIDER_STEPS * Math.log(viewport.getZoom(true) / min)) / Math.log(max / min) : 0;
+  }
+
+  zoomToSliderPosition(position) {
+    const { viewport } = this.viewer;
+    const [min, max] = [viewport.getMinZoom(), viewport.getMaxZoom()];
+    viewport.zoomTo(min * (max / min) ** (position / SLIDER_STEPS), null, true);
+  }
+
+  rotateBy(degrees) {
+    const { viewport } = this.viewer;
+    viewport.setRotation(viewport.getRotation() + degrees);
   }
 
   #initScalebar() {
@@ -302,6 +287,15 @@ export class SlideView {
   resize() {
     requestAnimationFrame(() => {
       if (!this.viewer.isOpen()) return;
+      // Собственное слежение OpenSeadragon за размером срабатывает не сразу,
+      // а до этого он считает увеличение по прежнему контейнеру: у второй
+      // половины оно выходило вдвое меньше. Первый аргумент resize это размер,
+      // а не флаг: вызов resize(true) ломает пересчёт зума.
+      const { clientWidth, clientHeight } = this.parts.osd;
+      if (clientWidth && clientHeight) {
+        this.viewer.viewport.resize(new OpenSeadragon.Point(clientWidth, clientHeight), false);
+        this.viewer.viewport.applyConstraints(true);
+      }
       this.viewer.forceRedraw();
       this.updateZoomReadout?.();
     });

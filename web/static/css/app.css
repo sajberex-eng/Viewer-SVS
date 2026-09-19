@@ -152,7 +152,20 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* ---------- половины экрана (раздел 8 ТЗ) ---------- */
 
+/* Панель увеличений одна на весь экран и лежит поверх половин слева */
+.panes-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
 .panes { flex: 1; min-width: 0; display: grid; grid-template-columns: 1fr; }
+.pane-zoom {
+  flex: none;
+  min-width: 54px;
+  text-align: center;
+  padding: 0 6px;
+  border-radius: var(--radius);
+  background: var(--zoom-current);
+  border: 1px solid #c9b63a;
+  font-size: 12px;
+  font-weight: 600;
+}
 .pane { display: flex; flex-direction: column; min-width: 0; position: relative; }
 .pane-head {
   display: none;  /* в обычном режиме заголовок половины не нужен */
@@ -166,6 +179,8 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .pane-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .is-comparing .pane-head { display: flex; }
+/* В режиме сравнения у половин появляется заголовок: панель уходит под него */
+.is-comparing .zoom-panel { top: 38px; }
 .is-comparing .pane.is-active .pane-head { background: var(--brand-tint); box-shadow: inset 0 2px 0 var(--brand); }
 .is-comparing .pane.is-active { outline: 2px solid var(--brand); outline-offset: -2px; }
 
@@ -174,7 +189,8 @@ input[type="range"] { accent-color: var(--accent); }
 
 .page-message { margin: auto; color: var(--muted); }
 
-.stage { position: relative; flex: 1; min-width: 0; background: var(--stage); }
+/* overflow скрывает всё, что панели попытаются вынести за свою половину */
+.stage { position: relative; flex: 1; min-width: 0; background: var(--stage); overflow: hidden; }
 .osd { position: absolute; inset: 0; }
 .osd.is-picking, .osd.is-picking * { cursor: crosshair !important; }
 .adjust-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
@@ -183,7 +199,7 @@ input[type="range"] { accent-color: var(--accent); }
   position: absolute;
   top: 10px;
   left: 10px;
-  z-index: 5;
+  z-index: 7;  /* выше мини-карты и заголовков половин */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -220,9 +236,12 @@ input[type="range"] { accent-color: var(--accent); }
   border-radius: var(--radius);
   padding: 3px;
 }
-.minimap-view { width: 220px; height: 150px; background: #fafafa; }
-.minimap-toggle { position: absolute; top: 4px; right: 4px; z-index: 2; width: 20px; height: 20px; font-size: 12px; }
-.minimap.is-collapsed { padding: 0; width: 28px; height: 28px; }
+/* Размер фиксирован и здесь, и в настройках OpenSeadragon: он задаёт элементу
+   свои размеры, и без ограничения мини-карта закрывает соседнюю половину. */
+.minimap-view { width: 220px; height: 150px; max-width: 40vw; overflow: hidden; background: #fafafa; }
+.minimap-view > div { max-width: 100%; max-height: 100%; }
+.minimap-toggle { position: absolute; top: 4px; right: 4px; z-index: 6; width: 20px; height: 20px; font-size: 12px; }
+.minimap.is-collapsed { padding: 0; width: 28px; height: 28px; overflow: hidden; }
 .minimap.is-collapsed .minimap-view { display: none; }
 
 .scalebar {
