@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import sqlite3
 import threading
 from contextlib import asynccontextmanager
@@ -44,6 +45,8 @@ from .uploads import PART_SIZE, UploadError, Uploads
 log = logging.getLogger(__name__)
 
 WEB_DIR = BASE_DIR / "web"
+# Ссылки на скрипты и стили внутри страницы: к ним дописывается версия
+STATIC_LINK = re.compile(r'(?<=["\'])(/static/[^"\']+\.(?:js|css))(?=["\'])')
 TILE_CACHE_CONTROL = "private, max-age=604800"
 THUMBNAIL_SIZE = (320, 320)
 LABEL_SIZE = (600, 600)
@@ -250,8 +253,18 @@ def create_app() -> FastAPI:
 
     # ---------- страницы ----------
 
-    def page(name: str) -> FileResponse:
-        return FileResponse(WEB_DIR / "pages" / name, headers={"Cache-Control": "no-cache"})
+    # Версия статики: меняется при любом изменении скриптов и стилей и
+    # подставляется в ссылки на странице. Без этого браузер держит модули в
+    # кэше, и новая страница выполняется со старым кодом.
+    assets_version = str(int(max(
+        (path.stat().st_mtime for path in (WEB_DIR / "static").rglob("*") if path.is_file()),
+        default=0,
+    )))
+
+    def page(name: str) -> Response:
+        html = (WEB_DIR / "pages" / name).read_text(encoding="utf-8")
+        html = STATIC_LINK.sub(lambda match: f"{match.group(1)}?v={assets_version}", html)
+        return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     def protected_page(request: Request, name: str):
         if session_user(request) is None:

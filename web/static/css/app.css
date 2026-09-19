@@ -425,8 +425,17 @@ input[type="range"] { accent-color: var(--accent); }
 .upload-head { display: flex; align-items: center; gap: 12px; }
 .upload-head h2 { font-size: 14px; margin-right: auto; }
 .upload-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
-.upload-row { display: grid; grid-template-columns: minmax(120px, 1fr) 160px minmax(120px, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; }
-.upload-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Колонки фиксированы: иначе текст скорости меняет их ширину на каждом
+   обновлении, и строка дёргается вместе со всей страницей. */
+.upload-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 160px 260px 150px;
+  align-items: center;
+  gap: 10px;
+  height: 24px;
+  font-size: 13px;
+}
+.upload-name, .upload-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .upload-bar { height: 6px; background: #e6e6e6; border-radius: 3px; overflow: hidden; }
 .upload-fill { height: 100%; background: var(--brand); transition: width 0.2s; }
 .upload-state { color: var(--muted); }

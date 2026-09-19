@@ -578,11 +578,35 @@ async function dropPending(state) {
 }
 
 let reloadTimer = null;
+const uploadRows = new Map(); // ключ задачи или прерванной загрузки -> её строка
 
+// Строки не пересоздаются на каждую принятую часть: иначе панель дёргается,
+// меняет высоту и весь каталог над ней подпрыгивает.
 function renderUploads(tasks) {
-  const rows = [...pending.map(pendingRow), ...tasks.map(uploadRow)];
-  $('uploadPanel').hidden = !rows.length;
-  $('uploadList').replaceChildren(...rows);
+  const items = [
+    ...pending.map((state) => ({ key: `p:${state.id}`, build: () => pendingRow(state), fill: (row) => fillPending(row, state) })),
+    ...tasks.map((task) => ({ key: `t:${task.id}`, build: () => uploadRow(task), fill: (row) => fillUpload(row, task) })),
+  ];
+  const list = $('uploadList');
+  $('uploadPanel').hidden = !items.length;
+
+  for (const [key, row] of uploadRows) {
+    if (!items.some((item) => item.key === key)) {
+      row.remove();
+      uploadRows.delete(key);
+    }
+  }
+  items.forEach((item, index) => {
+    let row = uploadRows.get(item.key);
+    if (!row) {
+      row = item.build();
+      uploadRows.set(item.key, row);
+      list.append(row);
+    }
+    item.fill(row);
+    if (list.children[index] !== row) list.insertBefore(row, list.children[index] ?? null);
+  });
+
   $('btnClearUploads').hidden = !tasks.some((task) => task.status !== 'running' && task.status !== 'waiting');
   if (tasks.some((task) => task.status === 'done') && !reloadTimer) {
     reloadTimer = setTimeout(() => {
@@ -593,75 +617,75 @@ function renderUploads(tasks) {
   }
 }
 
-function pendingRow(state) {
+// Пустая строка панели: содержимое проставляется отдельно, чтобы обновлять
+// её потом без пересоздания узлов.
+function emptyRow() {
   const item = document.createElement('li');
-  item.className = 'upload-row is-paused';
-
+  item.className = 'upload-row';
   const name = document.createElement('span');
   name.className = 'upload-name';
-  const folder = folderById(state.folder_id);
-  name.textContent = folder ? `${state.original_name} → ${folder.name}` : state.original_name;
-
   const bar = document.createElement('div');
   bar.className = 'upload-bar';
   const fill = document.createElement('div');
   fill.className = 'upload-fill';
-  fill.style.width = `${Math.round((state.received / state.size) * 100)}%`;
   bar.append(fill);
-
   const label = document.createElement('span');
   label.className = 'upload-state';
-  label.textContent = t('upload.paused', {
-    done: Math.round((state.received / state.size) * 100),
-    left: sizeText(state.size - state.received),
-  });
-
   const actions = document.createElement('span');
   actions.className = 'upload-actions';
-  actions.append(
-    actionButton(t('upload.resume'), () => resumeUpload(state)),
-    actionButton(t('common.delete'), () => dropPending(state), 'is-danger'),
-  );
-
   item.append(name, bar, label, actions);
   return item;
 }
 
-function uploadRow(task) {
-  const item = document.createElement('li');
-  item.className = `upload-row is-${task.status}`;
-
-  const name = document.createElement('span');
-  name.className = 'upload-name';
-  name.textContent = task.file.name; // только на экране администратора, на сервер имя уходит отдельно
-
-  const bar = document.createElement('div');
-  bar.className = 'upload-bar';
-  const fill = document.createElement('div');
-  fill.className = 'upload-fill';
-  fill.style.width = `${Math.round(task.progress * 100)}%`;
-  bar.append(fill);
-
-  const state = document.createElement('span');
-  state.className = 'upload-state muted';
-  if (task.status === 'done') state.textContent = t('upload.done');
-  else if (task.status === 'canceled') state.textContent = t('upload.canceled');
-  else if (task.status === 'error') state.textContent = task.detail;
-  else if (task.status === 'waiting') state.textContent = t('upload.waiting');
-  else state.textContent = task.detail || `${Math.round(task.progress * 100)}%`;
-  if (task.status === 'error') state.classList.add('is-error');
-
-  item.append(name, bar, state);
-  if (task.status === 'running' || task.status === 'waiting') {
-    const cancel = document.createElement('button');
-    cancel.className = 'icon-btn';
-    cancel.type = 'button';
-    cancel.textContent = '×';
-    cancel.title = t('upload.cancel.tip');
-    cancel.addEventListener('click', () => task.cancel());
-    item.append(cancel);
-  }
+function pendingRow(state) {
+  const item = emptyRow();
+  item.classList.add('is-paused');
+  item.querySelector('.upload-actions').append(
+    actionButton(t('upload.resume'), () => resumeUpload(state)),
+    actionButton(t('common.delete'), () => dropPending(state), 'is-danger'),
+  );
   return item;
+}
+
+function fillPending(row, state) {
+  const folder = folderById(state.folder_id);
+  const done = Math.round((state.received / state.size) * 100);
+  row.querySelector('.upload-name').textContent = folder
+    ? `${state.original_name} → ${folder.name}`
+    : state.original_name;
+  row.querySelector('.upload-fill').style.width = `${done}%`;
+  row.querySelector('.upload-state').textContent = t('upload.paused', {
+    done,
+    left: sizeText(state.size - state.received),
+  });
+}
+
+function uploadRow(task) {
+  const item = emptyRow();
+  // Имя файла видит только администратор; на сервер оно уходит отдельно
+  item.querySelector('.upload-name').textContent = task.file.name;
+  const cancel = document.createElement('button');
+  cancel.className = 'icon-btn';
+  cancel.type = 'button';
+  cancel.textContent = '×';
+  cancel.title = t('upload.cancel.tip');
+  cancel.addEventListener('click', () => task.cancel());
+  item.querySelector('.upload-actions').append(cancel);
+  return item;
+}
+
+function fillUpload(row, task) {
+  row.className = `upload-row is-${task.status}`;
+  row.querySelector('.upload-fill').style.width = `${Math.round(task.progress * 100)}%`;
+  const label = row.querySelector('.upload-state');
+  if (task.status === 'done') label.textContent = t('upload.done');
+  else if (task.status === 'canceled') label.textContent = t('upload.canceled');
+  else if (task.status === 'error') label.textContent = task.detail;
+  else if (task.status === 'waiting') label.textContent = t('upload.waiting');
+  else label.textContent = task.detail || `${Math.round(task.progress * 100)}%`;
+  label.classList.toggle('is-error', task.status === 'error');
+  const running = task.status === 'running' || task.status === 'waiting';
+  row.querySelector('.upload-actions .icon-btn').hidden = !running;
 }
 
 // ---------- профиль ----------
