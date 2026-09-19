@@ -2,7 +2,7 @@
 // этикетка. В обычном режиме половина одна, в режиме сравнения их две, поэтому
 // элементы ищутся внутри своего контейнера, а не по идентификаторам страницы.
 import { ImageAdjuster } from './adjust.js';
-import { loadSavedValues, saveValues } from './adjust-panel.js';
+import { clampValues, loadSavedValues, saveValues } from './adjust-panel.js';
 import { applyI18n, formatNumber, t } from './i18n.js';
 
 const FIXED_MAGNIFICATIONS = [2, 4, 10, 20, 40]; // горячие клавиши 1–5
@@ -31,13 +31,20 @@ export class SlideView {
     this.parts.title.textContent = slide.title;
     this.parts.stageRetry.addEventListener('click', () => location.reload());
     container.addEventListener('pointerdown', () => onActivate?.(this), true);
-    if (onClose) {
-      this.parts.paneClose.hidden = false;
-      this.parts.paneClose.addEventListener('click', () => onClose(this));
-    }
+    // Крестик виден только в режиме сравнения: это решает viewer.js
+    this.parts.paneClose.addEventListener('click', () => onClose(this));
 
     this.viewer = this.#createViewer();
+    // Размер области просмотра запомнен при создании половины, а экран мог
+    // с тех пор разделиться (ссылка на два скана): «вписать» считается заново.
+    // Обработчик добавлен первым и срабатывает раньше восстановления вида из ссылки.
+    this.viewer.addHandler('open', () => {
+      this.#syncViewportSize();
+      this.viewer.viewport.goHome(true);
+    });
     this.adjuster = new ImageAdjuster(this.viewer);
+    const saved = loadSavedValues(storageKey);
+    if (saved) this.adjuster.setValues(saved);
     this.#initZoomReadout();
     this.#initScalebar();
     this.#initMinimap();
@@ -294,30 +301,35 @@ export class SlideView {
   resize() {
     requestAnimationFrame(() => {
       if (!this.viewer.isOpen()) return;
-      // Собственное слежение OpenSeadragon за размером срабатывает не сразу,
-      // а до этого он считает увеличение по прежнему контейнеру: у второй
-      // половины оно выходило вдвое меньше. Первый аргумент resize это размер,
-      // а не флаг: вызов resize(true) ломает пересчёт зума.
-      const { clientWidth, clientHeight } = this.parts.osd;
-      if (clientWidth && clientHeight) {
-        this.viewer.viewport.resize(new OpenSeadragon.Point(clientWidth, clientHeight), false);
-        this.viewer.viewport.applyConstraints(true);
-      }
+      this.#syncViewportSize();
+      this.viewer.viewport.applyConstraints(true);
       this.viewer.forceRedraw();
       this.updateZoomReadout?.();
     });
   }
 
-  // Сохранённые настройки этой половины: применяются при открытии слайда.
-  applySavedAdjust() {
-    const saved = loadSavedValues(this.storageKey);
-    if (saved) this.adjuster.setValues(saved);
+  // Собственное слежение OpenSeadragon за размером срабатывает не сразу,
+  // а до этого он считает увеличение по прежнему контейнеру: у второй
+  // половины оно выходило вдвое меньше. Первый аргумент resize это размер,
+  // а не флаг: вызов resize(true) ломает пересчёт зума.
+  #syncViewportSize() {
+    const { clientWidth, clientHeight } = this.parts.osd;
+    if (clientWidth && clientHeight) {
+      this.viewer.viewport.resize(new OpenSeadragon.Point(clientWidth, clientHeight), false);
+    }
   }
 
-  // «Применить к обеим» (С-9): значения соседней половины ставятся и сохраняются.
-  applyAdjust(values) {
-    this.adjuster.setValues(values);
-    saveValues(this.storageKey, values);
+  // Настройки изображения этой половины (И-7). Хранятся у самой половины,
+  // панель настройки одна и только показывает значения активной.
+  get adjustValues() {
+    return this.adjuster.values;
+  }
+
+  // save: false — для настроек из ссылки: они показываются, но не заменяют
+  // сохранённые пользователем для этого скана.
+  setAdjust(values, { save = true } = {}) {
+    this.adjuster.setValues(clampValues(values, this.adjuster.values));
+    if (save) saveValues(this.storageKey, this.adjuster.values);
   }
 
   showMessage(text, { retry = true } = {}) {

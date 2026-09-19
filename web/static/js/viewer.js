@@ -38,7 +38,14 @@ async function main() {
   const slideId = query.get('slide');
   if (!slideId) return showPageMessage(t('viewer.noSlide'));
 
-  const slide = await loadSlide(slideId);
+  // Ссылка на два скана открывает сразу режим сравнения (С-11). Сведения о
+  // втором скане нужны до создания половин: иначе первая успевает открыться
+  // на весь экран и после разделения остаётся с вдвое большим увеличением.
+  const secondId = query.get('slide2');
+  const [slide, second] = await Promise.all([
+    loadSlide(slideId),
+    secondId ? loadSlide(secondId, { silent: true }) : null,
+  ]);
   if (!slide) return;
 
   document.title = `${slide.title} · ${t('app.title')}`;
@@ -53,27 +60,18 @@ async function main() {
 
   const first = addPane(slide);
   setActive(first);
-  first.viewer.addHandler('open', () => {
-    restoreView(first, query, '');
-    const shared = query.get('adj') && AdjustPanel.deserialize(query.get('adj'));
-    if (shared) adjustPanel.setValues(shared, { save: false });
-  });
+  first.viewer.addHandler('open', () => restoreView(first, query, ''));
 
-  // Ссылка на два скана открывает сразу режим сравнения (С-11)
-  const secondId = query.get('slide2');
-  if (secondId) {
-    const second = await loadSlide(secondId, { silent: true });
-    if (!second) {
-      showNote(t('compare.noAccess'));
-    } else {
-      const pane = addPane(second);
-      pane.viewer.addHandler('open', () => {
-        restoreView(pane, query, '2');
-        // Связь включается, когда открылись обе половины: порядок не гарантирован
-        if (query.get('link') === '1') whenAllOpen(() => setLinked(true));
-      });
-      applyCompareLayout();
-    }
+  if (secondId && !second) {
+    showNote(t('compare.noAccess'));
+  } else if (second) {
+    const pane = addPane(second);
+    pane.viewer.addHandler('open', () => {
+      restoreView(pane, query, '2');
+      // Связь включается, когда открылись обе половины: порядок не гарантирован
+      if (query.get('link') === '1') whenAllOpen(() => setLinked(true));
+    });
+    applyCompareLayout();
   }
 }
 
@@ -100,17 +98,15 @@ function addPane(slide) {
     storageKey: `svsviewer:adjust:${user.login}:${slide.id}`,
     onActivate: setActive,
     onViewChange: onPaneChanged,
-    onClose: panes.length ? closePane : null,
+    onClose: closePane,
     onPickWhite: (pane, position) => (active === pane ? adjustPanel.pickWhite(position) : false),
-  });
-  view.viewer.addHandler('open', () => {
-    if (active !== view) view.applySavedAdjust(); // активную настроит панель
   });
   panes.push(view);
   return view;
 }
 
 function closePane(view) {
+  if (panes.length < 2) return; // последнюю половину не закрыть
   panes = panes.filter((pane) => pane !== view);
   view.destroy();
   setLinked(false);
@@ -124,7 +120,7 @@ function setActive(view) {
   for (const pane of panes) pane.setActive(panes.length > 1 && pane === view);
   $('slideTitle').textContent = view.slide.title;
   document.title = `${view.slide.title} · ${t('app.title')}`;
-  adjustPanel.attachTo({ adjuster: view.adjuster, viewer: view.viewer, storageKey: view.storageKey });
+  adjustPanel.attachTo(view);
   $('adjustTarget').textContent = t('adjust.target', { title: view.slide.title });
   $('adjustTarget').hidden = panes.length < 2;
   updateStatusBar();
@@ -278,9 +274,6 @@ async function startCompare() {
   const slide = await loadSlide(String(chosen.slide[0]), { silent: true });
   if (!slide) return showNote(t('compare.noAccess'));
   const pane = addPane(slide);
-  // Новая половина открывается на «вписать» уже в своей ширине: иначе масштаб
-  // считается по прежнему размеру и половины стартуют с разного увеличения.
-  pane.viewer.addOnceHandler('open', () => requestAnimationFrame(() => pane.viewer.viewport.goHome(true)));
   applyCompareLayout();
   setActive(pane);
 }
@@ -301,8 +294,6 @@ function swapPanes() {
   const container = $('panes');
   container.insertBefore(panes[0].element, $('splitter'));
   container.append(panes[1].element);
-  panes[0].parts.paneClose.hidden = true;
-  panes[1].parts.paneClose.hidden = false;
   if (linked) setLinked(true); // взаимное положение пересчитывается заново
   for (const pane of panes) pane.resize();
 }
@@ -384,9 +375,11 @@ function initTopbar() {
   $('btnSingle').addEventListener('click', leaveCompare);
   $('btnSwap').addEventListener('click', swapPanes);
   $('btnLink2').addEventListener('click', () => setLinked(!linked));
+  // «Применить к обеим» (С-9): настройки активной половины копируются
+  // во вторую и сохраняются для её скана.
   $('adjustBoth').addEventListener('click', () => {
     for (const pane of panes) {
-      if (pane !== active) pane.adjustPanel.setValues(adjustPanel.values);
+      if (pane !== active) pane.setAdjust(active.adjustValues);
     }
   });
   addEventListener('resize', () => {
@@ -480,8 +473,8 @@ function buildLink(withAdjust) {
     if (pane.slide.objective) query.set(`m${suffix}`, pane.magnification.toFixed(2));
     else query.set(`z${suffix}`, pane.imageZoom.toFixed(4));
     if (pane.rotation) query.set(`r${suffix}`, pane.rotation);
-    if (withAdjust && !isDefault(pane.adjustPanel.values)) {
-      query.set(`adj${suffix}`, pane.adjustPanel.serialize());
+    if (withAdjust && !isDefault(pane.adjustValues)) {
+      query.set(`adj${suffix}`, AdjustPanel.serialize(pane.adjustValues));
     }
   });
   if (linked) query.set('link', '1');
@@ -497,8 +490,11 @@ function restoreView(pane, query, suffix) {
   if (zoom > 0) viewport.zoomTo(viewport.imageToViewportZoom(zoom), null, true);
   if (Number.isFinite(x) && Number.isFinite(y)) viewport.panTo(viewport.imageToViewportCoordinates(x, y), true);
   viewport.applyConstraints(true);
+  // Настройки из ссылки показываются, но не заменяют сохранённые у получателя
   const shared = query.get(`adj${suffix}`) && AdjustPanel.deserialize(query.get(`adj${suffix}`));
-  if (shared) pane.adjustPanel.setValues(shared, { save: false });
+  if (!shared) return;
+  if (pane === active) adjustPanel.setValues(shared, { save: false }); // ползунки тоже
+  else pane.setAdjust(shared, { save: false });
 }
 
 // ---------- панель стёкол ----------

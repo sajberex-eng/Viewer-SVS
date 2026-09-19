@@ -3,12 +3,16 @@ import { t } from './i18n.js';
 
 const BACKGROUND_MIN_LEVEL = 140; // темнее этого участок фоном стекла не считается
 
+// Полный набор значений в допустимых пределах; недостающие берутся из base.
+export function clampValues(values, base = DEFAULTS) {
+  return Object.fromEntries(PARAMS.map((p) => [p.id, clampParam(p, Number(values[p.id] ?? base[p.id]))]));
+}
+
 // Настройки хранятся в браузере отдельно для пользователя и слайда (И-7).
 export function loadSavedValues(storageKey) {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey));
-    if (!saved) return null;
-    return Object.fromEntries(PARAMS.map((p) => [p.id, clampParam(p, Number(saved[p.id] ?? p.def))]));
+    return saved ? clampValues(saved) : null;
   } catch {
     return null; // повреждённая или недоступная запись
   }
@@ -25,13 +29,14 @@ export function saveValues(storageKey, values) {
 
 // Панель ползунков. Она одна на странице и переключается между половинами
 // экрана: в режиме сравнения ползунки действуют на активную половину (С-4).
+// Сами значения хранит половина (SlideView.adjustValues), панель их только меняет.
 export class AdjustPanel {
   constructor({ panel, onChange }) {
     this.panel = panel;
     this.onChange = onChange;
+    this.pane = null;
     this.adjuster = null;
     this.viewer = null;
-    this.storageKey = null;
     this.values = { ...DEFAULTS };
     this.controls = {};
     this.presetSelect = panel.querySelector('#adjustPreset');
@@ -46,41 +51,32 @@ export class AdjustPanel {
   }
 
   // Переключение на другую половину: ползунки показывают её настройки.
-  attachTo({ adjuster, viewer, storageKey }) {
+  attachTo(pane) {
     if (this.picking) this._stopPicking();
-    this.adjuster = adjuster;
-    this.viewer = viewer;
-    this.storageKey = storageKey;
-    this.values = loadSavedValues(storageKey) ?? { ...DEFAULTS };
+    this.pane = pane;
+    this.adjuster = pane.adjuster;
+    this.viewer = pane.viewer;
+    this.values = { ...pane.adjustValues };
     this._refresh();
-    adjuster.setValues(this.values);
     this.onChange(this.values);
 
-    const unsupported = !adjuster.supported;
+    const unsupported = !this.adjuster.supported;
     if (unsupported) this.hint.textContent = t('adjust.noWebgl');
     this.panel.querySelectorAll('input, select, button:not(#adjustClose)').forEach((el) => {
       el.disabled = unsupported;
     });
   }
 
-  loadSaved() {
-    const saved = loadSavedValues(this.storageKey);
-    if (saved) this.setValues(saved, { save: false });
-  }
-
   setValues(values, { save = true } = {}) {
-    for (const param of PARAMS) {
-      if (values[param.id] !== undefined) this.values[param.id] = clampParam(param, Number(values[param.id]));
-    }
+    this.values = clampValues(values, this.values);
     this._refresh();
-    this.adjuster?.setValues(this.values);
-    if (save) saveValues(this.storageKey, this.values);
+    this.pane?.setAdjust(this.values, { save });
     this.onChange(this.values);
   }
 
   // Компактная запись для ссылки на поле зрения (И-11).
-  serialize() {
-    return PARAMS.map((p) => this.values[p.id]).join(',');
+  static serialize(values) {
+    return PARAMS.map((p) => values[p.id]).join(',');
   }
 
   static deserialize(text) {
