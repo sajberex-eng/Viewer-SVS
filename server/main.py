@@ -1,8 +1,9 @@
-"""Тайл-сервер и веб-приложение вьювера."""
+"""Тайл-сервер, каталог и веб-приложение вьювера."""
 from __future__ import annotations
 
 import io
 import logging
+import sqlite3
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -11,13 +12,30 @@ from urllib.parse import quote
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.sessions import SessionMiddleware
 
-from .auth import LoginThrottle, authenticate, require_admin, require_user, session_user
+from . import audit
+from .access import AccessIndex
+from .auth import (
+    LoginThrottle,
+    account_problem,
+    authenticate,
+    generate_password,
+    hash_password,
+    require_active_user,
+    require_admin,
+    require_user,
+    revoke_sessions,
+    session_user,
+    set_password,
+    start_session,
+    verify_password,
+)
+from .catalog import Catalog, CatalogError, slide_title
 from .config import BASE_DIR, load_secret_key, load_settings
 from .db import Database
-from .slides import Catalog, SlidePool
+from .slides import LABEL_IMAGE, SlidePool
 from .storage import StorageUnavailable, create_storage
 from .tilecache import TileCache
 
@@ -26,12 +44,13 @@ log = logging.getLogger(__name__)
 WEB_DIR = BASE_DIR / "web"
 TILE_CACHE_CONTROL = "private, max-age=604800"
 THUMBNAIL_SIZE = (320, 320)
-STAIN_LABELS = {"HE": "H&E"}
+LABEL_SIZE = (600, 600)
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "same-origin",  # ссылка на поле зрения не уходит на сторонние сайты
+    "X-Robots-Tag": "noindex, nofollow",
     "Content-Security-Policy": (
         "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; "
         "frame-ancestors 'none'"
@@ -44,28 +63,49 @@ class LoginRequest(BaseModel):
     password: str
 
 
-def slide_title(row) -> str:
-    if row["case_code"] is None:
-        return f"Слайд {row['id'][:6].upper()}"
-    stain = STAIN_LABELS.get(row["stain"].upper(), row["stain"])
-    return f"{row['case_code']} · {row['glass']} · {stain}"
+class PasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 
-def slide_summary(row) -> dict:
-    # Ключ (имя файла) клиенту не отдаётся: в именах могут оказаться персональные данные.
-    return {
-        "id": row["id"],
-        "title": slide_title(row),
-        "case": row["case_code"],
-        "glass": row["glass"],
-        "stain": row["stain"],
-        "width": row["width"],
-        "height": row["height"],
-        "objective": row["objective"],
-        "mpp": row["mpp"],
-        "size_bytes": row["size"],
-        "added_at": row["added_at"],
-    }
+class FolderRequest(BaseModel):
+    name: str
+    parent_id: int | None = None
+
+
+class FolderPatch(BaseModel):
+    name: str | None = None
+    parent_id: int | None = None
+    move: bool = False  # отличает «перенести в корень» от «не трогать родителя»
+
+
+class SlidePatch(BaseModel):
+    title: str | None = None
+    stain: str | None = None
+    note: str | None = None
+    folder_id: int | None = None
+
+
+class AccessRequest(BaseModel):
+    folder_id: int | None = None
+    slide_id: str | None = None
+    mode: str | None = None
+    user_ids: list[int] = Field(default_factory=list)
+
+
+class UserRequest(BaseModel):
+    login: str
+    name: str = ""
+    role: str = "user"
+    expires_at: str | None = None
+
+
+class UserPatch(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    status: str | None = None
+    expires_at: str | None = None
+    clear_expiry: bool = False
 
 
 def create_app() -> FastAPI:
@@ -73,21 +113,21 @@ def create_app() -> FastAPI:
     db = Database(settings.db_path)
     storage = create_storage(settings.storage)
     pool = SlidePool(storage, settings.tiles, settings.open_slides)
-    catalog = Catalog(db, storage, pool, settings.sync_minutes)
+    catalog = Catalog(db, storage, pool, settings.check_minutes)
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
 
-    def initial_sync() -> None:
+    def initial_check() -> None:
         try:
-            log.info("Каталог синхронизирован: %s", catalog.sync())
+            log.info("Хранилище проверено: %s", catalog.check_integrity())
         except StorageUnavailable as exc:
             log.warning("Хранилище недоступно при запуске: %s", exc)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         tile_cache.start()
-        threading.Thread(target=initial_sync, name="catalog-sync", daemon=True).start()
+        threading.Thread(target=initial_check, name="storage-check", daemon=True).start()
         yield
         tile_cache.stop()
         pool.close_all()
@@ -115,10 +155,54 @@ def create_app() -> FastAPI:
         log.warning("Хранилище недоступно: %s", exc)
         return JSONResponse(
             status_code=503,
-            content={"detail": "Хранилище слайдов временно недоступно. Попробуйте позже или сообщите администратору."},
+            content={"detail": "Хранилище сканов временно недоступно. Попробуйте позже или сообщите администратору."},
         )
 
+    @app.exception_handler(CatalogError)
+    async def catalog_error(request: Request, exc: CatalogError):
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+
     app.mount("/static", StaticFiles(directory=WEB_DIR / "static"), name="static")
+
+    # ---------- представление данных ----------
+
+    def access_for(user) -> AccessIndex:
+        return AccessIndex(db, user)
+
+    def slide_summary(row, user) -> dict:
+        # Ключ и исходное имя файла обычному пользователю не отдаются:
+        # в имени могут оказаться персональные данные.
+        info = {
+            "id": row["id"],
+            "title": slide_title(row),
+            "folder_id": row["folder_id"],
+            "stain": row["stain"],
+            "note": row["note"],
+            "width": row["width"],
+            "height": row["height"],
+            "objective": row["objective"],
+            "mpp": row["mpp"],
+            "size_bytes": row["size"],
+            "has_label": bool(row["has_label"]),
+            "added_at": row["added_at"],
+        }
+        if user["role"] == "admin":
+            info["original_name"] = row["original_name"]
+            info["access_mode"] = row["access_mode"]
+        return info
+
+    def folder_summary(row, user) -> dict:
+        info = {"id": row["id"], "name": row["name"], "parent_id": row["parent_id"]}
+        if user["role"] == "admin":
+            info["access_mode"] = row["access_mode"]
+        return info
+
+    def require_slide(slide_id: str, user):
+        """Скан, доступный этому пользователю. Иначе 404: чужой скан неотличим от несуществующего."""
+        row = catalog.visible_slide(slide_id, access_for(user))
+        if row is None:
+            raise HTTPException(404, "Скан не найден")
+        return row
 
     # ---------- страницы ----------
 
@@ -143,69 +227,122 @@ def create_app() -> FastAPI:
     def viewer_page(request: Request):
         return protected_page(request, "viewer.html")
 
+    @app.get("/robots.txt")
+    def robots():
+        return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")
+
     # ---------- вход ----------
 
     @app.post("/api/login")
     def login(body: LoginRequest, request: Request):
-        key = f"{body.login.lower()}|{request.client.host if request.client else ''}"
+        login_name = body.login.strip()
+        key = f"{login_name.lower()}|{audit.client_ip(request)}"
         if throttle.blocked(key):
             raise HTTPException(429, "Слишком много неудачных попыток. Повторите через несколько минут.")
-        user = authenticate(db, body.login.strip(), body.password)
+        user = authenticate(db, login_name, body.password)
         if user is None:
             throttle.record_failure(key)
+            audit.log(db, request, audit.LOGIN_FAILED, actor=login_name)
             raise HTTPException(401, "Неверный логин или пароль")
+        problem = account_problem(user)
+        if problem:
+            throttle.record_failure(key)
+            audit.log(db, request, audit.LOGIN_FAILED, user=user, detail="учётная запись недоступна")
+            raise HTTPException(403, problem)
         throttle.reset(key)
-        request.session.clear()
-        request.session["user_id"] = user["id"]
-        return {"login": user["login"], "role": user["role"], "name": user["name"]}
+        start_session(request, user)
+        db.execute("UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?", (user["id"],))
+        audit.log(db, request, audit.LOGIN_OK, user=user)
+        return {
+            "login": user["login"],
+            "role": user["role"],
+            "name": user["name"],
+            "must_change_password": bool(user["must_change_password"]),
+        }
 
     @app.post("/api/logout")
     def logout(request: Request):
+        user = session_user(request)
+        if user is not None:
+            audit.log(db, request, audit.LOGOUT, user=user)
         request.session.clear()
         return {"ok": True}
 
     @app.get("/api/me")
     def me(user=Depends(require_user)):
-        return {"login": user["login"], "role": user["role"], "name": user["name"]}
+        return {
+            "login": user["login"],
+            "role": user["role"],
+            "name": user["name"],
+            "must_change_password": bool(user["must_change_password"]),
+        }
+
+    @app.post("/api/password")
+    def change_password(body: PasswordRequest, request: Request, user=Depends(require_user)):
+        if not verify_password(body.current_password, user["password_hash"]):
+            raise HTTPException(400, "Текущий пароль указан неверно")
+        try:
+            set_password(db, user["id"], body.new_password)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        audit.log(db, request, audit.PASSWORD_CHANGED, user=user)
+        # Пароль сменён: сессия получает новую версию, прочие сессии этого пользователя обрываются
+        start_session(request, db.query_one("SELECT * FROM users WHERE id = ?", (user["id"],)))
+        return {"ok": True}
 
     # ---------- каталог ----------
 
-    @app.get("/api/slides")
-    def list_slides(user=Depends(require_user)):
-        catalog.sync_if_stale()
-        return [slide_summary(row) for row in catalog.list()]
-
-    @app.post("/api/slides/rescan")
-    def rescan(user=Depends(require_admin)):
-        return catalog.sync()
-
-    def get_slide_row(slide_id: str):
-        row = catalog.get(slide_id)
-        if row is None:
-            raise HTTPException(404, "Слайд не найден")
-        return row
+    @app.get("/api/catalog")
+    def catalog_tree(user=Depends(require_active_user)):
+        """Папки и сканы, доступные этому пользователю."""
+        catalog.check_if_stale()
+        access = access_for(user)
+        slides = catalog.slides()
+        visible_slides = [row for row in slides if access.can_view_slide(row)]
+        visible_folders = access.visible_folder_ids(slides)
+        space = None
+        if user["role"] == "admin":
+            disk = storage.space()
+            space = {
+                "free_bytes": disk.free,
+                "total_bytes": disk.total,
+                "warn_below_bytes": settings.storage.warn_free_gb * 1e9,
+            }
+        return {
+            "folders": [folder_summary(row, user) for row in catalog.folders() if row["id"] in visible_folders],
+            "slides": [slide_summary(row, user) for row in visible_slides],
+            "space": space,
+        }
 
     @app.get("/api/slides/{slide_id}")
-    def slide_info(slide_id: str, user=Depends(require_user)):
-        row = get_slide_row(slide_id)
-        db.execute("INSERT INTO view_log (user_id, slide_id) VALUES (?, ?)", (user["id"], slide_id))
-        info = slide_summary(row)
+    def slide_info(slide_id: str, request: Request, user=Depends(require_active_user)):
+        row = require_slide(slide_id, user)
+        audit.log(db, request, audit.SLIDE_OPEN, user=user, object_type="slide", object_id=slide_id)
+        info = slide_summary(row, user)
         info["tiles"] = {
             "url": f"/api/slides/{slide_id}/tiles/",
             "tile_size": settings.tiles.tile_size,
             "overlap": settings.tiles.overlap,
             "format": "jpg",
         }
-        info["siblings"] = [{"id": s["id"], "title": slide_title(s)} for s in catalog.siblings(row)]
+        access = access_for(user)
+        info["siblings"] = [
+            {"id": s["id"], "title": slide_title(s)}
+            for s in catalog.slides(row["folder_id"])
+            if access.can_view_slide(s)
+        ]
         return info
 
     # ---------- изображения ----------
 
     @app.get("/api/slides/{slide_id}/tiles/{level:int}/{col:int}_{row:int}.jpg")
-    def tile(slide_id: str, level: int, col: int, row: int, user=Depends(require_user)):
-        slide_row = get_slide_row(slide_id)
+    def tile(slide_id: str, level: int, col: int, row: int, user=Depends(require_active_user)):
+        slide_row = require_slide(slide_id, user)
         cfg = settings.tiles
-        namespace = f"{slide_id}-{int(slide_row['mtime'])}-{slide_row['size']}-{cfg.tile_size}-{cfg.overlap}-{cfg.jpeg_quality}"
+        namespace = (
+            f"{slide_id}-{int(slide_row['mtime'])}-{slide_row['size']}"
+            f"-{cfg.tile_size}-{cfg.overlap}-{cfg.jpeg_quality}"
+        )
         path = tile_cache.path(namespace, level, col, row)
         headers = {"Cache-Control": TILE_CACHE_CONTROL}
         if tile_cache.get(path):
@@ -229,12 +366,13 @@ def create_app() -> FastAPI:
         return Response(data, media_type="image/jpeg", headers=headers)
 
     @app.get("/api/slides/{slide_id}/thumbnail.jpg")
-    def thumbnail(slide_id: str, user=Depends(require_user)):
-        slide_row = get_slide_row(slide_id)
+    def thumbnail(slide_id: str, user=Depends(require_active_user)):
+        slide_row = require_slide(slide_id, user)
         path: Path = settings.thumbs_dir / f"{slide_id}-{int(slide_row['mtime'])}.jpg"
         if not path.exists():
             with pool.acquire(slide_row["key"]) as handle:
                 try:
+                    # get_thumbnail берёт изображение препарата: этикетка в миниатюру не попадает
                     image = handle.slide.get_thumbnail(THUMBNAIL_SIZE)
                 except Exception as exc:
                     raise StorageUnavailable(f"Ошибка чтения миниатюры: {exc}") from exc
@@ -242,6 +380,260 @@ def create_app() -> FastAPI:
             image.convert("RGB").save(tmp, "JPEG", quality=85)
             tmp.replace(path)
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/api/slides/{slide_id}/label.jpg")
+    def label(slide_id: str, request: Request, user=Depends(require_active_user)):
+        """Этикетка стекла: на ней бывают персональные данные, поэтому без кэша в браузере."""
+        slide_row = require_slide(slide_id, user)
+        if not slide_row["has_label"]:
+            raise HTTPException(404, "У этого скана нет этикетки")
+        with pool.acquire(slide_row["key"]) as handle:
+            try:
+                image = handle.slide.associated_images[LABEL_IMAGE].convert("RGB")
+            except Exception as exc:
+                raise StorageUnavailable(f"Ошибка чтения этикетки: {exc}") from exc
+        image.thumbnail(LABEL_SIZE)
+        buffer = io.BytesIO()
+        image.save(buffer, "JPEG", quality=88)
+        audit.log(db, request, audit.SLIDE_LABEL, user=user, object_type="slide", object_id=slide_id)
+        return Response(
+            buffer.getvalue(),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    # ---------- папки: только администратор ----------
+
+    @app.post("/api/folders")
+    def create_folder(body: FolderRequest, request: Request, user=Depends(require_admin)):
+        folder_id = catalog.create_folder(body.name, body.parent_id, user)
+        audit.log(db, request, audit.FOLDER_CREATE, user=user, object_type="folder", object_id=folder_id)
+        return {"id": folder_id}
+
+    @app.patch("/api/folders/{folder_id}")
+    def patch_folder(folder_id: int, body: FolderPatch, request: Request, user=Depends(require_admin)):
+        if body.name is not None:
+            catalog.rename_folder(folder_id, body.name)
+            audit.log(db, request, audit.FOLDER_RENAME, user=user, object_type="folder", object_id=folder_id)
+        if body.move:
+            catalog.move_folder(folder_id, body.parent_id)
+            audit.log(db, request, audit.FOLDER_MOVE, user=user, object_type="folder", object_id=folder_id)
+        return {"ok": True}
+
+    @app.get("/api/folders/{folder_id}/contents")
+    def folder_contents(folder_id: int, user=Depends(require_admin)):
+        folders, slides = catalog.folder_contents_count(folder_id)
+        return {"folders": folders, "slides": slides}
+
+    @app.delete("/api/folders/{folder_id}")
+    def delete_folder(folder_id: int, request: Request, user=Depends(require_admin)):
+        folders, slides = catalog.delete_folder(folder_id)
+        audit.log(
+            db, request, audit.FOLDER_DELETE, user=user, object_type="folder", object_id=folder_id,
+            detail=f"папок: {folders}, сканов: {slides}",
+        )
+        return {"folders": folders, "slides": slides}
+
+    # ---------- сканы: только администратор ----------
+
+    @app.patch("/api/slides/{slide_id}")
+    def patch_slide(slide_id: str, body: SlidePatch, request: Request, user=Depends(require_admin)):
+        if body.folder_id is not None:
+            catalog.move_slide(slide_id, body.folder_id)
+            audit.log(db, request, audit.SLIDE_MOVE, user=user, object_type="slide", object_id=slide_id)
+        if body.title is not None or body.stain is not None or body.note is not None:
+            catalog.update_slide(slide_id, title=body.title, stain=body.stain, note=body.note)
+            audit.log(db, request, audit.SLIDE_UPDATE, user=user, object_type="slide", object_id=slide_id)
+        return {"ok": True}
+
+    @app.delete("/api/slides/{slide_id}")
+    def delete_slide(slide_id: str, request: Request, user=Depends(require_admin)):
+        catalog.delete_slide(slide_id)
+        audit.log(db, request, audit.SLIDE_DELETE, user=user, object_type="slide", object_id=slide_id)
+        return {"ok": True}
+
+    @app.post("/api/storage/check")
+    def storage_check(user=Depends(require_admin)):
+        return catalog.check_integrity()
+
+    # ---------- доступ ----------
+
+    @app.get("/api/access")
+    def get_access(folder_id: int | None = None, slide_id: str | None = None, user=Depends(require_admin)):
+        access = access_for(user)
+        if folder_id is not None:
+            row = catalog.folder(folder_id)
+            if row is None:
+                raise HTTPException(404, "Папка не найдена")
+            source = access.folder_source(row["parent_id"]) if row["access_mode"] is None else None
+            return {
+                "mode": row["access_mode"],
+                "user_ids": catalog.granted_user_ids(folder_id=folder_id),
+                "inherited_from": source.id if source else None,
+                "inherited_mode": source.mode if source else None,
+            }
+        row = catalog.slide(slide_id)
+        if row is None:
+            raise HTTPException(404, "Скан не найден")
+        source = access.folder_source(row["folder_id"]) if row["access_mode"] is None else None
+        return {
+            "mode": row["access_mode"],
+            "user_ids": catalog.granted_user_ids(slide_id=slide_id),
+            "inherited_from": source.id if source else None,
+            "inherited_mode": source.mode if source else None,
+        }
+
+    @app.post("/api/access")
+    def set_access(body: AccessRequest, request: Request, user=Depends(require_admin)):
+        catalog.set_access(
+            folder_id=body.folder_id, slide_id=body.slide_id, mode=body.mode,
+            user_ids=body.user_ids, actor=user,
+        )
+        audit.log(
+            db, request, audit.ACCESS_CHANGE, user=user,
+            object_type="folder" if body.folder_id is not None else "slide",
+            object_id=body.folder_id if body.folder_id is not None else body.slide_id,
+            detail=f"режим: {body.mode or 'наследуется'}",
+        )
+        return {"ok": True}
+
+    @app.get("/api/access/preview/{user_id}")
+    def access_preview(user_id: int, admin=Depends(require_admin)):
+        """Что видит выбранный пользователь (ТЗ Д-7)."""
+        target = db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
+        if target is None:
+            raise HTTPException(404, "Пользователь не найден")
+        access = AccessIndex(db, target)
+        slides = catalog.slides()
+        visible = [row for row in slides if access.can_view_slide(row)]
+        folder_ids = access.visible_folder_ids(slides)
+        names = {row["id"]: row["name"] for row in catalog.folders()}
+        return {
+            "folders": [{"id": fid, "name": names.get(fid, "")} for fid in sorted(folder_ids)],
+            "slides": [{"id": row["id"], "title": slide_title(row)} for row in visible],
+        }
+
+    # ---------- пользователи ----------
+
+    def user_summary(row) -> dict:
+        return {
+            "id": row["id"],
+            "login": row["login"],
+            "name": row["name"],
+            "role": row["role"],
+            "status": row["status"],
+            "expires_at": row["expires_at"],
+            "must_change_password": bool(row["must_change_password"]),
+            "last_login_at": row["last_login_at"],
+        }
+
+    def admin_count() -> int:
+        return db.query_one("SELECT count(*) AS n FROM users WHERE role = 'admin' AND status = 'active'")["n"]
+
+    @app.get("/api/users")
+    def list_users(user=Depends(require_admin)):
+        return [user_summary(row) for row in db.query("SELECT * FROM users ORDER BY login")]
+
+    @app.post("/api/users")
+    def create_user(body: UserRequest, request: Request, user=Depends(require_admin)):
+        login_name = body.login.strip()
+        if not login_name:
+            raise HTTPException(400, "Укажите логин")
+        if body.role not in ("user", "admin"):
+            raise HTTPException(400, "Неизвестная роль")
+        password = generate_password()
+        try:
+            user_id = db.insert(
+                """
+                INSERT INTO users (login, password_hash, role, name, expires_at, must_change_password)
+                VALUES (?, ?, ?, ?, ?, 1)
+                """,
+                (login_name, hash_password(password), body.role, body.name.strip() or login_name, body.expires_at),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(400, "Пользователь с таким логином уже есть") from exc
+        audit.log(db, request, audit.USER_CREATE, user=user, object_type="user", object_id=user_id, detail=login_name)
+        # Пароль показывается администратору один раз и нигде не сохраняется
+        return {"id": user_id, "login": login_name, "password": password}
+
+    @app.patch("/api/users/{user_id}")
+    def patch_user(user_id: int, body: UserPatch, request: Request, user=Depends(require_admin)):
+        target = db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
+        if target is None:
+            raise HTTPException(404, "Пользователь не найден")
+        role = body.role or target["role"]
+        status = body.status or target["status"]
+        if role not in ("user", "admin") or status not in ("active", "blocked"):
+            raise HTTPException(400, "Недопустимое значение")
+        losing_admin = target["role"] == "admin" and target["status"] == "active" and (
+            role != "admin" or status != "active"
+        )
+        if losing_admin and admin_count() <= 1:
+            raise HTTPException(400, "Это последний администратор")
+        if target["id"] == user["id"] and status == "blocked":
+            raise HTTPException(400, "Нельзя заблокировать самого себя")
+        expires_at = None if body.clear_expiry else (body.expires_at or target["expires_at"])
+        db.execute(
+            "UPDATE users SET name = ?, role = ?, status = ?, expires_at = ? WHERE id = ?",
+            (body.name if body.name is not None else target["name"], role, status, expires_at, user_id),
+        )
+        if status == "blocked" or role != target["role"]:
+            revoke_sessions(db, user_id)  # изменение действует сразу
+        audit.log(db, request, audit.USER_UPDATE, user=user, object_type="user", object_id=user_id)
+        return {"ok": True}
+
+    @app.post("/api/users/{user_id}/password")
+    def reset_password(user_id: int, request: Request, user=Depends(require_admin)):
+        target = db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
+        if target is None:
+            raise HTTPException(404, "Пользователь не найден")
+        password = generate_password()
+        set_password(db, user_id, password, must_change=True)
+        audit.log(db, request, audit.USER_RESET_PASSWORD, user=user, object_type="user", object_id=user_id)
+        return {"login": target["login"], "password": password}
+
+    @app.delete("/api/users/{user_id}")
+    def delete_user(user_id: int, request: Request, user=Depends(require_admin)):
+        target = db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
+        if target is None:
+            raise HTTPException(404, "Пользователь не найден")
+        if target["id"] == user["id"]:
+            raise HTTPException(400, "Нельзя удалить самого себя")
+        if target["role"] == "admin" and admin_count() <= 1:
+            raise HTTPException(400, "Это последний администратор")
+        db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        audit.log(
+            db, request, audit.USER_DELETE, user=user, object_type="user",
+            object_id=user_id, detail=target["login"],
+        )
+        return {"ok": True}
+
+    # ---------- журнал ----------
+
+    @app.get("/api/journal")
+    def journal(limit: int = 200, offset: int = 0, action: str | None = None,
+                actor: str | None = None, user=Depends(require_admin)):
+        limit = max(1, min(limit, 1000))
+        where, params = [], []
+        if action:
+            where.append("action = ?")
+            params.append(action)
+        if actor:
+            where.append("actor = ?")
+            params.append(actor)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        rows = db.query(
+            f"SELECT * FROM audit_log {clause} ORDER BY id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        )
+        return [
+            {
+                "at": row["at"], "actor": row["actor"], "action": row["action"],
+                "object_type": row["object_type"], "object_id": row["object_id"],
+                "detail": row["detail"], "ip": row["ip"],
+            }
+            for row in rows
+        ]
 
     return app
 

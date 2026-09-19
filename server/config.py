@@ -14,8 +14,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 @dataclass(frozen=True)
 class StorageConfig:
     type: str = "local"
-    root: str = "./slides"
-    recursive: bool = False
+    root: str = "./data/slides"
+    reserve_gb: float = 2.0      # неприкосновенный остаток на диске
+    warn_free_gb: float = 4.0    # порог предупреждения администратору
+    max_upload_gb: float = 4.0   # предельный размер одного файла
 
 
 @dataclass(frozen=True)
@@ -27,7 +29,7 @@ class TileConfig:
 
 @dataclass(frozen=True)
 class CacheConfig:
-    max_gb: float = 20.0
+    max_gb: float = 2.0
 
 
 @dataclass(frozen=True)
@@ -43,12 +45,17 @@ class Settings:
     cache: CacheConfig = field(default_factory=CacheConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     data_dir: Path = BASE_DIR / "data"
-    sync_minutes: int = 10
-    open_slides: int = 8
+    check_minutes: int = 30
+    open_slides: int = 4
 
     @property
     def db_path(self) -> Path:
         return self.data_dir / "viewer.sqlite3"
+
+    @property
+    def uploads_dir(self) -> Path:
+        """Незавершённые загрузки: на том же диске, чтобы принятый файл переносился без копирования."""
+        return self.data_dir / "uploads"
 
     @property
     def tile_cache_dir(self) -> Path:
@@ -83,8 +90,8 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
         cache=_section(CacheConfig, raw, "cache"),
         auth=_section(AuthConfig, raw, "auth"),
         data_dir=data_dir,
-        sync_minutes=int(raw.get("sync_minutes", 10)),
-        open_slides=int(raw.get("open_slides", 8)),
+        check_minutes=int(raw.get("check_minutes", 30)),
+        open_slides=int(raw.get("open_slides", 4)),
     )
 
 

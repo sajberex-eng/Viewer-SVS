@@ -1,0 +1,215 @@
+"""Проверка прав доступа на временной базе: рабочая база и хранилище не затрагиваются.
+
+Запуск:  .venv\\Scripts\\python.exe -X utf8 tests\\access_test.py
+
+Сканы для этого теста не нужны: записи каталога создаются прямо в базе, а право
+проверяется раньше, чем сервер открывает файл. Поэтому «нет доступа» видно как
+404, а пропущенный доступ — как любой другой ответ.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+WORK_DIR = Path(tempfile.mkdtemp(prefix="viewer-access-test-"))
+(WORK_DIR / "slides").mkdir()
+(WORK_DIR / "config.yaml").write_text(
+    f"storage:\n  root: {(WORK_DIR / 'slides').as_posix()!r}\n"
+    f"data_dir: {(WORK_DIR / 'data').as_posix()!r}\n"
+    "auth:\n  https_only: false\n",
+    encoding="utf-8",
+)
+os.environ["VIEWER_CONFIG"] = str(WORK_DIR / "config.yaml")
+os.environ["VIEWER_SECRET_KEY"] = "test-secret-key"
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from server.auth import hash_password  # noqa: E402
+from server.main import app  # noqa: E402
+
+db = app.state.db
+failures: list[str] = []
+
+
+def check(name: str, condition: bool, detail: str = "") -> None:
+    print(f"[{'OK' if condition else 'СБОЙ'}] {name} {detail}")
+    if not condition:
+        failures.append(name)
+
+
+def make_user(login: str, role: str = "user") -> int:
+    return db.insert(
+        "INSERT INTO users (login, password_hash, role, name) VALUES (?, ?, ?, ?)",
+        (login, hash_password("password-1234"), role, login),
+    )
+
+
+def make_slide(slide_id: str, folder_id: int, access_mode: str | None = None) -> None:
+    db.execute(
+        """
+        INSERT INTO slides (id, key, folder_id, title, access_mode, size, mtime, width, height, has_label)
+        VALUES (?, ?, ?, ?, ?, 1000, 0, 1000, 1000, 1)
+        """,
+        (slide_id, f"{slide_id[:2]}/{slide_id}.svs", folder_id, f"Скан {slide_id}", access_mode),
+    )
+
+
+def login(client: TestClient, user_login: str) -> None:
+    response = client.post("/api/login", json={"login": user_login, "password": "password-1234"})
+    assert response.status_code == 200, response.text
+
+
+def catalog_ids(client: TestClient) -> tuple[set[int], set[str]]:
+    data = client.get("/api/catalog").json()
+    return {f["id"] for f in data["folders"]}, {s["id"] for s in data["slides"]}
+
+
+def main() -> None:
+    make_user("admin-test", "admin")
+    make_user("user-a")
+    make_user("user-b")
+    user_a_id = db.query_one("SELECT id FROM users WHERE login = 'user-a'")["id"]
+
+    # Жизненный цикл приложения запускается один раз; остальные клиенты нужны
+    # только ради отдельных наборов cookie.
+    with TestClient(app) as admin:
+        alice, bob = TestClient(app), TestClient(app)
+        login(admin, "admin-test")
+        login(alice, "user-a")
+        login(bob, "user-b")
+
+        # ---------- папки и наследование ----------
+        top = admin.post("/api/folders", json={"name": "2026-09-19"}).json()["id"]
+        inner = admin.post("/api/folders", json={"name": "Случай 01", "parent_id": top}).json()["id"]
+        make_slide("aaaaaaaaaaaa", top)
+        make_slide("bbbbbbbbbbbb", inner)
+        make_slide("cccccccccccc", inner)
+
+        check("новая папка верхнего уровня закрыта: пользователь её не видит", catalog_ids(alice) == (set(), set()))
+        check("администратор видит обе папки", catalog_ids(admin)[0] == {top, inner})
+
+        admin.post("/api/access", json={"folder_id": top, "mode": "all"})
+        folders, slides = catalog_ids(alice)
+        check("режим «все»: видны папка и подпапка", folders == {top, inner}, f"({sorted(folders)})")
+        check("режим «все»: видны все сканы", slides == {"aaaaaaaaaaaa", "bbbbbbbbbbbb", "cccccccccccc"})
+
+        # Ключевое требование Д-2: свой режим заменяет унаследованный.
+        # Скан закрывается отдельно, хотя папка выше открыта для всех.
+        admin.post("/api/access", json={"slide_id": "bbbbbbbbbbbb", "mode": "admins"})
+        check("закрытый скан не виден, хотя папка открыта", "bbbbbbbbbbbb" not in catalog_ids(alice)[1])
+
+        admin.post("/api/access", json={"folder_id": inner, "mode": "selected", "user_ids": []})
+        folders, slides = catalog_ids(alice)
+        check("подпапка «выбранные» внутри «все» не видна остальным", inner not in folders, f"({sorted(folders)})")
+        check("сканы закрытой подпапки не видны", {"bbbbbbbbbbbb", "cccccccccccc"}.isdisjoint(slides))
+        check("скан в открытой папке остался виден", "aaaaaaaaaaaa" in slides)
+
+        admin.post("/api/access", json={"folder_id": inner, "mode": "selected", "user_ids": [user_a_id]})
+        folders, slides = catalog_ids(alice)
+        check("после выдачи доступа подпапка видна", inner in folders, f"({sorted(folders)})")
+        check("в ней виден скан без своего режима", "cccccccccccc" in slides)
+        check("скан со своим режимом остаётся закрытым", "bbbbbbbbbbbb" not in slides)
+        check("другому пользователю подпапка не видна", inner not in catalog_ids(bob)[0])
+
+        # ---------- прямые запросы в обход каталога ----------
+        for name, path in (
+            ("сведения", "/api/slides/bbbbbbbbbbbb"),
+            ("тайл", "/api/slides/bbbbbbbbbbbb/tiles/8/0_0.jpg"),
+            ("миниатюра", "/api/slides/bbbbbbbbbbbb/thumbnail.jpg"),
+            ("этикетка", "/api/slides/bbbbbbbbbbbb/label.jpg"),
+        ):
+            code = bob.get(path).status_code
+            check(f"чужой скан, {name}: 404", code == 404, f"(получено {code})")
+
+        check("несуществующий скан отвечает так же", bob.get("/api/slides/zzzzzzzzzzzz").status_code == 404)
+        code = alice.get("/api/slides/aaaaaaaaaaaa").status_code
+        check("свой скан доступен (файла нет, но не 404)", code != 404, f"(получено {code})")
+
+        # ---------- исходное имя файла ----------
+        db.execute("UPDATE slides SET original_name = ? WHERE id = ?", ("Иванов_И_И.svs", "aaaaaaaaaaaa"))
+        body = alice.get("/api/slides/aaaaaaaaaaaa").text
+        check("пользователю не отдаётся имя файла", "Иванов" not in body and ".svs" not in body)
+        check("администратору имя файла видно", "Иванов" in admin.get("/api/slides/aaaaaaaaaaaa").text)
+
+        # ---------- права администратора ----------
+        check("пользователь не создаёт папки", alice.post("/api/folders", json={"name": "Чужая"}).status_code == 403)
+        check("пользователь не видит журнал", alice.get("/api/journal").status_code == 403)
+        check("пользователь не видит список учётных записей", alice.get("/api/users").status_code == 403)
+        check("пользователь не удаляет сканы", alice.delete("/api/slides/aaaaaaaaaaaa").status_code == 403)
+
+        # ---------- учётные записи ----------
+        created = admin.post("/api/users", json={"login": "новый", "role": "user"})
+        check("создание пользователя выдаёт пароль", created.status_code == 200 and len(created.json()["password"]) > 10)
+        new_id = created.json()["id"]
+        fresh = TestClient(app)
+        first = fresh.post("/api/login", json={"login": "новый", "password": created.json()["password"]})
+        check("вход с выданным паролем", first.status_code == 200)
+        check("требуется сменить пароль", first.json()["must_change_password"] is True)
+        check("до смены пароля каталог закрыт", fresh.get("/api/catalog").status_code == 403)
+        changed = fresh.post(
+            "/api/password",
+            json={"current_password": created.json()["password"], "new_password": "мой-новый-пароль"},
+        )
+        check("смена пароля", changed.status_code == 200)
+        check("после смены каталог открыт", fresh.get("/api/catalog").status_code == 200)
+
+        admin.patch(f"/api/users/{new_id}", json={"status": "blocked"})
+        blocked = TestClient(app)
+        code = blocked.post("/api/login", json={"login": "новый", "password": "мой-новый-пароль"}).status_code
+        check("заблокированный не входит", code == 403, f"(получено {code})")
+
+        # Блокировка действует немедленно, без ожидания конца сессии
+        admin.patch(f"/api/users/{user_a_id}", json={"status": "blocked"})
+        check("действующая сессия заблокированного прерывается", alice.get("/api/catalog").status_code == 401)
+        admin.patch(f"/api/users/{user_a_id}", json={"status": "active"})
+
+        admin_id = db.query_one("SELECT id FROM users WHERE login = 'admin-test'")["id"]
+        check("последнего администратора нельзя удалить", admin.delete(f"/api/users/{admin_id}").status_code == 400)
+        check("себя нельзя заблокировать", admin.patch(f"/api/users/{admin_id}", json={"status": "blocked"}).status_code == 400)
+
+        # ---------- «что видит пользователь» ----------
+        preview = {s["id"] for s in admin.get(f"/api/access/preview/{user_a_id}").json()["slides"]}
+        check("предпросмотр доступа совпадает с каталогом", preview == {"aaaaaaaaaaaa", "cccccccccccc"}, f"({sorted(preview)})")
+
+        # ---------- удаление папки ----------
+        counts = admin.get(f"/api/folders/{inner}/contents").json()
+        check("подсчёт содержимого папки", counts == {"folders": 0, "slides": 2}, f"({counts})")
+        admin.delete(f"/api/folders/{inner}")
+        check("папка удалена вместе со сканами", db.query_one("SELECT count(*) AS n FROM slides")["n"] == 1)
+
+        # ---------- журнал ----------
+        entries = admin.get("/api/journal").json()
+        actions = {row["action"] for row in entries}
+        check("в журнале есть вход", "login.ok" in actions)
+        check("в журнале есть открытие скана", "slide.open" in actions)
+        check("в журнале есть изменение доступа", "access.change" in actions)
+        check("в журнале нет имени файла", all("Иванов" not in str(row) for row in entries))
+
+        # ---------- вложенность и названия ----------
+        deep = top
+        for level in range(2, 7):
+            response = admin.post("/api/folders", json={"name": f"Уровень {level}", "parent_id": deep})
+            if response.status_code != 200:
+                break
+            deep = response.json()["id"]
+        check("глубже пяти уровней папки не создаются", level == 6 and response.status_code == 400, f"({response.text[:60]})")
+        same = admin.post("/api/folders", json={"name": "2026-09-19"})
+        check("повтор названия в одной папке отклоняется", same.status_code == 400)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    finally:
+        shutil.rmtree(WORK_DIR, ignore_errors=True)
+    if failures:
+        print(f"\nНе пройдено: {len(failures)}")
+        for name in failures:
+            print(f"  - {name}")
+        raise SystemExit(1)
+    print("\nВсе проверки доступа пройдены")
