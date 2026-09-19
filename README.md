@@ -108,14 +108,27 @@ web/
 
 **Интерфейс на других языках.** Все строки лежат в словаре `static/js/i18n.js`; для казахского или английского добавляется словарь с теми же ключами.
 
-## Развёртывание на VPS (не проверялось)
+## Развёртывание на VPS
 
-Нужны VPS казахстанского провайдера с Docker и доменное имя, направленное на сервер.
+Нужен VPS казахстанского провайдера с Docker. Доменное имя необязательно: сервис работает и по IP-адресу.
 
-1. Создать на сервере папку сканов `/mnt/slides` и учётную запись SFTP, ограниченную этой папкой. Сканы загружаются по SFTP, например через WinSCP.
-2. Скопировать на сервер папку проекта без `.venv` и `data`. В `config.yaml`: `storage.root: /mnt/slides`, `auth.https_only: true`.
-3. В `.env` рядом с `docker-compose.yml`: `VIEWER_DOMAIN=viewer.example.kz` и `VIEWER_SECRET_KEY=<случайная строка>`.
-4. `docker compose up -d --build`, затем создать администратора:
-   `docker compose exec viewer python -m server.manage add-user admin --role admin`
+1. Скопировать проект на сервер, например `git clone`. Папки `.venv` и `data` не переносятся.
+2. Создать рядом с `docker-compose.yml` файл `config.yaml` (за образец взять `config.example.yaml`). На сервере: `storage.root: /app/data/slides`, `auth.https_only: true`, `cache.max_gb: 2`, `open_slides: 4`.
+3. Создать рядом файл `.env`:
 
-Caddy получает сертификат HTTPS автоматически. Перезапуск сервиса обеспечивает `restart: unless-stopped`.
+   ```
+   VIEWER_SITE=https://<IP-адрес или домен>
+   VIEWER_TLS=internal
+   VIEWER_SECRET_KEY=<случайная строка, например из openssl rand -base64 48>
+   ```
+
+   `VIEWER_TLS=internal` даёт самоподписанный сертификат: трафик шифруется, но браузер один раз предупредит, и каждый пользователь подтвердит исключение. Для домена ставится `VIEWER_TLS=acme`, и Caddy получает сертификат сам.
+4. `docker compose up -d --build`, затем создать первого администратора:
+
+   ```
+   docker compose exec viewer python -m server.manage add-user admin --role admin --generate
+   ```
+
+Сканы загружает администратор через веб-интерфейс, папка на хосте для них не нужна: хранилище лежит в томе `viewer-data`. Перезапуск сервиса обеспечивает `restart: unless-stopped`.
+
+Резервное копирование: копировать `/var/lib/docker/volumes/<проект>_viewer-data/_data/viewer.sqlite3`. В базе нет изображений, только папки, права, учётные записи и журнал; сканы восстанавливаются повторной загрузкой из архива Центра.

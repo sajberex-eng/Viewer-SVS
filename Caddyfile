@@ -1,4 +1,26 @@
-{$VIEWER_DOMAIN} {
+# Адрес и режим сертификата берутся из .env, поэтому IP-адрес сервера
+# не попадает в репозиторий. VIEWER_TLS=internal даёт самоподписанный
+# сертификат (браузер один раз предупредит), acme — сертификат Let's Encrypt.
+{$VIEWER_SITE} {
 	encode gzip
-	reverse_proxy viewer:8000
+	tls {$VIEWER_TLS}
+
+	# Сканы загружаются частями по 8 МБ; запас на служебные заголовки
+	request_body {
+		max_size 32MB
+	}
+
+	reverse_proxy viewer:8000 {
+		# Чтение большого тела и ответ на медленном канале не должны обрываться
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+		}
+	}
+
+	header {
+		# Сервис работает только по HTTPS
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
 }

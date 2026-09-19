@@ -1,5 +1,7 @@
-# Развёртывание на одном VPS: вьювер и обратный прокси с автоматическим HTTPS.
-# Перед запуском: задать VIEWER_DOMAIN и VIEWER_SECRET_KEY в файле .env, положить config.yaml рядом.
+# Развёртывание на одном VPS: вьювер и обратный прокси с HTTPS.
+# Перед запуском создайте рядом файл .env (см. README, раздел «Развёртывание»)
+# и config.yaml. Сканы загружает администратор через веб-интерфейс, поэтому
+# отдельная папка на хосте не монтируется: хранилище лежит в томе viewer-data.
 services:
   viewer:
     build: .
@@ -9,23 +11,32 @@ services:
     volumes:
       - ./config.yaml:/app/config.yaml:ro
       - viewer-data:/app/data
-      # Папка сканов на диске VPS (пополняется по SFTP); сервису доступна только для чтения.
-      - /mnt/slides:/mnt/slides:ro
     expose:
       - "8000"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }  # диск 30 ГБ: журналы не должны его съесть
 
   caddy:
     image: caddy:2
     restart: unless-stopped
     environment:
-      VIEWER_DOMAIN: ${VIEWER_DOMAIN:?задайте VIEWER_DOMAIN в .env}
+      # Адрес сайта: https://<IP-адрес> пока нет домена, потом доменное имя
+      VIEWER_SITE: ${VIEWER_SITE:?задайте VIEWER_SITE в .env}
+      # internal — самоподписанный сертификат Caddy; acme — сертификат Let's Encrypt
+      VIEWER_TLS: ${VIEWER_TLS:-internal}
     ports:
       - "80:80"
       - "443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
 
 volumes:
   viewer-data:
   caddy-data:
+  caddy-config:
