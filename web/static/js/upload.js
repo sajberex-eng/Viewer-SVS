@@ -27,13 +27,13 @@ function speedText(bytesPerSecond, remainingBytes) {
 }
 
 class Task {
-  constructor(file, folderId, queue) {
+  constructor(file, folderId, queue, startedAt = 0) {
     this.file = file;
     this.folderId = folderId;
     this.queue = queue;
     this.id = `t${Date.now()}${Math.random().toString(16).slice(2, 8)}`;
     this.uploadId = null;
-    this.sent = 0;
+    this.sent = startedAt; // уже принятое сервером: полоса не начинается с нуля
     this.status = 'waiting'; // waiting | running | done | error | canceled
     this.detail = '';
     this.cancelled = false;
@@ -149,8 +149,8 @@ export class UploadQueue {
     return this.tasks.filter((task) => task.status === 'waiting' || task.status === 'running');
   }
 
-  add(files, folderId) {
-    for (const file of files) this.tasks.push(new Task(file, folderId, this));
+  add(files, folderId, startedAt = 0) {
+    for (const file of files) this.tasks.push(new Task(file, folderId, this, startedAt));
     this.changed();
     this.pump();
   }

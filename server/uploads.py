@@ -184,19 +184,33 @@ class Uploads:
         self._path(upload_id).unlink(missing_ok=True)
         self._db.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
 
-    def cleanup_stale(self) -> int:
-        """Брошенные загрузки занимают место, которого на диске 30 ГБ немного."""
-        removed = 0
+    def cleanup_stale(self) -> dict:
+        """Брошенные загрузки занимают место, которого на диске 30 ГБ немного.
+
+        Загрузка считается брошенной, если её файл не пополнялся дольше
+        STALE_DAYS. Пока администратор её продолжает, время обновляется, и
+        уборка её не тронет.
+        """
         deadline = time.time() - STALE_DAYS * 86400
+        removed = freed = 0
         for row in self._db.query("SELECT id FROM uploads"):
             path = self._path(row["id"])
-            if not path.exists() or path.stat().st_mtime < deadline:
+            if not path.exists():
+                self._forget(row["id"])  # файла нет: запись бессмысленна
+                removed += 1
+            elif path.stat().st_mtime < deadline:
+                freed += path.stat().st_size
                 self._forget(row["id"])
                 removed += 1
-        # Файлы без записи в базе: например, после сбоя во время удаления
+        # Файлы без записи в базе остаются после сбоя в середине удаления
         known = {row["id"] for row in self._db.query("SELECT id FROM uploads")}
+        orphans = 0
         for path in self._dir.glob("*.part"):
-            if path.stem not in known and path.stat().st_mtime < deadline:
+            if path.stem not in known:
+                freed += path.stat().st_size
                 path.unlink(missing_ok=True)
-                removed += 1
-        return removed
+                orphans += 1
+        if removed or orphans:
+            log.info("Уборка загрузок: брошенных %s, ничьих файлов %s, освобождено %.1f ГБ",
+                     removed, orphans, freed / 1e9)
+        return {"removed": removed, "orphan_files": orphans, "freed_bytes": freed}

@@ -117,7 +117,7 @@ web/
 3. Создать рядом файл `.env`:
 
    ```
-   VIEWER_SITE=https://<IP-адрес или домен>
+   VIEWER_HOST=<IP-адрес или домен, без https://>
    VIEWER_TLS=internal
    VIEWER_SECRET_KEY=<случайная строка, например из openssl rand -base64 48>
    ```

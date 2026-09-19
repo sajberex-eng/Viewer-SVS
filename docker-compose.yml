@@ -21,8 +21,8 @@ services:
     image: caddy:2
     restart: unless-stopped
     environment:
-      # Адрес сайта: https://<IP-адрес> пока нет домена, потом доменное имя
-      VIEWER_SITE: ${VIEWER_SITE:?задайте VIEWER_SITE в .env}
+      # IP-адрес сервера, пока нет домена; потом доменное имя
+      VIEWER_HOST: ${VIEWER_HOST:?задайте VIEWER_HOST в .env}
       # internal — самоподписанный сертификат Caddy; acme — сертификат Let's Encrypt
       VIEWER_TLS: ${VIEWER_TLS:-internal}
     ports:

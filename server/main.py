@@ -102,6 +102,11 @@ class UserRequest(BaseModel):
     role: str = "user"
     expires_at: str | None = None
     group_ids: list[int] = Field(default_factory=list)
+    password: str | None = None  # пусто — пароль сгенерирует система
+
+
+class PasswordReset(BaseModel):
+    password: str | None = None
 
 
 class UserPatch(BaseModel):
@@ -134,6 +139,7 @@ def create_app() -> FastAPI:
     pool = SlidePool(storage, settings.tiles, settings.open_slides)
     catalog = Catalog(db, storage, pool, settings.check_minutes)
     uploads = Uploads(db, storage, catalog, settings.uploads_dir)
+    catalog.on_periodic_check = uploads.cleanup_stale  # брошенные загрузки убираются сами
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
@@ -141,9 +147,7 @@ def create_app() -> FastAPI:
     def initial_check() -> None:
         try:
             log.info("Хранилище проверено: %s", catalog.check_integrity())
-            removed = uploads.cleanup_stale()
-            if removed:
-                log.info("Удалено брошенных загрузок: %s", removed)
+            uploads.cleanup_stale()
         except StorageUnavailable as exc:
             log.warning("Хранилище недоступно при запуске: %s", exc)
 
@@ -477,7 +481,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/storage/check")
     def storage_check(user=Depends(require_admin)):
-        return catalog.check_integrity()
+        return {**catalog.check_integrity(), "uploads": uploads.cleanup_stale()}
 
     # ---------- доступ ----------
 
@@ -576,11 +580,16 @@ def create_app() -> FastAPI:
         known_groups = {g["id"] for g in groupsvc.list_groups(db)}
         if not set(body.group_ids) <= known_groups:
             raise HTTPException(400, "Группа не найдена")
-        password = generate_password()
+        # Администратор может задать пароль сам; пустое поле означает «сгенерировать»
+        password = (body.password or "").strip() or generate_password()
+        try:
+            password_hash = hash_password(password)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         try:
             user_id = db.insert(
                 "INSERT INTO users (login, password_hash, role, name, expires_at) VALUES (?, ?, ?, ?, ?)",
-                (login_name, hash_password(password), body.role, body.name.strip() or login_name, body.expires_at),
+                (login_name, password_hash, body.role, body.name.strip() or login_name, body.expires_at),
             )
         except sqlite3.IntegrityError as exc:
             raise HTTPException(400, "Пользователь с таким логином уже есть") from exc
@@ -618,12 +627,15 @@ def create_app() -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/users/{user_id}/password")
-    def reset_password(user_id: int, request: Request, user=Depends(require_admin)):
+    def reset_password(user_id: int, body: PasswordReset, request: Request, user=Depends(require_admin)):
         target = db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
         if target is None:
             raise HTTPException(404, "Пользователь не найден")
-        password = generate_password()
-        set_password(db, user_id, password)
+        password = (body.password or "").strip() or generate_password()
+        try:
+            set_password(db, user_id, password)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         audit.log(db, request, audit.USER_RESET_PASSWORD, user=user, object_type="user", object_id=user_id)
         return {"login": target["login"], "password": password}
 

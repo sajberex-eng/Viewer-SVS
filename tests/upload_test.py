@@ -12,6 +12,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import warnings
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from server.auth import hash_password  # noqa: E402
 from server.config import StorageConfig  # noqa: E402
 from server.main import app  # noqa: E402
 from server.storage import DiskSpace, LocalFolderStorage, NotEnoughSpace  # noqa: E402
+from server.uploads import STALE_DAYS  # noqa: E402
 from synthetic_svs import build_svs  # noqa: E402
 
 db = app.state.db
@@ -206,6 +208,38 @@ def main() -> None:
         send(admin, state4["id"], b"x" * 500, 0)
         admin.delete(f"/api/uploads/{state4['id']}")
         check("отменённая загрузка стирает временный файл", not list(uploads_dir.glob("*.part")))
+
+        # ---------- прерванная загрузка: видна и продолжается ----------
+        half = payload[: len(payload) // 2]
+        state5 = admin.post("/api/uploads", json={"folder_id": folder, "name": "resume.svs", "size": len(payload)}).json()
+        send(admin, state5["id"], half, 0)
+        listed = admin.get("/api/uploads").json()
+        check("прерванная загрузка видна в списке",
+              len(listed) == 1 and listed[0]["received"] == len(half),
+              f"({listed[0]['received']} из {listed[0]['size']})" if listed else "")
+        check("в списке есть имя файла и папка, чтобы предложить продолжить",
+              listed[0]["original_name"] == "resume.svs" and listed[0]["folder_id"] == folder)
+        again = admin.post("/api/uploads", json={"folder_id": folder, "name": "resume.svs", "size": len(payload)}).json()
+        check("повторный выбор того же файла продолжает, а не начинает заново",
+              again["id"] == state5["id"] and again["received"] == len(half))
+        send(admin, state5["id"], payload[len(half):], len(half))
+        resumed_id = admin.post(f"/api/uploads/{state5['id']}/complete").json()["slide_id"]
+        check("продолженная загрузка завершается", bool(resumed_id))
+        admin.delete(f"/api/slides/{resumed_id}")
+
+        # ---------- уборка брошенных ----------
+        state6 = admin.post("/api/uploads", json={"folder_id": folder, "name": "stale.svs", "size": 4000}).json()
+        send(admin, state6["id"], b"y" * 2000, 0)
+        stale_file = uploads_dir / f"{state6['id']}.part"
+        old = time.time() - (STALE_DAYS + 1) * 86400
+        os.utime(stale_file, (old, old))
+        orphan = uploads_dir / "beefbeefbeefbeef.part"  # файл без записи в базе
+        orphan.write_bytes(b"z" * 1000)
+        result = admin.post("/api/storage/check").json()["uploads"]
+        check("брошенная загрузка убрана", result["removed"] == 1, f"({result})")
+        check("файл без записи в базе тоже убран", result["orphan_files"] == 1)
+        check("временная папка пуста", not list(uploads_dir.glob("*.part")))
+        check("свежая загрузка уборкой не тронута", admin.get("/api/uploads").json() == [])
 
         # ---------- удаление: файл освобождает место ----------
         admin.get(f"{info['tiles']['url']}9/0_0.jpg")  # слайд открыт в пуле: на Windows файл занят

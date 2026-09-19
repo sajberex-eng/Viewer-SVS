@@ -188,6 +188,22 @@ def main() -> None:
         # ---------- учётные записи ----------
         created = admin.post("/api/users", json={"login": "новый", "role": "user"})
         check("создание пользователя выдаёт пароль", created.status_code == 200 and len(created.json()["password"]) > 10)
+
+        # Пароль можно задать вручную (решение заказчика 2026-09-19)
+        manual = admin.post("/api/users", json={"login": "ручной", "role": "user", "password": "мой-пароль-123"})
+        check("пароль можно задать вручную", manual.status_code == 200 and manual.json()["password"] == "мой-пароль-123")
+        with_manual = TestClient(app)
+        entered = with_manual.post("/api/login", json={"login": "ручной", "password": "мой-пароль-123"})
+        check("вход с заданным вручную паролем", entered.status_code == 200)
+        short = admin.post("/api/users", json={"login": "короткий", "role": "user", "password": "abc"})
+        check("слишком короткий пароль отклоняется", short.status_code == 400, f"({short.json().get('detail', '')[:40]})")
+        manual_id = manual.json()["id"]
+        reset = admin.post(f"/api/users/{manual_id}/password", json={"password": "другой-пароль-1"})
+        check("сброс пароля вручную", reset.status_code == 200 and reset.json()["password"] == "другой-пароль-1")
+        check("прежняя сессия после сброса прекращается", with_manual.get("/api/catalog").status_code == 401)
+        generated = admin.post(f"/api/users/{manual_id}/password", json={})
+        check("сброс без пароля генерирует новый", generated.status_code == 200 and len(generated.json()["password"]) > 10)
+        admin.delete(f"/api/users/{manual_id}")
         new_id = created.json()["id"]
         fresh = TestClient(app)
         first = fresh.post("/api/login", json={"login": "новый", "password": created.json()["password"]})

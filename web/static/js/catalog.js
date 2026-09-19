@@ -30,6 +30,8 @@ async function main() {
     setUpAdmin();
   }
   await load();
+  // После каталога: прерванным загрузкам нужны названия папок
+  if (user.role === 'admin') await loadPending();
 }
 
 async function load() {
@@ -529,23 +531,100 @@ function setUpDropZone() {
 
 function setUpUploads() {
   $('btnClearUploads').addEventListener('click', () => queue.clearFinished());
-  // Незавершённые загрузки прошлого сеанса: сервер помнит принятые части
-  api('/api/uploads').then((pending) => {
-    if (pending.length) setNote(t('upload.retrying', { n: pending.length }));
-  }).catch(() => {});
+}
+
+// Прерванные загрузки прошлого сеанса: сервер помнит принятые части, но файл
+// заново выбирает человек — браузер не может открыть его с диска сам.
+let pending = [];
+
+async function loadPending() {
+  try {
+    pending = await api('/api/uploads');
+  } catch {
+    pending = [];
+  }
+  renderUploads(queue.tasks);
+}
+
+function resumeUpload(state) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.svs';
+  input.addEventListener('change', () => {
+    const file = input.files[0];
+    if (!file) return;
+    if (file.name !== state.original_name || file.size !== state.size) {
+      setNote(t('upload.wrongFile', { name: state.original_name }), true);
+      return;
+    }
+    setNote('');
+    pending = pending.filter((row) => row.id !== state.id);
+    queue.add([file], state.folder_id, state.received);
+  });
+  input.click();
+}
+
+async function dropPending(state) {
+  const ok = await confirmDialog({
+    title: t('upload.dropTitle'),
+    text: t('upload.dropText', { done: Math.round((state.received / state.size) * 100) }),
+    submitLabel: t('common.delete'),
+  });
+  if (!ok) return;
+  await api(`/api/uploads/${state.id}`, { method: 'DELETE' });
+  pending = pending.filter((row) => row.id !== state.id);
+  renderUploads(queue.tasks);
+  await load();
 }
 
 let reloadTimer = null;
 
 function renderUploads(tasks) {
-  $('uploadPanel').hidden = !tasks.length;
-  $('uploadList').replaceChildren(...tasks.map(uploadRow));
+  const rows = [...pending.map(pendingRow), ...tasks.map(uploadRow)];
+  $('uploadPanel').hidden = !rows.length;
+  $('uploadList').replaceChildren(...rows);
+  $('btnClearUploads').hidden = !tasks.some((task) => task.status !== 'running' && task.status !== 'waiting');
   if (tasks.some((task) => task.status === 'done') && !reloadTimer) {
     reloadTimer = setTimeout(() => {
       reloadTimer = null;
+      loadPending();
       load();
     }, 400);
   }
+}
+
+function pendingRow(state) {
+  const item = document.createElement('li');
+  item.className = 'upload-row is-paused';
+
+  const name = document.createElement('span');
+  name.className = 'upload-name';
+  const folder = folderById(state.folder_id);
+  name.textContent = folder ? `${state.original_name} → ${folder.name}` : state.original_name;
+
+  const bar = document.createElement('div');
+  bar.className = 'upload-bar';
+  const fill = document.createElement('div');
+  fill.className = 'upload-fill';
+  fill.style.width = `${Math.round((state.received / state.size) * 100)}%`;
+  bar.append(fill);
+
+  const label = document.createElement('span');
+  label.className = 'upload-state';
+  label.textContent = t('upload.paused', {
+    done: Math.round((state.received / state.size) * 100),
+    left: sizeText(state.size - state.received),
+  });
+
+  const actions = document.createElement('span');
+  actions.className = 'upload-actions';
+  actions.append(
+    actionButton(t('upload.resume'), () => resumeUpload(state)),
+    actionButton(t('common.delete'), () => dropPending(state), 'is-danger'),
+  );
+
+  item.append(name, bar, label, actions);
+  return item;
 }
 
 function uploadRow(task) {

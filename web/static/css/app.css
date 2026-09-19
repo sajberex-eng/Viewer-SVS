@@ -405,9 +405,13 @@ input[type="range"] { accent-color: var(--accent); }
 .upload-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .upload-bar { height: 6px; background: #e6e6e6; border-radius: 3px; overflow: hidden; }
 .upload-fill { height: 100%; background: var(--brand); transition: width 0.2s; }
+.upload-state { color: var(--muted); }
 .upload-row.is-done .upload-fill { background: #3f8f4a; }
 .upload-row.is-error .upload-fill, .upload-row.is-canceled .upload-fill { background: var(--danger); }
+.upload-row.is-paused .upload-fill { background: var(--brand-accent); }
+.upload-row.is-paused .upload-state { color: var(--brand-accent); }
 .upload-state.is-error { color: var(--danger); }
+.upload-actions { display: flex; gap: 10px; }
 
 /* ---------- этикетка стекла ---------- */
 

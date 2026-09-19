@@ -72,6 +72,8 @@ class Catalog:
         self._check_interval = check_minutes * 60
         self._lock = threading.Lock()
         self._last_check = 0.0
+        # Уборку брошенных загрузок подключает main.py: каталог о них не знает
+        self.on_periodic_check = None
 
     # ---------- чтение ----------
 
@@ -323,8 +325,14 @@ class Catalog:
             return {"total": len(known), "missing": gone, "restored": restored, "orphan_files": max(orphans, 0)}
 
     def check_if_stale(self) -> None:
+        """Периодическая проверка: пропавшие файлы и брошенные загрузки."""
         if not self._last_check or time.monotonic() - self._last_check > self._check_interval:
             try:
                 self.check_integrity()
             except StorageUnavailable as exc:
                 log.warning("Проверка хранилища не удалась: %s", exc)
+            if self.on_periodic_check is not None:
+                try:
+                    self.on_periodic_check()
+                except Exception as exc:  # уборка не должна ломать выдачу каталога
+                    log.warning("Уборка загрузок не удалась: %s", exc)

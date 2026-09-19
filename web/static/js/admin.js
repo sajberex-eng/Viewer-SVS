@@ -125,11 +125,18 @@ async function addUser() {
     fields: [
       { name: 'login', label: t('users.login'), required: true },
       { name: 'name', label: t('users.name') },
+      { name: 'password', label: t('users.password'), hint: t('users.passwordHint') },
       { name: 'expires_at', label: t('users.expires'), placeholder: '2026-12-31', hint: t('users.expiresHint') },
     ],
     onSubmit: (values) => api('/api/users', {
       method: 'POST',
-      body: { login: values.login, name: values.name, role: 'user', expires_at: values.expires_at || null },
+      body: {
+        login: values.login,
+        name: values.name,
+        role: 'user',
+        expires_at: values.expires_at || null,
+        password: values.password || null,
+      },
     }),
   });
   if (!created) return;
@@ -216,14 +223,16 @@ async function toggleBlock(row) {
 }
 
 async function resetPassword(row) {
-  const ok = await confirmDialog({
-    title: t('users.resetPassword'),
-    text: t('users.passwordOnce', { login: row.login }),
+  const result = await formDialog({
+    title: `${t('users.resetPassword')}: ${row.login}`,
     submitLabel: t('users.resetPassword'),
-    danger: false,
+    fields: [{ name: 'password', label: t('users.password'), hint: t('users.passwordHint') }],
+    onSubmit: (values) => api(`/api/users/${row.id}/password`, {
+      method: 'POST',
+      body: { password: values.password || null },
+    }),
   });
-  if (!ok) return;
-  const result = await api(`/api/users/${row.id}/password`, { method: 'POST' });
+  if (!result) return;
   await passwordDialog(result);
   await loadUsers();
 }
