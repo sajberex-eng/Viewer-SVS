@@ -2,6 +2,7 @@
 const STRINGS = {
   ru: {
     'app.title': 'Вьювер гистосканов',
+    'app.brand': 'Центр гематологии',
     'login.heading': 'Вход в систему',
     'login.login': 'Логин',
     'login.password': 'Пароль',

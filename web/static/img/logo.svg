@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Центр гематологии">
+  <!-- Знак Центра гематологии: кольцо, фигура и росток с переходом в оранжевый -->
+  <defs>
+    <linearGradient id="hc-stem" gradientUnits="userSpaceOnUse" x1="0" y1="112" x2="0" y2="162">
+      <stop offset="0" stop-color="#3f4e9e"/>
+      <stop offset="0.55" stop-color="#9c5563"/>
+      <stop offset="1" stop-color="#e8672b"/>
+    </linearGradient>
+    <!-- Росток проходит сквозь кольцо: в нём остаётся проём с зазорами по бокам -->
+    <mask id="hc-gap">
+      <rect width="200" height="200" fill="#fff"/>
+      <rect x="90" y="120" width="20" height="60" fill="#000"/>
+    </mask>
+  </defs>
+  <g fill="none" stroke-width="15">
+    <circle cx="100" cy="100" r="59" stroke="#3f4e9e" mask="url(#hc-gap)"/>
+    <path d="M54 86A46 46 0 0 1 100 132" stroke="#3f4e9e"/>
+    <path d="M146 86A46 46 0 0 0 100 132L100 162" stroke="url(#hc-stem)"/>
+  </g>
+  <circle cx="100" cy="79" r="11" fill="#3f4e9e"/>
+</svg>

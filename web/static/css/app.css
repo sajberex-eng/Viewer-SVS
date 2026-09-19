@@ -1,12 +1,18 @@
-/* Светлая нейтральная тема: серые тона без оттенка, чтобы не искажать восприятие окраски. */
+/* Светлая нейтральная тема: серые тона без оттенка, чтобы не искажать восприятие окраски.
+   Фирменные цвета Центра гематологии живут только в элементах управления;
+   поле вокруг препарата остаётся нейтрально-серым (ТЗ, раздел 5). */
 :root {
+  --brand: #3f4e9e;
+  --brand-dark: #33407f;
+  --brand-tint: #eef0f8;
+  --brand-accent: #e8672b;
   --bg: #f4f4f4;
   --surface: #ffffff;
   --stage: #e2e2e2;
   --border: #cfcfcf;
   --text: #1f1f1f;
   --muted: #666666;
-  --accent: #2f5f9e;
+  --accent: var(--brand);
   --accent-text: #ffffff;
   --danger: #b3261e;
   --zoom-current: #ffe95c;
@@ -51,8 +57,8 @@ h1, h2 { margin: 0; font-weight: 600; }
 .btn:hover:not(:disabled), .icon-btn:hover, .zoom-btn:hover:not(:disabled) { background: #ececec; }
 .btn.is-active, .btn:active:not(:disabled) { background: #dcdcdc; }
 .btn:disabled, .zoom-btn:disabled { color: #a0a0a0; cursor: default; }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.btn-primary:hover:not(:disabled) { background: #264e83; }
+.btn-primary { background: var(--brand); border-color: var(--brand); color: var(--accent-text); }
+.btn-primary:hover:not(:disabled) { background: var(--brand-dark); }
 .icon-btn { width: 26px; height: 26px; padding: 0; line-height: 1; font-size: 16px; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -77,7 +83,15 @@ input[type="range"] { accent-color: var(--accent); }
   padding: 0 12px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 3px 0 var(--brand);
 }
+
+.topbar-logo {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.topbar-logo-link { display: inline-flex; flex: none; border-radius: var(--radius); }
 .topbar-title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 120px; }
 .topbar-actions { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .topbar-user { display: flex; align-items: center; gap: 10px; color: var(--muted); white-space: nowrap; }
@@ -288,6 +302,10 @@ input[type="range"] { accent-color: var(--accent); }
   border: 1px solid var(--border);
   border-radius: var(--radius);
 }
+.login-brand { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.login-logo { width: 48px; height: 48px; flex: none; }
+.login-brand-name { font-size: 16px; font-weight: 600; color: var(--brand); line-height: 1.2; }
+.login-card { border-top: 3px solid var(--brand); }
 .login-card h1 { font-size: 18px; }
 .login-card label { display: grid; gap: 4px; }
 .login-card .btn { justify-content: center; height: 36px; }

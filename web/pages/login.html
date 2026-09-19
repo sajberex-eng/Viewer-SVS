@@ -4,10 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход · Вьювер гистосканов</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="login-page">
   <form class="login-card" id="loginForm">
+    <div class="login-brand">
+      <img class="login-logo" src="/static/img/logo.svg" alt="">
+      <span class="login-brand-name" data-i18n="app.brand"></span>
+    </div>
     <h1 data-i18n="login.heading"></h1>
     <label><span data-i18n="login.login"></span>
       <input type="text" id="login" name="login" autocomplete="username" required autofocus>
