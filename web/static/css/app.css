@@ -263,15 +263,7 @@ input[type="range"] { accent-color: var(--accent); }
    свои размеры, и без ограничения мини-карта закрывает соседнюю половину. */
 .minimap-view { width: 220px; height: 150px; max-width: 40vw; overflow: hidden; background: #fafafa; }
 
-/* Телефон: панели занимают меньше места, чтобы препарат было видно.
-   Полноценная мобильная версия — отдельная работа (раздел 13.3 ТЗ). */
-@media (max-width: 700px) {
-  .zoom-panel { width: 44px; padding: 4px 3px; gap: 4px; }
-  .zoom-btn { height: 30px; font-size: 12px; }
-  .zoom-slider { height: 90px; }
-  .minimap-view { width: 150px; height: 110px; }
-  .statusbar { font-size: 11px; overflow-x: auto; }
-}
+
 .minimap-view > div { max-width: 100%; max-height: 100%; }
 .minimap-toggle { position: absolute; top: 4px; right: 4px; z-index: 6; width: 20px; height: 20px; font-size: 12px; }
 .minimap.is-collapsed { padding: 0; width: 28px; height: 28px; overflow: hidden; }
@@ -605,3 +597,55 @@ input[type="range"] { accent-color: var(--accent); }
 .login-card label { display: grid; gap: 4px; }
 .login-card .btn { justify-content: center; height: 36px; }
 .login-error { margin: 0; min-height: 18px; color: var(--danger); }
+
+/* Телефон: та же веб-страница, подстроенная под узкий экран.
+   Остальное по мобильной версии — раздел 13.2 ТЗ. */
+@media (max-width: 700px) {
+  /* верхняя панель: убираем лишнее, чтобы кнопки помещались */
+  .topbar { gap: 8px; padding: 0 8px; }
+  .topbar-title { font-size: 14px; min-width: 0; }
+  /* во вьювере шапка одна строка: название убираем, место нужно кнопкам */
+  .viewer-page .topbar-title { display: none; }
+  .topbar-user { gap: 6px; }
+  .topbar-user span { display: none; }
+
+  /* в каталоге и админке разделы переезжают на вторую строку целиком:
+     сжимать их до «Поль…» бессмысленно. Во вьювере шапка остаётся в одну
+     строку — вторая отняла бы высоту у препарата */
+  .catalog-page .topbar,
+  .admin-page .topbar { height: auto; flex-wrap: wrap; gap: 6px 8px; padding: 6px 8px; }
+  .catalog-page .topbar-actions,
+  .admin-page .topbar-actions { order: 3; flex-basis: 100%; overflow: visible; }
+  .catalog-page .topbar-actions:not(:has(.btn:not([hidden]))),
+  .admin-page .topbar-actions:not(:has(.btn:not([hidden]))) { display: none; }
+
+  /* вьювер: панели меньше, чтобы препарат было видно */
+  .zoom-panel { width: 44px; padding: 4px 3px; gap: 4px; }
+  .zoom-btn { height: 30px; font-size: 12px; }
+  .zoom-slider { height: 90px; }
+  .minimap-view { width: 150px; height: 110px; }
+  .statusbar { font-size: 11px; overflow-x: auto; }
+
+  /* каталог: дерево папок сверху, карточки в один столбец на всю ширину */
+  .catalog-layout { grid-template-columns: 1fr; }
+  .tree-panel {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    max-height: 38vh;
+    padding-bottom: 4px;
+  }
+  .catalog-grid { grid-template-columns: 1fr; }
+  .slide-card img { height: 150px; }
+
+  /* с телефона сканы только смотрят: загрузка скрыта (файлы по 1–3 ГБ) */
+  #btnUpload, .upload-panel, .drop-hint { display: none !important; }
+
+  .catalog-toolbar input[type="search"] { width: 100%; }
+  .crumbs { flex-basis: 100%; }
+  .upload-row { grid-template-columns: 1fr 90px; grid-auto-rows: auto; height: auto; row-gap: 2px; }
+  .upload-state, .upload-actions { grid-column: 1 / -1; }
+  .grid-table { font-size: 12px; }
+  .admin-main { padding: 8px; }
+  /* таблицы шире экрана — прокручиваются вбок внутри своего блока */
+  .admin-section { overflow-x: auto; }
+}
