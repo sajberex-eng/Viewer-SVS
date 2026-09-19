@@ -9,7 +9,10 @@ import { applyI18n, formatNumber, setLanguage, t } from './i18n.js';
 import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
 
 const PAN_STEP = 0.2; // доля видимой области на одно нажатие стрелки
-const MIN_COMPARE_WIDTH = 1280; // ТЗ С-13
+// Минимальная ширина области двух половин. Считается именно она, а не ширина
+// окна: при масштабировании Windows (150–200 %) экран 2256 точек даёт браузеру
+// около 1128, и проверка по окну запрещала бы сравнение без причины.
+const MIN_PANES_WIDTH = 820;
 const SPLIT_LIMITS = [30, 70]; // проценты, ТЗ С-2
 
 const $ = (id) => document.getElementById(id);
@@ -235,8 +238,17 @@ function ensureSplitter() {
   });
 }
 
+// Панель стёкол в режиме сравнения сворачивается (С-10) и освобождает место,
+// поэтому при проверке места её ширина не учитывается.
+function panesWidthIfCompared() {
+  const panel = $('slidesPanel');
+  const freed = panel.classList.contains('is-collapsed') ? 0 : panel.offsetWidth - 42;
+  return $('panes').offsetWidth + Math.max(freed, 0);
+}
+
 async function startCompare() {
-  if (innerWidth < MIN_COMPARE_WIDTH) return showNote(t('compare.tooNarrow'));
+  if (panesWidthIfCompared() < MIN_PANES_WIDTH) return showNote(t('compare.tooNarrow'));
+  collapseSlidesPanel(true);
   const catalog = await api('/api/catalog');
   const current = new Set(panes.map((pane) => pane.slide.id));
   const options = catalog.slides.filter((row) => !current.has(row.id));
@@ -313,7 +325,7 @@ function initTopbar() {
     }
   });
   addEventListener('resize', () => {
-    if (panes.length > 1 && innerWidth < MIN_COMPARE_WIDTH) leaveCompare();
+    if (panes.length > 1) for (const pane of panes) pane.resize();
   });
 
   // Ссылка доступна всем: открыть её сможет только тот, у кого есть доступ
@@ -451,16 +463,22 @@ function initSlidesPanel(slide) {
   }
   markCurrentThumb();
 
-  // На планшете и в режиме сравнения панель свёрнута по умолчанию.
+  // На планшете панель свёрнута по умолчанию; в режиме сравнения её сворачивает
+  // collapseSlidesPanel, освобождая место половинам (С-10).
   const panel = $('slidesPanel');
   const toggle = $('slidesToggle');
-  const setCollapsed = (collapsed) => {
-    panel.classList.toggle('is-collapsed', collapsed);
-    toggle.textContent = collapsed ? '›' : '‹';
-    toggle.setAttribute('aria-expanded', String(!collapsed));
-  };
-  setCollapsed(matchMedia('(pointer: coarse), (max-width: 1100px)').matches);
-  toggle.addEventListener('click', () => setCollapsed(!panel.classList.contains('is-collapsed')));
+  collapseSlidesPanel(matchMedia('(pointer: coarse), (max-width: 1100px)').matches);
+  toggle.addEventListener('click', () => collapseSlidesPanel(!panel.classList.contains('is-collapsed')));
+}
+
+function collapseSlidesPanel(collapsed) {
+  const panel = $('slidesPanel');
+  if (panel.classList.contains('is-collapsed') === collapsed) return;
+  panel.classList.toggle('is-collapsed', collapsed);
+  const toggle = $('slidesToggle');
+  toggle.textContent = collapsed ? '›' : '‹';
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  for (const pane of panes) pane.resize();
 }
 
 async function replaceActive(slideId) {

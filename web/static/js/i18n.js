@@ -211,7 +211,7 @@ const STRINGS = {
     'compare.unlink': 'Разделить',
     'compare.close.tip': 'Закрыть эту половину',
     'compare.splitter.tip': 'Потяните, чтобы изменить ширину. Двойной щелчок делит поровну',
-    'compare.tooNarrow': 'Для сравнения нужен экран шириной не менее 1280 точек',
+    'compare.tooNarrow': 'Для сравнения не хватает ширины окна. Разверните окно браузера на весь экран',
     'compare.nothingToCompare': 'Других доступных сканов нет',
     'compare.noAccess': 'Нет доступа к одному из сканов',
     'adjust.target': 'Настраивается: {title}',
