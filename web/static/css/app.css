@@ -27,9 +27,17 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 
+html {
+  /* На телефоне и планшете движение пальцем за край не должно тянуть всю
+     страницу: в Safari на iOS это сворачивало приложение прямо во время
+     просмотра скана. */
+  overscroll-behavior: none;
+}
+
 body {
   margin: 0;
   background: var(--bg);
+  overscroll-behavior: none;
 }
 
 h1, h2 { margin: 0; font-weight: 600; }
@@ -119,7 +127,20 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* ---------- страница вьювера ---------- */
 
-.viewer-page { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+/* Страница вьювера занимает ровно экран и не прокручивается: жесты достаются
+   изображению, а не странице. position: fixed нужен именно для iOS, где одного
+   overflow: hidden не хватает. */
+.viewer-page {
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+}
 .workspace { flex: 1; display: flex; min-height: 0; }
 
 .slides-panel {
@@ -191,7 +212,9 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* overflow скрывает всё, что панели попытаются вынести за свою половину */
 .stage { position: relative; flex: 1; min-width: 0; background: var(--stage); overflow: hidden; }
-.osd { position: absolute; inset: 0; }
+/* touch-action: none отдаёт все жесты OpenSeadragon: иначе перетаскивание
+   препарата вниз браузер принимает за прокрутку страницы. */
+.osd { position: absolute; inset: 0; touch-action: none; }
 .osd.is-picking, .osd.is-picking * { cursor: crosshair !important; }
 .adjust-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
@@ -239,6 +262,16 @@ input[type="range"] { accent-color: var(--accent); }
 /* Размер фиксирован и здесь, и в настройках OpenSeadragon: он задаёт элементу
    свои размеры, и без ограничения мини-карта закрывает соседнюю половину. */
 .minimap-view { width: 220px; height: 150px; max-width: 40vw; overflow: hidden; background: #fafafa; }
+
+/* Телефон: панели занимают меньше места, чтобы препарат было видно.
+   Полноценная мобильная версия — отдельная работа (раздел 13.3 ТЗ). */
+@media (max-width: 700px) {
+  .zoom-panel { width: 44px; padding: 4px 3px; gap: 4px; }
+  .zoom-btn { height: 30px; font-size: 12px; }
+  .zoom-slider { height: 90px; }
+  .minimap-view { width: 150px; height: 110px; }
+  .statusbar { font-size: 11px; overflow-x: auto; }
+}
 .minimap-view > div { max-width: 100%; max-height: 100%; }
 .minimap-toggle { position: absolute; top: 4px; right: 4px; z-index: 6; width: 20px; height: 20px; font-size: 12px; }
 .minimap.is-collapsed { padding: 0; width: 28px; height: 28px; overflow: hidden; }

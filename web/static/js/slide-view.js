@@ -182,6 +182,13 @@ export class SlideView {
 
   #initMinimap() {
     const { minimap, minimapToggle } = this.parts;
+    // На телефоне мини-карта закрывала бы половину экрана: сворачиваем сразу,
+    // развернуть можно той же кнопкой.
+    if (matchMedia('(max-width: 700px)').matches) {
+      minimap.classList.add('is-collapsed');
+      minimapToggle.textContent = '▸';
+      minimapToggle.setAttribute('aria-expanded', 'false');
+    }
     minimapToggle.addEventListener('click', () => {
       const collapsed = minimap.classList.toggle('is-collapsed');
       minimapToggle.textContent = collapsed ? '▸' : '▾';
