@@ -286,6 +286,105 @@ def main() -> None:
         check("в журнале есть изменение доступа", "access.change" in actions)
         check("в журнале нет имени файла", all("Иванов" not in str(row) for row in entries))
 
+        # ---------- аннотации (этап 9) ----------
+        # user-a видит скан aaaaaaaaaaaa (папка top открыта всем), user-b — нет
+        # Группу «Патологи» выше по тесту удаляли: заводим заново, если её нет
+        known = admin.get("/api/groups").json()["groups"]
+        pathologists_id = next((g["id"] for g in known if g["name"] == "Патологи"), None)
+        if pathologists_id is None:
+            pathologists_id = admin.post("/api/groups", json={"name": "Патологи"}).json()["id"]
+        admin.put(f"/api/groups/{pathologists_id}/members", json={"user_ids": [user_a_id]})
+        login(alice, "user-a")  # смена состава групп сбрасывает память прав
+
+        info = alice.get("/api/slides/aaaaaaaaaaaa").json()
+        check("патолог видит, что может размечать", info.get("can_annotate") is True)
+        check("не патолог размечать не может",
+              bob.get("/api/slides/aaaaaaaaaaaa").json().get("can_annotate") is False)
+
+        point = alice.post("/api/slides/aaaaaaaaaaaa/annotations",
+                           json={"kind": "point", "points": [[120.5, 240.25]], "comment": "митоз"})
+        check("патолог ставит указатель", point.status_code == 200, f"({point.text[:60]})")
+        point_id = point.json()["id"]
+        check("координаты сохранены в пикселях скана", point.json()["points"] == [[120.5, 240.2]],
+              f"({point.json()['points']})")
+        check("автор записан", point.json()["author"] == "user-a")
+        check("свою аннотацию автор может править", point.json()["can_edit"] is True)
+
+        polygon = alice.post("/api/slides/aaaaaaaaaaaa/annotations",
+                             json={"kind": "polygon", "points": [[10, 10], [80, 10], [80, 90], [10, 90]],
+                                   "comment": "участок"})
+        check("патолог обводит полигон", polygon.status_code == 200, f"({polygon.text[:60]})")
+        polygon_id = polygon.json()["id"]
+
+        short = alice.post("/api/slides/aaaaaaaaaaaa/annotations",
+                           json={"kind": "polygon", "points": [[1, 1], [2, 2]], "comment": ""})
+        check("полигон из двух точек отклоняется", short.status_code == 400, f"({short.text[:60]})")
+        odd = alice.post("/api/slides/aaaaaaaaaaaa/annotations",
+                         json={"kind": "circle", "points": [[1, 1]], "comment": ""})
+        check("неизвестный вид аннотации отклоняется", odd.status_code == 400)
+        long_comment = alice.post("/api/slides/aaaaaaaaaaaa/annotations",
+                                  json={"kind": "point", "points": [[1, 1]], "comment": "я" * 1001})
+        check("слишком длинный комментарий отклоняется", long_comment.status_code == 400)
+
+        listed = alice.get("/api/slides/aaaaaaaaaaaa/annotations").json()
+        check("обе аннотации в списке", {a["id"] for a in listed} == {point_id, polygon_id})
+
+        # А-10: скан, к которому нет доступа (cccccccccccc виден только user-a),
+        # не отдаёт ни аннотации, ни возможность их поставить
+        check("аннотации чужого скана: 404",
+              bob.get("/api/slides/cccccccccccc/annotations").status_code == 404)
+        check("поставить аннотацию на чужой скан: 404",
+              bob.post("/api/slides/cccccccccccc/annotations",
+                       json={"kind": "point", "points": [[1, 1]], "comment": ""}).status_code == 404)
+
+        # А-3: не патолог видит аннотации доступного скана, но поставить не может
+        seen = bob.get("/api/slides/aaaaaaaaaaaa/annotations")
+        check("не патолог видит список аннотаций доступного скана",
+              seen.status_code == 200 and len(seen.json()) == 2, f"({seen.status_code})")
+        check("чужие аннотации не правятся", all(a["can_edit"] is False for a in seen.json()))
+        denied = bob.post("/api/slides/aaaaaaaaaaaa/annotations",
+                          json={"kind": "point", "points": [[5, 5]], "comment": ""})
+        check("не патолог получает отказ на создание (403)", denied.status_code == 403, f"({denied.text[:60]})")
+
+        # А-14: правка своей аннотации
+        moved = alice.patch(f"/api/annotations/{point_id}",
+                            json={"points": [[300, 400]], "comment": "митоз, повтор"})
+        check("автор двигает свою аннотацию и меняет комментарий",
+              moved.status_code == 200 and moved.json()["points"] == [[300.0, 400.0]]
+              and moved.json()["comment"] == "митоз, повтор", f"({moved.text[:70]})")
+
+        # Чужую не тронуть: делаем второго патолога
+        make_user("user-c")
+        user_c_id = db.query_one("SELECT id FROM users WHERE login = 'user-c'")["id"]
+        admin.put(f"/api/groups/{pathologists_id}/members", json={"user_ids": [user_a_id, user_c_id]})
+        admin.post("/api/access", json={"folder_id": top, "mode": "all"})
+        carol = TestClient(app)
+        login(carol, "user-c")
+        foreign = carol.get(f"/api/slides/aaaaaaaaaaaa/annotations").json()
+        check("чужая аннотация помечена как недоступная для правки",
+              all(a["can_edit"] is False for a in foreign), f"({foreign[:1]})")
+        check("чужую аннотацию патолог не правит",
+              carol.patch(f"/api/annotations/{point_id}", json={"comment": "нет"}).status_code == 403)
+        check("чужую аннотацию патолог не удаляет",
+              carol.delete(f"/api/annotations/{point_id}").status_code == 403)
+        check("администратор удаляет любую",
+              admin.delete(f"/api/annotations/{polygon_id}").status_code == 200)
+
+        # Журнал: вид и скан есть, текста комментария нет (А-8)
+        journal = admin.get("/api/journal").json()
+        marks = [row for row in journal if row["action"].startswith("annotation.")]
+        check("создание, правка и удаление аннотаций в журнале",
+              {row["action"] for row in marks} == {"annotation.create", "annotation.update", "annotation.delete"},
+              f"({sorted({r['action'] for r in marks})})")
+        check("текста комментария в журнале нет", all("митоз" not in str(row) for row in journal))
+
+        # А-8: аннотации уходят вместе со сканом
+        before = db.query_one("SELECT count(*) AS n FROM annotations")["n"]
+        admin.delete("/api/slides/aaaaaaaaaaaa")
+        after = db.query_one("SELECT count(*) AS n FROM annotations")["n"]
+        check("удаление скана удаляет его аннотации", before > 0 and after == 0, f"({before} → {after})")
+        make_slide("aaaaaaaaaaaa", top)  # возвращаем скан для остальных проверок
+
         # ---------- перемещение папки (КД-4) ----------
         moved = admin.post("/api/folders", json={"name": "Перенос", "parent_id": top}).json()["id"]
         other = admin.post("/api/folders", json={"name": "2026-09-20"}).json()["id"]

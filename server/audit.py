@@ -35,6 +35,10 @@ GROUP_MEMBERS = "group.members"
 GROUP_DELETE = "group.delete"
 UPLOAD_START = "upload.start"
 UPLOAD_RESUME = "upload.resume"  # прерванную загрузку продолжил другой администратор (ЗГ-4)
+# Аннотации: текст комментария в журнал не пишется (А-8), только вид и автор
+ANNOTATION_CREATE = "annotation.create"
+ANNOTATION_UPDATE = "annotation.update"
+ANNOTATION_DELETE = "annotation.delete"
 
 
 def client_ip(request: Request) -> str:

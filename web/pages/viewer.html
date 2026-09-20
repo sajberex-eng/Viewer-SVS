@@ -40,6 +40,9 @@
           </div>
         </div>
       </div>
+      <button class="btn btn-icon" id="btnAnnotations" aria-expanded="false" aria-controls="annotPanel" data-icon="annotations" data-i18n-label="top.annotations" data-i18n-tip="top.annotations.tip">
+        <span class="annot-count" id="annotCount" hidden></span>
+      </button>
       <button class="btn btn-icon" id="btnInfo" data-icon="info" data-i18n-label="top.info" data-i18n-tip="top.info.tip"></button>
       <button class="btn btn-icon" id="btnHelp" data-icon="help" data-i18n-label="top.help" data-i18n-tip="top.help.tip"></button>
       <!-- Кнопки, которым не хватило ширины, переезжают сюда (В-4) -->
@@ -78,6 +81,25 @@
       </div>
       <div class="panes" id="panes"></div>
     </div>
+
+    <!-- Аннотации: показ, инструменты (только патологам) и список (этап 9) -->
+    <aside class="annot-panel" id="annotPanel" hidden>
+      <div class="adjust-head">
+        <h2 data-i18n="annot.heading"></h2>
+        <button class="icon-btn" id="annotClose" data-i18n-tip="adjust.close.tip">×</button>
+      </div>
+      <label class="check annot-show">
+        <input type="checkbox" id="annotVisible" checked>
+        <span data-i18n="annot.show"></span>
+      </label>
+      <div class="annot-tools" id="annotTools" hidden>
+        <button class="btn" id="toolPoint" data-i18n="annot.tool.point" data-i18n-tip="annot.tool.point.tip"></button>
+        <button class="btn" id="toolPolygon" data-i18n="annot.tool.polygon" data-i18n-tip="annot.tool.polygon.tip"></button>
+      </div>
+      <p class="annot-hint muted" id="annotHint" aria-live="polite"></p>
+      <ul class="annot-list" id="annotList"></ul>
+      <p class="muted" id="annotEmpty" data-i18n="annot.empty"></p>
+    </aside>
 
     <aside class="adjust-panel" id="adjustPanel" hidden>
       <div class="adjust-head">

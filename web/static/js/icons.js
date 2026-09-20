@@ -37,6 +37,8 @@ const SHAPES = {
   // Горячие клавиши
   help: '<circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.7 2.7 0 1 1 3.4 2.6c-.6.2-1 .8-1 1.4v.5"/>'
     + '<circle cx="12" cy="16.8" r="1.1" fill="currentColor" stroke="none"/>',
+  // Аннотации: маркер-булавка на препарате
+  annotations: '<path d="M12 21.5s7-6.1 7-11.2A7 7 0 0 0 5 10.3c0 5.1 7 11.2 7 11.2z"/><circle cx="12" cy="10" r="2.6"/>',
   // Ещё: кнопки, которые не поместились (В-4)
   more: '<circle cx="5.5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/>'
     + '<circle cx="18.5" cy="12" r="1.7" fill="currentColor" stroke="none"/>',

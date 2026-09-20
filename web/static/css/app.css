@@ -337,6 +337,113 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .stage-message p { margin: 0; max-width: 520px; }
 
+/* ---------- аннотации (этап 9) ---------- */
+
+/* Слой лежит поверх препарата и пропускает мышь: ловят её только сами пометки */
+.annot-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  overflow: visible;
+}
+.annot-layer.is-hidden { display: none; }
+.annot-layer .annot-line {
+  fill: none;
+  stroke: var(--brand-accent);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;  /* толщина не растёт вместе с увеличением (А-6) */
+  opacity: 0.85;
+}
+.annot-layer .annot-line.is-draft { stroke-dasharray: 5 4; }
+.annot-layer .annot-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12;
+  vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+.annot-layer .annot-shape.is-selected .annot-line { stroke: var(--brand); stroke-width: 2.4; opacity: 1; }
+.annot-layer .annot-mark {
+  fill: var(--brand-accent);
+  fill-opacity: 0.55;
+  stroke: #ffffff;
+  stroke-width: 1.5;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.annot-layer .annot-mark.is-selected { fill: var(--brand); fill-opacity: 0.9; }
+.annot-layer .annot-dot { fill: var(--brand); stroke: #ffffff; stroke-width: 1.2; }
+.annot-layer .annot-handle {
+  fill: #ffffff;
+  stroke: var(--brand);
+  stroke-width: 1.6;
+  pointer-events: auto;
+  cursor: grab;
+}
+.annot-layer .is-draggable:active { cursor: grabbing; }
+.stage.is-marking { cursor: crosshair; }
+.stage.is-marking .osd { cursor: crosshair; }
+
+/* Комментарий показывается только при наведении и щелчке (А-6) */
+.annot-tip {
+  position: absolute;
+  z-index: 11;
+  max-width: 280px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: rgb(255 255 255 / 95%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 15%);
+  pointer-events: none;
+}
+
+.annot-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--brand-accent);
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.annot-panel {
+  width: 280px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+}
+.annot-show { font-size: 13px; }
+.annot-tools { display: flex; gap: 6px; }
+.annot-tools .btn { flex: 1; justify-content: center; }
+.annot-hint { min-height: 16px; }
+.annot-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.annot-row {
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 12px;
+  cursor: pointer;
+}
+.annot-row:hover { background: #f5f5f7; }
+.annot-row.is-selected { border-color: var(--brand); background: var(--brand-tint); }
+.annot-row-text { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annot-row-meta { color: var(--muted); }
+.annot-row-actions { display: flex; gap: 8px; margin-top: 2px; }
+
 .adjust-panel {
   width: 300px;
   padding: 12px;
@@ -718,6 +825,22 @@ input[type="range"] { accent-color: var(--accent); }
      ошибках всё же показываются: иначе о них негде узнать. */
   .statusbar { font-size: 11px; overflow-x: auto; }
   .status-tiles:not(.is-error) { display: none; }
+
+  /* Пальцем по отдельной клетке не попасть: на телефоне аннотации только
+     видны, инструментов рисования и правки нет (А-16) */
+  .annot-tools, .annot-row-actions { display: none !important; }
+  /* Панель ложится поверх препарата справа: если её поставить в ряд с
+     изображением, препарату не остаётся ширины совсем */
+  .annot-panel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 13;
+    width: 85%;
+    max-width: 320px;
+    box-shadow: -2px 0 12px rgb(0 0 0 / 18%);
+  }
 
   /* Список сканов случая открывается поверх изображения и закрывается после
      выбора (М-8): на узком экране он иначе съедает половину ширины. */

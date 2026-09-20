@@ -3,8 +3,9 @@
 // активная половина, связанная навигация и ссылка на поле зрения.
 import { isDefault } from './adjust.js';
 import { AdjustPanel } from './adjust-panel.js';
+import { AnnotationLayer } from './annotations.js';
 import { api, logout } from './api.js';
-import { chooseDialog, infoDialog } from './dialog.js';
+import { chooseDialog, confirmDialog, formDialog, infoDialog } from './dialog.js';
 import { applyIcons } from './icons.js';
 import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.js';
 import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
@@ -28,6 +29,9 @@ let linked = false;
 let linkOffset = null; // взаимное положение половин в момент связывания
 let adjustPanel = null;
 let split = 50;
+// Показ аннотаций — выбор пользователя, общий для всех сканов (А-11)
+let annotationsShown = localStorage.getItem('viewer.annotations') !== 'off';
+let activeTool = null;
 
 setLanguage('ru');
 applyIcons();  // значки вставляются до подписей: подпись в кнопке остаётся своя (В-1)
@@ -60,6 +64,7 @@ async function main() {
   });
   initSlidesPanel(slide);
   initTopbar();
+  initAnnotations();
   initZoomPanel();
   initHotkeys();
 
@@ -80,6 +85,11 @@ async function main() {
   // Раскладка считается всегда, а не только при двух сканах: от неё зависит и
   // видимость кнопки «Сравнить», которой на телефоне быть не должно (М-1)
   applyCompareLayout();
+
+  // Ссылка на конкретную аннотацию (А-5): половины к этому моменту уже созданы,
+  // но скан в них ещё открывается — ждём открытия
+  const wantedAnnotation = query.get('annotation');
+  if (wantedAnnotation) whenAllOpen(() => goToAnnotation(wantedAnnotation));
 }
 
 async function loadSlide(id, { silent = false } = {}) {
@@ -93,6 +103,37 @@ async function loadSlide(id, { silent = false } = {}) {
 }
 
 // ---------- половины ----------
+
+// У каждой половины свой слой: аннотации показываются в обеих независимо (А-7)
+function attachAnnotations(pane) {
+  pane.annotations = new AnnotationLayer({
+    view: pane,
+    onSelect: (item) => {
+      if (pane !== active) setActive(pane);
+      renderAnnotationList();
+      highlightRow(item.id);
+    },
+    onSave: (item) => saveGeometry(pane, item),
+    onFinishDraft: (kind, points) => createAnnotation(pane, kind, points),
+    onDraftChange: updateAnnotationHint,
+  });
+  pane.annotations.setVisible(annotationsShown);
+  loadAnnotations(pane);
+  return pane;
+}
+
+async function loadAnnotations(pane) {
+  try {
+    pane.annotationItems = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/annotations`);
+  } catch {
+    pane.annotationItems = [];  // нет доступа или сеть: аннотации просто не показываем
+  }
+  pane.annotations.setItems(pane.annotationItems);
+  if (pane === active) {
+    renderAnnotationList();
+    updateAnnotationCount();
+  }
+}
 
 function addPane(slide) {
   const fragment = $('paneTemplate').content.cloneNode(true);
@@ -109,12 +150,14 @@ function addPane(slide) {
     onPickWhite: (pane, position) => (active === pane ? adjustPanel.pickWhite(position) : false),
   });
   panes.push(view);
+  attachAnnotations(view);
   return view;
 }
 
 function closePane(view) {
   if (panes.length < 2) return; // последнюю половину не закрыть
   panes = panes.filter((pane) => pane !== view);
+  view.annotations?.destroy();
   view.destroy();
   setLinked(false);
   setActive(panes[0]);
@@ -134,6 +177,9 @@ function setActive(view) {
   updateLabelButton();
   updateStatusBar();
   markCurrentThumb();
+  setTool(null);  // инструмент принадлежит половине, в которой его включили
+  renderAnnotationList();
+  updateAnnotationCount();
 }
 
 // ---------- связанная навигация (С-6, С-7) ----------
@@ -588,6 +634,244 @@ function layoutTopbar() {
   }
 }
 
+// ---------- аннотации (этап 9) ----------
+
+function initAnnotations() {
+  const panel = $('annotPanel');
+  const toggle = (open = panel.hidden) => {
+    panel.hidden = !open;
+    $('btnAnnotations').setAttribute('aria-expanded', String(open));
+    if (open) renderAnnotationList();
+  };
+  $('btnAnnotations').addEventListener('click', () => toggle());
+  $('annotClose').addEventListener('click', () => toggle(false));
+
+  const visible = $('annotVisible');
+  visible.checked = annotationsShown;
+  visible.addEventListener('change', () => setAnnotationsShown(visible.checked));
+
+  $('toolPoint').addEventListener('click', () => setTool(activeTool === 'point' ? null : 'point'));
+  $('toolPolygon').addEventListener('click', () => setTool(activeTool === 'polygon' ? null : 'polygon'));
+
+}
+
+// Инструменты есть только у патологов и только с мыши: пальцем по клетке
+// не попасть, поэтому на телефоне их нет (А-3, А-16)
+function canDraw() {
+  return Boolean(active?.slide.can_annotate) && !phone();
+}
+
+function setTool(tool) {
+  activeTool = canDraw() ? tool : null;
+  for (const pane of panes) pane.annotations?.setTool(pane === active ? activeTool : null);
+  $('toolPoint').classList.toggle('is-active', activeTool === 'point');
+  $('toolPolygon').classList.toggle('is-active', activeTool === 'polygon');
+  updateAnnotationHint();
+}
+
+function updateAnnotationHint() {
+  const hint = $('annotHint');
+  if (!activeTool) {
+    hint.textContent = active?.slide.can_annotate ? '' : t('annot.noTools');
+    return;
+  }
+  hint.textContent = activeTool === 'point'
+    ? t('annot.hint.point')
+    : t('annot.hint.polygon', { n: active?.annotations.draft.length ?? 0 });
+}
+
+function setAnnotationsShown(shown) {
+  annotationsShown = shown;
+  localStorage.setItem('viewer.annotations', shown ? 'on' : 'off');
+  $('annotVisible').checked = shown;
+  for (const pane of panes) pane.annotations?.setVisible(shown);
+  if (!shown) setTool(null);  // рисовать при выключенном показе бессмысленно
+  updateAnnotationCount();
+  renderAnnotationList();
+}
+
+// При выключенном показе на кнопке видно число аннотаций скана (А-11)
+function updateAnnotationCount() {
+  const badge = $('annotCount');
+  const count = active?.annotationItems?.length ?? 0;
+  badge.hidden = annotationsShown || !count;
+  badge.textContent = String(count);
+  $('annotTools').hidden = !canDraw();
+}
+
+async function createAnnotation(pane, kind, points) {
+  const values = await formDialog({
+    title: t('annot.commentTitle'),
+    submitLabel: t('annot.save'),
+    fields: [{
+      name: 'comment', label: t('annot.commentLabel'), type: 'textarea',
+      hint: t('annot.commentHint'), maxLength: 1000,
+    }],
+  });
+  if (values === null) return;  // окно закрыли — аннотация не создаётся
+  try {
+    const created = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/annotations`, {
+      method: 'POST', body: { kind, points, comment: values.comment },
+    });
+    pane.annotationItems = [...(pane.annotationItems ?? []), created];
+    pane.annotations.setItems(pane.annotationItems);
+    pane.annotations.select(created.id);
+    if (pane === active) {
+      renderAnnotationList();
+      updateAnnotationCount();
+    }
+  } catch (error) {
+    showNote(error.message);
+  }
+}
+
+async function saveGeometry(pane, item) {
+  try {
+    await api(`/api/annotations/${encodeURIComponent(item.id)}`, {
+      method: 'PATCH', body: { points: item.points },
+    });
+  } catch (error) {
+    showNote(error.message);
+    loadAnnotations(pane);  // не сохранилось — возвращаем то, что на сервере
+  }
+}
+
+async function editComment(item) {
+  const values = await formDialog({
+    title: t('annot.commentTitle'),
+    submitLabel: t('annot.save'),
+    fields: [{
+      name: 'comment', label: t('annot.commentLabel'), type: 'textarea',
+      hint: t('annot.commentHint'), maxLength: 1000, value: item.comment,
+    }],
+  });
+  if (values === null) return;
+  try {
+    await api(`/api/annotations/${encodeURIComponent(item.id)}`, {
+      method: 'PATCH', body: { comment: values.comment },
+    });
+  } catch (error) {
+    return showNote(error.message);
+  }
+  loadAnnotations(active);
+}
+
+async function removeAnnotation(item) {
+  const ok = await confirmDialog({
+    title: t('annot.deleteTitle'),
+    text: t('annot.deleteText', { name: item.comment || t('annot.noComment') }),
+    submitLabel: t('common.delete'),
+  });
+  if (!ok) return;
+  try {
+    await api(`/api/annotations/${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+  } catch (error) {
+    return showNote(error.message);
+  }
+  loadAnnotations(active);
+}
+
+// Список аннотаций активной половины (А-4)
+function renderAnnotationList() {
+  const list = $('annotList');
+  if (!list) return;
+  const items = active?.annotationItems ?? [];
+  const empty = $('annotEmpty');
+  empty.hidden = Boolean(items.length);
+  empty.textContent = annotationsShown ? t('annot.empty') : t('annot.emptyHidden');
+  list.replaceChildren(...items.map(annotationRow));
+  updateAnnotationHint();
+}
+
+function annotationRow(item) {
+  const row = document.createElement('li');
+  row.className = 'annot-row';
+  row.dataset.id = item.id;
+  if (item.id === active?.annotations.selectedId) row.classList.add('is-selected');
+
+  const text = document.createElement('span');
+  text.className = 'annot-row-text';
+  text.textContent = item.comment || t('annot.noComment');
+  const meta = document.createElement('span');
+  meta.className = 'annot-row-meta';
+  meta.textContent = `${t(`annot.kind.${item.kind}`)} · ${t('annot.byAuthor', {
+    author: item.author, date: formatDateTime(item.created_at),
+  })}`;
+  row.append(text, meta);
+
+  row.addEventListener('click', () => {
+    active?.annotations.select(item.id);
+    focusAnnotation(item);
+    highlightRow(item.id);
+  });
+
+  const actions = document.createElement('span');
+  actions.className = 'annot-row-actions';
+  actions.append(rowButton(t('annot.copyLink'), () => copyAnnotationLink(item)));
+  if (item.can_edit && !phone()) {
+    actions.append(
+      rowButton(t('annot.edit'), () => editComment(item)),
+      rowButton(t('common.delete'), () => removeAnnotation(item), 'is-danger'),
+    );
+  }
+  row.append(actions);
+  return row;
+}
+
+function rowButton(text, handler, extraClass = '') {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `link-btn ${extraClass}`;
+  button.textContent = text;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    handler();
+  });
+  return button;
+}
+
+function highlightRow(id) {
+  for (const row of $('annotList').children) row.classList.toggle('is-selected', row.dataset.id === id);
+}
+
+// Перевести поле зрения к аннотации (А-4, А-5)
+function focusAnnotation(item) {
+  const pane = active;
+  if (!pane) return;
+  const xs = item.points.map((point) => point[0]);
+  const ys = item.points.map((point) => point[1]);
+  const centre = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+  const { viewport } = pane.viewer;
+  viewport.panTo(viewport.imageToViewportCoordinates(centre[0], centre[1]));
+  viewport.applyConstraints();
+}
+
+async function goToAnnotation(id) {
+  if (!annotationsShown) setAnnotationsShown(true);
+  const pane = panes[0];
+  if (!pane) return;
+  if (!pane.annotationItems) await loadAnnotations(pane);
+  const item = (pane.annotationItems ?? []).find((row) => row.id === id);
+  if (!item) return showNote(t('annot.notFound'));
+  setActive(pane);
+  pane.annotations.select(id);
+  focusAnnotation(item);
+  $('annotPanel').hidden = false;
+  $('btnAnnotations').setAttribute('aria-expanded', 'true');
+  renderAnnotationList();
+  highlightRow(id);
+}
+
+async function copyAnnotationLink(item) {
+  const url = `${location.origin}/viewer?slide=${encodeURIComponent(active.slide.id)}&annotation=${encodeURIComponent(item.id)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    showNote(t('annot.linkCopied'));
+  } catch {
+    window.prompt(t('annot.copyLink'), url);  // буфер обмена недоступен — показываем адрес
+  }
+}
+
 function showNote(text) {
   const status = $('statusTiles');
   status.textContent = text;
@@ -705,6 +989,7 @@ async function replaceActive(slideId) {
   if (!slide) return showNote(t('compare.noAccess'));
   const index = panes.indexOf(active);
   const others = panes.filter((pane) => pane !== active); // при сравнении — соседняя половина
+  active.annotations?.destroy();
   active.destroy();
   const pane = addPane(slide);
   // Новая половина встаёт на своё место: слева или справа от разделителя
@@ -766,6 +1051,11 @@ function initHotkeys() {
     KeyI: () => $('btnAdjust').click(),
     KeyC: () => (panes.length > 1 ? leaveCompare() : startCompare()),
     KeyS: showSlideInfo,
+    KeyA: () => setAnnotationsShown(!annotationsShown),  // показ аннотаций (А-11)
+    Enter: () => active?.annotations.closeDraft(),       // замкнуть начатый контур (А-2)
+    Escape: () => {
+      if (!active?.annotations.cancelDraft()) setTool(null);
+    },
     Slash: showHelp, // Shift+/ это «?»
     PageDown: () => stepSlide(1),
     PageUp: () => stepSlide(-1),

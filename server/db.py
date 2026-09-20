@@ -4,7 +4,8 @@
   1  дерево папок и права вместо плоского списка слайдов (база редакции 2
      переносится автоматически);
   2  незавершённые загрузки;
-  3  группы пользователей; обязательной смены выданного пароля больше нет.
+  3  группы пользователей; обязательной смены выданного пароля больше нет;
+  4  аннотации на сканах (этап 9).
 """
 from __future__ import annotations
 
@@ -13,7 +14,7 @@ import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Группы, которые заводятся при создании базы. Дальше администратор
 # сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
@@ -162,8 +163,28 @@ CREATE UNIQUE INDEX group_grants_folder ON group_grants(group_id, folder_id) WHE
 CREATE UNIQUE INDEX group_grants_slide  ON group_grants(group_id, slide_id)  WHERE slide_id IS NOT NULL;
 """
 
+# Версия 4: аннотации (этап 9). Геометрия хранится в координатах скана, а не
+# экрана: пометка держится за ту же клетку при любом увеличении и повороте.
+# Логин автора продублирован текстом, как в журнале: аннотация переживает
+# удаление учётной записи.
+ANNOTATIONS_SCHEMA = """
+CREATE TABLE annotations (
+    id         TEXT PRIMARY KEY,
+    slide_id   TEXT NOT NULL REFERENCES slides(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL CHECK (kind IN ('point', 'polygon')),
+    points     TEXT NOT NULL,            -- JSON: [[x, y], ...] в пикселях скана
+    comment    TEXT NOT NULL DEFAULT '',
+    author_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    author     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX annotations_slide ON annotations(slide_id);
+"""
+
 # Схема для чистой установки: всегда последняя версия
-SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA
+SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA + ANNOTATIONS_SCHEMA
 
 
 def _seed_groups(conn: sqlite3.Connection) -> None:
@@ -343,6 +364,9 @@ class Database:
                         _seed_groups(conn)
                         # Обязательной смены пароля больше нет (решение заказчика)
                         conn.execute("ALTER TABLE users DROP COLUMN must_change_password")
+                        version = 3
+                    if version == 3:
+                        conn.executescript(ANNOTATIONS_SCHEMA)
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

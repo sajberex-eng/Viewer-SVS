@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
+from . import annotations as annotationsvc
 from . import audit
 from . import groups as groupsvc
 from .access import AccessIndex
@@ -142,6 +143,17 @@ class UploadVerify(BaseModel):
     checksum: str
 
 
+class AnnotationRequest(BaseModel):
+    kind: str
+    points: list[list[float]]
+    comment: str = ""
+
+
+class AnnotationPatch(BaseModel):
+    points: list[list[float]] | None = None
+    comment: str | None = None
+
+
 def create_app() -> FastAPI:
     # Uvicorn настраивает только свои журналы, поэтому сообщения сервиса (прогрев,
     # проверка хранилища, уборка загрузок) до сих пор никуда не попадали: у корневого
@@ -229,6 +241,10 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError):
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+
+    @app.exception_handler(annotationsvc.AnnotationError)
+    async def annotation_error(request: Request, exc: annotationsvc.AnnotationError):
         return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
 
     class FreshStatic(StaticFiles):
@@ -425,6 +441,7 @@ def create_app() -> FastAPI:
             "overlap": settings.tiles.overlap,
             "format": "jpg",
         }
+        info["can_annotate"] = annotationsvc.can_annotate(db, user)  # А-3
         access = access_for(user)
         # Путь до папки: во вьювере он показан рядом с названием и открывает
         # эту папку в каталоге (ИН-3). Папки выше доступного скана пользователю
@@ -499,6 +516,58 @@ def create_app() -> FastAPI:
             media_type="image/jpeg",
             headers={"Cache-Control": "no-store"},
         )
+
+    # ---------- аннотации (этап 9) ----------
+
+    def require_annotation(annotation_id: str, user):
+        """Аннотация доступного скана. Иначе 404, как для тайлов (А-10)."""
+        row = annotationsvc.get(db, annotation_id)
+        if row is None or catalog.visible_slide(row["slide_id"], access_for(user)) is None:
+            raise HTTPException(404, "Аннотация не найдена")
+        return row
+
+    @app.get("/api/slides/{slide_id}/annotations")
+    def list_annotations(slide_id: str, user=Depends(require_user)):
+        require_slide(slide_id, user)  # чужой скан — 404, вместе с его аннотациями
+        return annotationsvc.for_slide(db, slide_id, user)
+
+    @app.post("/api/slides/{slide_id}/annotations")
+    def create_annotation(slide_id: str, body: AnnotationRequest, request: Request, user=Depends(require_user)):
+        require_slide(slide_id, user)
+        if not annotationsvc.can_annotate(db, user):
+            raise HTTPException(403, "Размечать сканы могут патологи")
+        created = annotationsvc.create(db, slide_id, body.kind, body.points, body.comment, user)
+        audit.log(
+            db, request, audit.ANNOTATION_CREATE, user=user, object_type="annotation",
+            object_id=created["id"], detail=f"{body.kind}, скан {slide_id}",  # текст комментария не пишем (А-8)
+        )
+        return created
+
+    @app.patch("/api/annotations/{annotation_id}")
+    def patch_annotation(annotation_id: str, body: AnnotationPatch, request: Request, user=Depends(require_user)):
+        row = require_annotation(annotation_id, user)
+        if not annotationsvc.can_annotate(db, user) or not annotationsvc.can_edit(row, user):
+            raise HTTPException(403, "Чужую аннотацию изменить нельзя")
+        updated = annotationsvc.update(db, row, body.points, body.comment, user)
+        audit.log(
+            db, request, audit.ANNOTATION_UPDATE, user=user, object_type="annotation",
+            object_id=annotation_id, detail=f"{row['kind']}, скан {row['slide_id']}",
+        )
+        return updated
+
+    @app.delete("/api/annotations/{annotation_id}")
+    def delete_annotation(annotation_id: str, request: Request, user=Depends(require_user)):
+        row = require_annotation(annotation_id, user)
+        # Свою удаляет автор-патолог, любую — администратор (А-3)
+        allowed = user["role"] == "admin" or (annotationsvc.can_annotate(db, user) and row["author_id"] == user["id"])
+        if not allowed:
+            raise HTTPException(403, "Чужую аннотацию удалить нельзя")
+        annotationsvc.delete(db, annotation_id)
+        audit.log(
+            db, request, audit.ANNOTATION_DELETE, user=user, object_type="annotation",
+            object_id=annotation_id, detail=f"{row['kind']}, скан {row['slide_id']}",
+        )
+        return {"ok": True}
 
     # ---------- папки: только администратор ----------
 
