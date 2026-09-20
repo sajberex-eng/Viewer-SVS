@@ -115,7 +115,6 @@ web/
   static/vendor OpenSeadragon 5.0.1 (BSD)
 tools/          install_aslide_kfb.py — KFB-часть ASlide для образа Docker
 tests/          access_test.py, upload_test.py, smoke_test.py; synthetic_svs.py собирает тестовый SVS
-docs/           отчёт аудита 2026-09-19
 ```
 
 Браузер обращается только к приложению, к хранилищу напрямую никогда. Поэтому перенос сканов в бакет затронет один модуль `storage.py`.
