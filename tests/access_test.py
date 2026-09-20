@@ -385,6 +385,19 @@ def main() -> None:
         check("удаление скана удаляет его аннотации", before > 0 and after == 0, f"({before} → {after})")
         make_slide("aaaaaaaaaaaa", top)  # возвращаем скан для остальных проверок
 
+        # Удаление папки уносит и сканы, и их аннотации: папка удаляет сканы по
+        # одному, а дальше срабатывает связь в базе
+        doomed = admin.post("/api/folders", json={"name": "На удаление"}).json()["id"]
+        admin.post("/api/access", json={"folder_id": doomed, "mode": "all"})
+        make_slide("eeeeeeeeeeee", doomed)
+        alice.post("/api/slides/eeeeeeeeeeee/annotations",
+                   json={"kind": "point", "points": [[7, 7]], "comment": "в папке"})
+        check("аннотация в папке создана",
+              db.query_one("SELECT count(*) AS n FROM annotations WHERE slide_id = 'eeeeeeeeeeee'")["n"] == 1)
+        admin.delete(f"/api/folders/{doomed}")
+        check("удаление папки уносит аннотации её сканов",
+              db.query_one("SELECT count(*) AS n FROM annotations WHERE slide_id = 'eeeeeeeeeeee'")["n"] == 0)
+
         # ---------- перемещение папки (КД-4) ----------
         moved = admin.post("/api/folders", json={"name": "Перенос", "parent_id": top}).json()["id"]
         other = admin.post("/api/folders", json={"name": "2026-09-20"}).json()["id"]

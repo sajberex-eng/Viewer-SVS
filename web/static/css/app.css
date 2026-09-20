@@ -365,15 +365,15 @@ input[type="range"] { accent-color: var(--accent); }
   cursor: pointer;
 }
 .annot-layer .annot-shape.is-selected .annot-line { stroke: var(--brand); stroke-width: 2.4; opacity: 1; }
-.annot-layer .annot-mark {
-  fill: var(--brand-accent);
-  fill-opacity: 0.55;
-  stroke: #ffffff;
-  stroke-width: 1.5;
-  pointer-events: auto;
-  cursor: pointer;
-}
-.annot-layer .annot-mark.is-selected { fill: var(--brand); fill-opacity: 0.9; }
+/* Указатель — стрелка: её вершина стоит на отмеченной точке, а древко уходит
+   вверх-влево и не закрывает саму клетку (А-1, А-6) */
+.annot-layer .annot-mark { pointer-events: auto; cursor: pointer; }
+.annot-layer .annot-arrow { fill: var(--brand-accent); fill-opacity: 0.9; stroke: #ffffff; stroke-width: 1; }
+.annot-layer .annot-arrow-shaft { stroke: var(--brand-accent); stroke-width: 2.2; stroke-linecap: round; fill: none; }
+/* Белая подложка под древком: стрелка видна и на тёмном препарате */
+.annot-layer .annot-arrow-halo { stroke: #ffffff; stroke-width: 4.2; stroke-linecap: round; fill: none; opacity: 0.85; }
+.annot-layer .annot-mark.is-selected .annot-arrow { fill: var(--brand); }
+.annot-layer .annot-mark.is-selected .annot-arrow-shaft { stroke: var(--brand); }
 .annot-layer .annot-dot { fill: var(--brand); stroke: #ffffff; stroke-width: 1.2; }
 .annot-layer .annot-handle {
   fill: #ffffff;

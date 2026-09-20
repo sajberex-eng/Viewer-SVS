@@ -102,7 +102,9 @@ def can_edit(row, user) -> bool:
 
 def for_slide(db: Database, slide_id: str, user) -> list[dict]:
     rows = db.query(
-        "SELECT * FROM annotations WHERE slide_id = ? ORDER BY created_at, id", (slide_id,)
+        # rowid, а не id: время создания записывается с точностью до секунды, и
+        # аннотации одной секунды иначе встают в случайном порядке
+        "SELECT * FROM annotations WHERE slide_id = ? ORDER BY created_at, rowid", (slide_id,)
     )
     return [as_dict(row, user) for row in rows]
 

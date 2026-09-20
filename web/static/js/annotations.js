@@ -8,7 +8,11 @@
 import { t } from './i18n.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
-const MARK_RADIUS = 6;   // радиус маркера на экране, в точках
+// Стрелка указателя: вершина в начале координат, древко уходит вверх-влево,
+// поэтому сама отмеченная клетка остаётся открытой (А-1, А-6). Размеры в
+// экранных точках: на любом увеличении стрелка одинаковая.
+const ARROW_HEAD = 'M0 0 L-11 -4 L-4 -11 Z';
+const ARROW_SHAFT = 'M-5.5 -5.5 L-17 -17';
 const HANDLE_SIZE = 9;   // ручка вершины при правке (А-14)
 const MIN_POLYGON = 3;
 
@@ -143,9 +147,15 @@ export class AnnotationLayer {
 
   #drawPoint(item) {
     const selected = item.id === this.selectedId;
-    const mark = document.createElementNS(SVG_NS, 'circle');
+    const mark = document.createElementNS(SVG_NS, 'g');
     mark.setAttribute('class', `annot-mark${selected ? ' is-selected' : ''}`);
-    mark.setAttribute('r', MARK_RADIUS);
+    for (const [name, d] of [['annot-arrow-halo', ARROW_SHAFT], ['annot-arrow-shaft', ARROW_SHAFT],
+                             ['annot-arrow', ARROW_HEAD]]) {
+      const part = document.createElementNS(SVG_NS, 'path');
+      part.setAttribute('class', name);
+      part.setAttribute('d', d);
+      mark.append(part);
+    }
     this.#bind(mark, item);
     if (selected && item.can_edit) this.#bindDrag(mark, item, 0);
     this.screen.append(mark);
@@ -182,10 +192,12 @@ export class AnnotationLayer {
 
     for (const [node, point] of this.marks) {
       const at = this.#toScreen(point);
-      if (node.tagName === 'rect') {
+      if (node.tagName === 'g') {          // стрелка указателя
+        node.setAttribute('transform', `translate(${at.x} ${at.y})`);
+      } else if (node.tagName === 'rect') { // ручка вершины
         node.setAttribute('x', at.x - HANDLE_SIZE / 2);
         node.setAttribute('y', at.y - HANDLE_SIZE / 2);
-      } else {
+      } else {                              // точка начатого контура
         node.setAttribute('cx', at.x);
         node.setAttribute('cy', at.y);
       }
