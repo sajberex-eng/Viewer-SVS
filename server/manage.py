@@ -13,6 +13,10 @@ import sys
 from .auth import ROLES, generate_password, hash_password, set_password
 from .config import load_settings
 from .db import Database
+from .slides import SlidePool
+from .storage import create_storage
+from .tilecache import TileCache
+from .warmup import Warmer
 
 
 def read_password() -> str:
@@ -20,6 +24,31 @@ def read_password() -> str:
     if password != getpass.getpass("Пароль ещё раз: "):
         sys.exit("Пароли не совпадают")
     return password
+
+
+def warm_all(db: Database, settings) -> None:
+    """Разовый прогрев уже загруженных сканов (СК-1).
+
+    Новые сканы сервер прогревает сам сразу после приёма. Команду можно
+    выполнять на работающем сервисе: файлы кэша пишутся через временное имя.
+    """
+    storage = create_storage(settings.storage)
+    pool = SlidePool(storage, settings.tiles, settings.open_slides)
+    cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
+    settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
+    warmer = Warmer(pool, cache, settings.tiles, settings.thumbs_dir)
+
+    rows = db.query("SELECT * FROM slides WHERE missing = 0 ORDER BY added_at")
+    print(f"Сканов к прогреву: {len(rows)}")
+    for number, row in enumerate(rows, 1):
+        try:
+            result = warmer.warm(row)
+        except Exception as exc:  # один нечитаемый файл не должен останавливать остальные
+            print(f"{number}/{len(rows)}  {row['id']}: не удалось — {exc}")
+            continue
+        print(f"{number}/{len(rows)}  {row['id']}: тайлов {result['tiles']}, за {result['seconds']:.1f} с")
+    pool.close_all()
+    print("Готово")
 
 
 def main() -> None:
@@ -40,8 +69,18 @@ def main() -> None:
 
     commands.add_parser("list-users", help="показать пользователей")
 
+    commands.add_parser(
+        "warm",
+        help="приготовить миниатюры и обзорные тайлы для сканов, загруженных до появления прогрева",
+    )
+
     args = parser.parse_args()
-    db = Database(load_settings().db_path)
+    settings = load_settings()
+    db = Database(settings.db_path)
+
+    if args.command == "warm":
+        warm_all(db, settings)
+        return
 
     try:
         if args.command == "add-user":

@@ -106,7 +106,9 @@ def session_user(request: Request):
     user_id = request.session.get("user_id")
     if user_id is None:
         return None
-    row = request.app.state.db.query_one("SELECT * FROM users WHERE id = ?", (user_id,))
+    # Учётная запись берётся из памяти процесса (СК-3); блокировка, смена роли и
+    # смена пароля сбрасывают эту память и потому действуют со следующего запроса.
+    row = request.app.state.perms.user(user_id)
     if row is None or row["session_epoch"] != request.session.get("epoch"):
         request.session.clear()
         return None

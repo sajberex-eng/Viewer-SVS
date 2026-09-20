@@ -83,6 +83,10 @@ export class SlideView {
       animationTime: 0.5,
       zoomPerScroll: ZOOM_STEP,
       timeout: 60000, // первый тайл большого слайда на медленном канале приходит не сразу
+      // Не больше восьми тайлов в работе на половину экрана (СК-6): при быстром
+      // перемещении сервер с двумя ядрами иначе дорабатывает тайлы, которые уже
+      // ушли с экрана, и нужные ждут очереди
+      imageLoaderLimit: 8,
       gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true },
       gestureSettingsTouch: { clickToZoom: false, dblClickToZoom: true },
     });

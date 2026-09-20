@@ -151,6 +151,14 @@ def main() -> None:
         check("загрузка завершена", done.status_code == 200, f"({done.text[:80]})")
         slide_id = done.json()["slide_id"]
 
+        # ---------- прогрев после загрузки (СК-1) ----------
+        check("прогрев закончился", app.state.warmer.wait_idle(60))
+        thumbs = list((WORK_DIR / "data" / "cache" / "thumbs").glob(f"{slide_id}-*.jpg"))
+        cached_tiles = list((WORK_DIR / "data" / "cache" / "tiles").rglob("*.jpg"))
+        check("миниатюра готова до первого обращения к ней", len(thumbs) == 1, f"({len(thumbs)} шт.)")
+        check("обзорные тайлы готовы до первого открытия скана",
+              len(cached_tiles) >= 4, f"({len(cached_tiles)} шт.)")
+
         # ---------- что получилось ----------
         stored = files_on_disk(storage_root)
         check("файл лежит в хранилище под внутренним идентификатором",

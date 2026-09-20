@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
 
@@ -296,10 +297,19 @@ def _migrate_v0_to_v1(conn: sqlite3.Connection) -> None:
 
 
 class Database:
-    """Соединение открывается на каждый запрос: SQLite это дёшево, а потоков много."""
+    """Подключение держится на поток (СК-3).
+
+    Раньше соединение открывалось на каждый запрос. На проверке прав это давало
+    пять открытий базы на каждый тайл — 5,8 мс, то есть больше, чем сама отдача
+    готового тайла. SQLite не разрешает делить подключение между потоками,
+    поэтому у каждого потока своё; потоки берутся из пула сервера и живут долго.
+    """
 
     def __init__(self, path: Path):
         self.path = path
+        self._local = threading.local()
+        self._all: list[sqlite3.Connection] = []
+        self._lock = threading.Lock()
         path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as conn:
             conn.execute("PRAGMA journal_mode = WAL")
@@ -346,25 +356,51 @@ class Database:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def connection(self) -> sqlite3.Connection:
+        """Подключение этого потока, открывается при первом обращении."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = self._local.conn = self._connect()
+            with self._lock:
+                self._all.append(conn)
+        return conn
+
+    def close_all(self) -> None:
+        """Закрывает подключения при остановке сервиса и в тестах.
+
+        Подключение чужого потока закрыть нельзя — SQLite это запрещает;
+        такие остаются на совести интерпретатора при выходе.
+        """
+        with self._lock:
+            connections, self._all = self._all, []
+        self._local = threading.local()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+
     def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
-        with closing(self._connect()) as conn:
-            return conn.execute(sql, params).fetchall()
+        return self.connection().execute(sql, params).fetchall()
 
     def query_one(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
         rows = self.query(sql, params)
         return rows[0] if rows else None
 
     def execute(self, sql: str, params: tuple = ()) -> int:
-        with closing(self._connect()) as conn, conn:
+        conn = self.connection()
+        with conn:
             return conn.execute(sql, params).rowcount
 
     def insert(self, sql: str, params: tuple = ()) -> int:
         """INSERT, возвращающий id новой строки."""
-        with closing(self._connect()) as conn, conn:
+        conn = self.connection()
+        with conn:
             return conn.execute(sql, params).lastrowid
 
     @contextmanager
     def transaction(self):
         """Несколько изменений одной транзакцией: либо все, либо ни одного."""
-        with closing(self._connect()) as conn, conn:
+        conn = self.connection()
+        with conn:
             yield conn

@@ -37,18 +37,21 @@ from .auth import (
 from .catalog import Catalog, CatalogError, slide_title
 from .config import BASE_DIR, load_secret_key, load_settings
 from .db import Database, utc_iso
-from .slides import LABEL_IMAGE, SlidePool
+from .perms import PermissionCache
+from .slides import LABEL_IMAGE, SlidePool, render_thumbnail, thumbnail_path
 from .storage import StorageUnavailable, create_storage
-from .tilecache import TileCache
+from .tilecache import TileCache, namespace as tile_namespace
 from .uploads import PART_SIZE, UploadError, Uploads
+from .warmup import Warmer
 
 log = logging.getLogger(__name__)
 
 WEB_DIR = BASE_DIR / "web"
 # Ссылки на скрипты и стили внутри страницы: к ним дописывается версия
 STATIC_LINK = re.compile(r'(?<=["\'])(/static/[^"\']+\.(?:js|css))(?=["\'])')
-TILE_CACHE_CONTROL = "private, max-age=604800"
-THUMBNAIL_SIZE = (320, 320)
+# immutable: пространство имён тайла включает размер и дату файла, поэтому по одному
+# адресу всегда один и тот же тайл, и браузер не перепроверяет сотни адресов (СК-4)
+TILE_CACHE_CONTROL = "private, max-age=604800, immutable"
 LABEL_SIZE = (600, 600)
 
 SECURITY_HEADERS = {
@@ -136,6 +139,12 @@ class UploadStart(BaseModel):
 
 
 def create_app() -> FastAPI:
+    # Uvicorn настраивает только свои журналы, поэтому сообщения сервиса (прогрев,
+    # проверка хранилища, уборка загрузок) до сих пор никуда не попадали: у корневого
+    # журнала нет обработчика, и всё тише предупреждения терялось.
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
     settings = load_settings()
     db = Database(settings.db_path)
     storage = create_storage(settings.storage)
@@ -144,6 +153,8 @@ def create_app() -> FastAPI:
     uploads = Uploads(db, storage, catalog, settings.uploads_dir)
     catalog.on_periodic_check = uploads.cleanup_stale  # брошенные загрузки убираются сами
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
+    perms = PermissionCache(db)
+    warmer = Warmer(pool, tile_cache, settings.tiles, settings.thumbs_dir)
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,13 +168,18 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         tile_cache.start()
+        warmer.start()
         threading.Thread(target=initial_check, name="storage-check", daemon=True).start()
         yield
         tile_cache.stop()
+        warmer.stop()
         pool.close_all()
+        db.close_all()
 
     app = FastAPI(title="Вьювер гистосканов", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db = db
+    app.state.perms = perms
+    app.state.warmer = warmer
     app.add_middleware(
         SessionMiddleware,
         secret_key=load_secret_key(settings),
@@ -172,6 +188,21 @@ def create_app() -> FastAPI:
         same_site="lax",
         https_only=settings.auth.https_only,
     )
+
+    @app.middleware("http")
+    async def drop_permission_cache(request: Request, call_next):
+        """Любой изменяющий запрос сбрасывает память прав (СК-3).
+
+        Так проверять не забыт ни один обработчик: отзыв доступа, блокировка,
+        смена роли и перестройка папок действуют со следующего же запроса.
+        Части загружаемого файла исключены: они идут по нескольку раз в секунду
+        и на права не влияют.
+        """
+        try:
+            return await call_next(request)
+        finally:
+            if request.method not in ("GET", "HEAD") and not request.url.path.startswith("/api/uploads"):
+                perms.invalidate()
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -214,7 +245,7 @@ def create_app() -> FastAPI:
     # ---------- представление данных ----------
 
     def access_for(user) -> AccessIndex:
-        return AccessIndex(db, user)
+        return perms.index(user)
 
     def slide_summary(row, user) -> dict:
         # Ключ и исходное имя файла обычному пользователю не отдаются:
@@ -394,11 +425,7 @@ def create_app() -> FastAPI:
     def tile(slide_id: str, level: int, col: int, row: int, user=Depends(require_user)):
         slide_row = require_slide(slide_id, user)
         cfg = settings.tiles
-        namespace = (
-            f"{slide_id}-{int(slide_row['mtime'])}-{slide_row['size']}"
-            f"-{cfg.tile_size}-{cfg.overlap}-{cfg.jpeg_quality}"
-        )
-        path = tile_cache.path(namespace, level, col, row)
+        path = tile_cache.path(tile_namespace(slide_row, cfg), level, col, row)
         headers = {"Cache-Control": TILE_CACHE_CONTROL}
         if tile_cache.get(path):
             return FileResponse(path, media_type="image/jpeg", headers=headers)
@@ -423,17 +450,10 @@ def create_app() -> FastAPI:
     @app.get("/api/slides/{slide_id}/thumbnail.jpg")
     def thumbnail(slide_id: str, user=Depends(require_user)):
         slide_row = require_slide(slide_id, user)
-        path: Path = settings.thumbs_dir / f"{slide_id}-{int(slide_row['mtime'])}.jpg"
-        if not path.exists():
+        path = thumbnail_path(settings.thumbs_dir, slide_row)
+        if not path.exists():  # обычно её уже приготовил прогрев после загрузки (СК-1)
             with pool.acquire(slide_row["key"]) as handle:
-                try:
-                    # get_thumbnail берёт изображение препарата: этикетка в миниатюру не попадает
-                    image = handle.slide.get_thumbnail(THUMBNAIL_SIZE)
-                except Exception as exc:
-                    raise StorageUnavailable(f"Ошибка чтения миниатюры: {exc}") from exc
-            tmp = path.with_suffix(f".{threading.get_ident()}.tmp")
-            image.convert("RGB").save(tmp, "JPEG", quality=85)
-            tmp.replace(path)
+                render_thumbnail(handle.slide, path)
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
     @app.get("/api/slides/{slide_id}/label.jpg")
@@ -746,6 +766,7 @@ def create_app() -> FastAPI:
     def complete_upload(upload_id: str, request: Request, user=Depends(require_admin)):
         slide_id = uploads.complete(upload_id, user)
         audit.log(db, request, audit.SLIDE_UPLOAD, user=user, object_type="slide", object_id=slide_id)
+        warmer.enqueue(catalog.slide(slide_id))  # миниатюра и обзорные тайлы готовятся в фоне (СК-1)
         return {"slide_id": slide_id}
 
     @app.delete("/api/uploads/{upload_id}")

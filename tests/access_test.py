@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import statistics
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -178,6 +180,34 @@ def main() -> None:
         body = alice.get("/api/slides/aaaaaaaaaaaa").text
         check("пользователю не отдаётся имя файла", "Иванов" not in body and ".svs" not in body)
         check("администратору имя файла видно", "Иванов" in admin.get("/api/slides/aaaaaaaaaaaa").text)
+
+        # ---------- память прав (СК-3): изменение действует со следующего запроса ----------
+        tile_c = "/api/slides/cccccccccccc/tiles/8/0_0.jpg"
+        check("тайл доступного скана отдаётся", alice.get(tile_c).status_code != 404)
+        admin.post("/api/access", json={"folder_id": inner, "mode": "selected", "user_ids": []})
+        code = alice.get(tile_c).status_code
+        check("следующий же запрос тайла после отзыва доступа: 404", code == 404, f"(получено {code})")
+        admin.post("/api/access", json={"folder_id": inner, "mode": "selected", "user_ids": [user_a_id]})
+        check("после возврата доступа тайл снова отдаётся", alice.get(tile_c).status_code != 404)
+
+        admin.patch(f"/api/users/{user_a_id}", json={"status": "blocked"})
+        code = alice.get(tile_c).status_code
+        check("следующий же запрос тайла после блокировки: 401", code == 401, f"(получено {code})")
+        admin.patch(f"/api/users/{user_a_id}", json={"status": "active"})
+        login(alice, "user-a")  # блокировка обрывает сессию, входим заново
+        check("после разблокировки тайл снова отдаётся", alice.get(tile_c).status_code != 404)
+
+        # Замер тем же способом, что в аудите: учётная запись, права, строка скана
+        perms = app.state.perms
+        durations = []
+        for _ in range(200):
+            started = time.perf_counter()
+            row = perms.user(user_a_id)
+            slide_row = db.query_one("SELECT * FROM slides WHERE id = ? AND missing = 0", ("cccccccccccc",))
+            perms.index(row).can_view_slide(slide_row)
+            durations.append((time.perf_counter() - started) * 1000)
+        median = statistics.median(durations)
+        check("проверка прав не дольше 1 мс по медиане", median <= 1.0, f"({median:.3f} мс)")
 
         # ---------- права администратора ----------
         check("пользователь не создаёт папки", alice.post("/api/folders", json={"name": "Чужая"}).status_code == 403)

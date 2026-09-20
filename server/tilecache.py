@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -11,6 +12,16 @@ log = logging.getLogger(__name__)
 
 CLEANUP_INTERVAL_S = 300
 CLEANUP_TARGET = 0.9  # после очистки остаётся не больше 90 % лимита
+TOUCH_INTERVAL_S = 3600  # отметка «использован» обновляется не чаще раза в час (СК-5)
+
+
+def namespace(slide_row, tiles) -> str:
+    """Пространство имён тайлов слайда: включает размер и дату файла и параметры
+    нарезки, поэтому после замены файла или смены настроек старые тайлы не всплывут."""
+    return (
+        f"{slide_row['id']}-{int(slide_row['mtime'])}-{slide_row['size']}"
+        f"-{tiles.tile_size}-{tiles.overlap}-{tiles.jpeg_quality}"
+    )
 
 
 class TileCache:
@@ -32,9 +43,16 @@ class TileCache:
 
     def get(self, path: Path) -> Path | None:
         try:
-            os.utime(path)  # отметка «недавно использован» для вытеснения
+            stat = os.stat(path)
         except OSError:
             return None
+        # Отметка «недавно использован» нужна вытеснению, но писать её на каждый
+        # тайл — лишняя запись на диск: часового разрешения хватает (СК-5).
+        if time.time() - stat.st_mtime > TOUCH_INTERVAL_S:
+            try:
+                os.utime(path)
+            except OSError:
+                pass
         return path
 
     def put(self, path: Path, data: bytes) -> None:
