@@ -29,6 +29,13 @@ export class SlideView {
     applyI18n(container);
 
     this.parts.title.textContent = slide.title;
+    // Путь до папки скана: виден у каждой половины и открывает её в каталоге (ИН-3)
+    const path = slide.path ?? [];
+    if (path.length) {
+      this.parts.path.hidden = false;
+      this.parts.path.textContent = path.map((folder) => folder.name).join(' › ');
+      this.parts.path.href = `/?folder=${path[path.length - 1].id}`;
+    }
     this.parts.stageRetry.addEventListener('click', () => location.reload());
     container.addEventListener('pointerdown', () => onActivate?.(this), true);
     // Крестик виден только в режиме сравнения: это решает viewer.js
@@ -82,7 +89,7 @@ export class SlideView {
       preserveImageSizeOnResize: true,
       animationTime: 0.5,
       zoomPerScroll: ZOOM_STEP,
-      timeout: 60000, // первый тайл большого слайда на медленном канале приходит не сразу
+      timeout: 60000, // первый тайл большого скана на медленном канале приходит не сразу
       // Не больше восьми тайлов в работе на половину экрана (СК-6): при быстром
       // перемещении сервер с двумя ядрами иначе дорабатывает тайлы, которые уже
       // ушли с экрана, и нужные ждут очереди

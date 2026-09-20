@@ -69,6 +69,12 @@ h1, h2 { margin: 0; font-weight: 600; }
 .btn-primary:hover:not(:disabled) { background: var(--brand-dark); }
 .btn-primary:disabled { background: var(--brand-tint); border-color: var(--brand-tint); color: #8a90b8; }
 .icon-btn { width: 26px; height: 26px; padding: 0; line-height: 1; font-size: 16px; }
+/* Кнопка со значком в верхней панели вьювера (В-1). Подпись остаётся только
+   там, где значок без неё не читается (В-3). */
+.btn-icon { padding: 0 8px; justify-content: center; }
+.btn-icon.btn-with-text { padding: 0 10px 0 8px; }
+.btn .icon { width: 19px; height: 19px; flex: none; display: block; }
+.btn:disabled .icon { opacity: 0.45; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 input[type="text"], input[type="password"], input[type="search"], input[type="number"], select {
@@ -102,7 +108,22 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .topbar-logo-link { display: inline-flex; flex: none; border-radius: var(--radius); }
 .topbar-title { font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 120px; }
-.topbar-actions { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.topbar-slide { display: flex; flex-direction: column; justify-content: center; gap: 1px; min-width: 0; flex: none; max-width: 30%; }
+.topbar-slide .topbar-title { min-width: 0; }
+.topbar-path, .pane-path {
+  font-size: 11px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-path:hover, .pane-path:hover { color: var(--brand); text-decoration: underline; }
+/* overflow не прячем: иначе меню «ещё» обрезается панелью. Лишние кнопки
+   убирает в меню layoutTopbar (В-4), а сами кнопки не сжимаются — иначе
+   ширину содержимого не измерить */
+.topbar-actions { display: flex; align-items: center; gap: 6px; flex: 1 1 auto; min-width: 0; }
+.topbar-actions > * { flex: none; }
 .topbar-user { display: flex; align-items: center; gap: 10px; flex: none; margin-left: auto; color: var(--muted); white-space: nowrap; }
 .topbar-user span { overflow: hidden; text-overflow: ellipsis; max-width: 200px; }
 .saved-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
@@ -123,6 +144,20 @@ input[type="range"] { accent-color: var(--accent); }
   box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
 }
 .popover input[type="text"] { width: 100%; }
+/* Меню «ещё»: кнопки, которым не хватило ширины панели (В-4) */
+.topbar-more { flex: none; margin-left: auto; }
+.popover-menu { width: auto; min-width: 180px; right: 0; left: auto; gap: 2px; padding: 6px; }
+.popover-menu .btn {
+  width: 100%;
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+  padding: 0 8px;
+}
+.popover-menu .btn:hover { background: #ececec; }
+/* В меню у кнопки появляется подпись: один значок в списке не читается */
+.popover-menu .btn::after { content: attr(data-label); font-size: 13px; }
+.popover-menu .btn-with-text::after { content: none; }
 .popover-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .check { display: flex; align-items: center; gap: 6px; }
 
@@ -199,7 +234,8 @@ input[type="range"] { accent-color: var(--accent); }
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
-.pane-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-path { flex: 1; min-width: 0; }
 .is-comparing .pane-head { display: flex; }
 /* В режиме сравнения у половин появляется заголовок: панель уходит под него */
 .is-comparing .zoom-panel { top: 38px; }
@@ -333,7 +369,6 @@ input[type="range"] { accent-color: var(--accent); }
   white-space: nowrap;
   overflow: hidden;
 }
-#statusCursor { min-width: 170px; font-variant-numeric: tabular-nums; }
 .status-tiles { margin-left: auto; }
 .status-tiles.is-error { color: var(--danger); }
 
@@ -389,10 +424,18 @@ input[type="range"] { accent-color: var(--accent); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tree-actions { display: none; gap: 2px; flex: none; }
-.tree-row:hover .tree-actions, .tree-row:focus-within .tree-actions { display: flex; }
+/* Кнопка «⋯» всегда видна у выбранной папки и появляется при наведении или
+   фокусе у остальных. На устройстве без мыши (планшет) видна всегда (ИН-7). */
+.tree-actions { display: none; gap: 2px; flex: none; position: relative; }
+.tree-row:hover .tree-actions,
+.tree-row:focus-within .tree-actions,
+.tree-row.is-current .tree-actions { display: flex; }
+@media (pointer: coarse) { .tree-actions { display: flex; } }
+.tree-actions .popover-menu { top: calc(100% + 4px); right: 0; left: auto; z-index: 30; }
 .tree-space { padding: 8px 12px 0; margin: 0; border-top: 1px solid var(--border); }
-.tree-space.is-warning { color: var(--danger); }
+.tree-space p { margin: 0; }
+.tree-space.is-warning, .tree-space .is-warning { color: var(--danger); }
+.tree-space .link-btn { margin-top: 4px; }
 
 .badge {
   flex: none;
@@ -555,6 +598,36 @@ input[type="range"] { accent-color: var(--accent); }
 .modal-section { display: grid; gap: 6px; padding-top: 6px; border-top: 1px solid var(--border); }
 .modal-section-title { margin: 0; font-weight: 600; font-size: 13px; }
 .modal-text { margin: 0; }
+.modal-subtitle { font-size: 13px; color: var(--muted); font-weight: 600; margin: 4px 0 0; }
+/* Пары «название — значение»: сведения о скане и горячие клавиши */
+.info-list {
+  display: grid;
+  grid-template-columns: minmax(90px, auto) 1fr;
+  gap: 4px 16px;
+  margin: 0;
+  font-size: 13px;
+}
+.info-list dt { color: var(--muted); }
+.info-list dd { margin: 0; }
+/* Список выбора: щелчок по строке сразу подтверждает выбор (ИН-17) */
+.choose-list { display: grid; gap: 2px; max-height: 50vh; overflow: auto; }
+.choose-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.choose-row:hover { background: var(--brand-tint); border-color: var(--brand); }
+.choose-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.choose-hint { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .modal-error { margin: 0; min-height: 18px; color: var(--danger); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #ffffff; }
@@ -577,6 +650,20 @@ input[type="range"] { accent-color: var(--accent); }
 .slide-card:hover { border-color: var(--accent); }
 .slide-card img { width: 100%; height: 150px; object-fit: contain; background: #fafafa; }
 .slide-card-title { font-weight: 600; }
+/* Путь до папки на карточке: виден в «Все папки» и в поиске (ИН-2) */
+.slide-card-path { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Папка закрыта для пользователей (ИН-8) */
+.closed-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: var(--brand-tint);
+  border: 1px solid var(--brand);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
 
 /* ---------- вход ---------- */
 

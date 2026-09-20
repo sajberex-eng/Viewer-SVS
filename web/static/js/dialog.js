@@ -119,6 +119,84 @@ export function confirmDialog({ title, text, submitLabel, danger = true }) {
   });
 }
 
+// Окно «только прочитать»: пары «название — значение» или разделы со списком
+// строк. Используется для сведений о скане (ИН-16) и горячих клавиш (ИН-9).
+export function infoDialog({ title, sections, closeLabel }) {
+  const nodes = [];
+  for (const section of sections) {
+    if (section.title) {
+      const heading = document.createElement('h3');
+      heading.className = 'modal-subtitle';
+      heading.textContent = section.title;
+      nodes.push(heading);
+    }
+    const list = document.createElement('dl');
+    list.className = 'info-list';
+    for (const [name, value] of section.rows) {
+      const term = document.createElement('dt');
+      term.textContent = name;
+      const description = document.createElement('dd');
+      description.textContent = value;
+      list.append(term, description);
+    }
+    nodes.push(list);
+  }
+  // Кнопка действия здесь не нужна: окно только показывает
+  const { dialog, form } = build(title, nodes, { submitLabel: closeLabel ?? t('common.close') });
+  form.querySelector('.modal-actions .btn:not(.btn-primary)')?.remove();
+  return new Promise((resolve) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      dialog.close('ok');
+    });
+    dialog.addEventListener('close', () => resolve());
+    show(dialog, dialog.querySelector('.btn-primary'));
+  });
+}
+
+// Выбор одной строки: щелчок сразу подтверждает выбор (ИН-17). Возвращает id
+// выбранной строки или null, если окно закрыли.
+export function chooseDialog({ title, hint, items }) {
+  const nodes = [];
+  if (hint) {
+    const text = document.createElement('p');
+    text.className = 'modal-text muted';
+    text.textContent = hint;
+    nodes.push(text);
+  }
+  const list = document.createElement('div');
+  list.className = 'choose-list';
+  nodes.push(list);
+  const { dialog, form } = build(title, nodes, { submitLabel: t('common.cancel') });
+  form.querySelector('.modal-actions')?.remove(); // закрывают крестиком или Esc
+
+  return new Promise((resolve) => {
+    let picked = null;
+    for (const item of items) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'choose-row';
+      const label = document.createElement('span');
+      label.className = 'choose-label';
+      label.textContent = item.label;
+      row.append(label);
+      if (item.hint) {
+        const hintNode = document.createElement('span');
+        hintNode.className = 'choose-hint';
+        hintNode.textContent = item.hint;
+        row.append(hintNode);
+      }
+      row.addEventListener('click', () => {
+        picked = item.id;
+        dialog.close('ok');
+      });
+      list.append(row);
+    }
+    dialog.addEventListener('close', () => resolve(picked));
+    show(dialog, list.firstElementChild);
+  });
+}
+
 // Окно со списком отметок: используется для доступа и состава группы.
 export function pickerDialog({ title, sections, submitLabel, onSubmit, onReady, extraNodes = [] }) {
   const boxes = new Map();

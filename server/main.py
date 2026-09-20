@@ -264,7 +264,6 @@ def create_app() -> FastAPI:
             "height": row["height"],
             "objective": row["objective"],
             "mpp": row["mpp"],
-            "size_bytes": row["size"],
             # Формат по расширению внутреннего ключа (SVS, KFB…): имени файла в нём нет
             "format": Path(row["key"]).suffix.lstrip(".").upper(),
             "has_label": bool(row["has_label"]),
@@ -273,6 +272,7 @@ def create_app() -> FastAPI:
         if user["role"] == "admin":
             info["original_name"] = row["original_name"]
             info["access_mode"] = row["access_mode"]
+            info["size_bytes"] = row["size"]  # врачу размер файла не нужен (ИН-11)
         return info
 
     def folder_summary(row, user) -> dict:
@@ -312,6 +312,16 @@ def create_app() -> FastAPI:
     @app.get("/login")
     def login_page():
         return page("login.html")
+
+    @app.get("/favicon.ico")
+    def favicon():
+        """Значок сайта (ИН-14): браузеры и закладки спрашивают его по этому адресу,
+        даже когда на странице указан свой. Отдаётся логотип Центра."""
+        return FileResponse(
+            WEB_DIR / "static" / "img" / "logo.svg",
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.get("/")
     def catalog_page(request: Request):
@@ -416,6 +426,15 @@ def create_app() -> FastAPI:
             "format": "jpg",
         }
         access = access_for(user)
+        # Путь до папки: во вьювере он показан рядом с названием и открывает
+        # эту папку в каталоге (ИН-3). Папки выше доступного скана пользователю
+        # видны по определению: они и делают скан достижимым.
+        names = {folder["id"]: folder["name"] for folder in catalog.folders()}
+        info["path"] = [
+            {"id": folder_id, "name": names[folder_id]}
+            for folder_id in access.ancestors(row["folder_id"])
+            if folder_id in names
+        ]
         info["siblings"] = [
             {"id": s["id"], "title": slide_title(s)}
             for s in catalog.slides(row["folder_id"])

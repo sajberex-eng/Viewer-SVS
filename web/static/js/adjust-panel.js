@@ -8,7 +8,7 @@ export function clampValues(values, base = DEFAULTS) {
   return Object.fromEntries(PARAMS.map((p) => [p.id, clampParam(p, Number(values[p.id] ?? base[p.id]))]));
 }
 
-// Настройки хранятся в браузере отдельно для пользователя и слайда (И-7).
+// Настройки хранятся в браузере отдельно для пользователя и скана (И-7).
 export function loadSavedValues(storageKey) {
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey));

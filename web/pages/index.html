@@ -29,7 +29,11 @@
         <button class="btn" id="btnNewFolder" hidden data-i18n="catalog.newFolder" data-i18n-tip="catalog.newFolder.tip"></button>
       </div>
       <ul class="tree" id="tree"></ul>
-      <p class="tree-space muted" id="space" hidden></p>
+      <div class="tree-space" hidden id="spaceBox">
+        <p class="muted" id="space"></p>
+        <!-- Сверка каталога с диском: файл мог пропасть после сбоя (КД-5) -->
+        <button class="link-btn" id="btnCheckStorage" hidden data-i18n="catalog.checkStorage" data-i18n-tip="catalog.checkStorage.tip"></button>
+      </div>
     </aside>
 
     <section class="catalog-main" id="dropZone">
@@ -41,6 +45,12 @@
         <input type="file" id="fileInput" multiple hidden>
       </div>
       <p class="catalog-note" id="note" aria-live="polite"></p>
+      <!-- Папка закрыта для пользователей: без этой строки администратор не
+           узнает, что загруженные сканы никто, кроме него, не видит (ИН-8) -->
+      <div class="closed-note" id="closedNote" hidden>
+        <span data-i18n="catalog.closedNote"></span>
+        <button class="btn" id="btnOpenAccess" data-i18n="catalog.openAccess"></button>
+      </div>
       <ul class="catalog-grid" id="grid"></ul>
       <div class="drop-hint" id="dropHint" hidden></div>
     </section>

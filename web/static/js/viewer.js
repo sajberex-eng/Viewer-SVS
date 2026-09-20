@@ -4,8 +4,9 @@
 import { isDefault } from './adjust.js';
 import { AdjustPanel } from './adjust-panel.js';
 import { api, logout } from './api.js';
-import { pickerDialog } from './dialog.js';
-import { applyI18n, formatNumber, setLanguage, t } from './i18n.js';
+import { chooseDialog, infoDialog } from './dialog.js';
+import { applyIcons } from './icons.js';
+import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.js';
 import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
 
 const PAN_STEP = 0.2; // доля видимой области на одно нажатие стрелки
@@ -26,6 +27,7 @@ let adjustPanel = null;
 let split = 50;
 
 setLanguage('ru');
+applyIcons();  // значки вставляются до подписей: подпись в кнопке остаётся своя (В-1)
 applyI18n();
 main();
 
@@ -119,6 +121,7 @@ function setActive(view) {
   active = view;
   for (const pane of panes) pane.setActive(panes.length > 1 && pane === view);
   $('slideTitle').textContent = view.slide.title;
+  showPath($('slidePath'), view.slide);  // путь в шапке — от активной половины (ИН-3)
   document.title = `${view.slide.title} · ${t('app.title')}`;
   adjustPanel.attachTo(view);
   $('adjustTarget').textContent = t('adjust.target', { title: view.slide.title });
@@ -202,7 +205,7 @@ function applyCompareLayout() {
   for (const pane of panes) {
     pane.setActive(comparing && pane === active);
     pane.parts.paneClose.hidden = !comparing;
-    pane.resize(); // у ещё не открытого слайда области просмотра нет
+    pane.resize(); // у ещё не открытого скана области просмотра нет
   }
 }
 
@@ -254,26 +257,19 @@ async function startCompare() {
   if (!options.length) return showNote(t('compare.nothingToCompare'));
 
   const folders = new Map(catalog.folders.map((row) => [row.id, row.name]));
-  const chosen = await pickerDialog({
+  // Щелчок по строке сразу открывает скан рядом: отмечать и подтверждать нечего (ИН-17)
+  const chosen = await chooseDialog({
     title: t('compare.pick'),
-    submitLabel: t('compare.open'),
-    sections: [{
-      name: 'slide',
-      items: options.map((row) => ({
-        id: row.id,
-        label: row.title,
-        hint: folders.get(row.folder_id) ?? '',
-        checked: false,
-      })),
-    }],
-    onSubmit: (values) => {
-      if (values.slide.length !== 1) throw new Error(t('compare.pickOne'));
-      return values;
-    },
+    hint: t('compare.pickHint'),
+    items: options.map((row) => ({
+      id: row.id,
+      label: row.title,
+      hint: folders.get(row.folder_id) ?? '',
+    })),
   });
   if (!chosen) return;
 
-  const slide = await loadSlide(String(chosen.slide[0]), { silent: true });
+  const slide = await loadSlide(String(chosen), { silent: true });
   if (!slide) return showNote(t('compare.noAccess'));
   const pane = addPane(slide);
   applyCompareLayout();
@@ -378,6 +374,28 @@ function initTopbar() {
   $('btnSingle').addEventListener('click', leaveCompare);
   $('btnSwap').addEventListener('click', swapPanes);
   $('btnLink2').addEventListener('click', () => setLinked(!linked));
+  $('btnInfo').addEventListener('click', showSlideInfo);
+  $('btnHelp').addEventListener('click', showHelp);
+
+  // Меню «ещё» (В-4)
+  const more = $('btnMore');
+  const moreMenu = $('morePopover');
+  more.addEventListener('click', () => {
+    moreMenu.hidden = !moreMenu.hidden;
+    more.setAttribute('aria-expanded', String(!moreMenu.hidden));
+  });
+  moreMenu.addEventListener('click', (event) => {
+    if (event.target.closest('button, a')) {
+      moreMenu.hidden = true;
+      more.setAttribute('aria-expanded', 'false');
+    }
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!moreMenu.hidden && !event.target.closest('#moreAnchor')) {
+      moreMenu.hidden = true;
+      more.setAttribute('aria-expanded', 'false');
+    }
+  });
   // «Применить к обеим» (С-9): настройки активной половины копируются
   // во вторую и сохраняются для её скана.
   $('adjustBoth').addEventListener('click', () => {
@@ -387,7 +405,9 @@ function initTopbar() {
   });
   addEventListener('resize', () => {
     if (panes.length > 1) for (const pane of panes) pane.resize();
+    layoutTopbar();
   });
+  layoutTopbar();
 
   // Ссылка доступна всем: открыть её сможет только тот, у кого есть доступ
   // к этим сканам, это проверяет сервер (Д-5).
@@ -436,13 +456,117 @@ function updateLabelButton() {
 function updateStatusBar() {
   if (!active) return;
   updateZoomPanel();
-  const { slide } = active;
-  $('statusSize').textContent = t('status.size', { w: formatNumber(slide.width), h: formatNumber(slide.height) });
-  $('statusMpp').textContent = slide.mpp ? t('status.mpp', { mpp: formatNumber(slide.mpp, 4) }) : t('status.mpp.unknown');
+  // В строке состояния остаётся то, что меняется на ходу: увеличение и
+  // состояние загрузки. Размеры и микрометры ушли в «Сведения о скане» (ИН-16).
   $('statusMag').textContent = t('status.mag', { mag: active.magnificationLabel() });
   const status = $('statusTiles');
   status.textContent = active.tilesStatus;
   status.classList.toggle('is-error', active.tilesFailed);
+}
+
+// Путь «2026-09-19 › Случай 01» рядом с названием скана. Щелчок открывает
+// эту папку в каталоге (ИН-3).
+function showPath(node, slide) {
+  const path = slide.path ?? [];
+  node.hidden = !path.length;
+  if (!path.length) return;
+  node.textContent = path.map((folder) => folder.name).join(' › ');
+  node.href = `/?folder=${path[path.length - 1].id}`;
+}
+
+// Сведения о скане (ИН-16): то, что нужно редко и не должно занимать строку
+// состояния. Размер файла и исходное имя показываются только администратору.
+function showSlideInfo() {
+  if (!active) return;
+  const { slide } = active;
+  const rows = [
+    [t('info.name'), slide.title],
+    [t('info.folder'), (slide.path ?? []).map((folder) => folder.name).join(' › ') || t('info.unknown')],
+    [t('info.size'), t('info.sizePx', { w: formatNumber(slide.width), h: formatNumber(slide.height) })],
+    [t('info.mpp'), slide.mpp ? t('info.mppValue', { mpp: formatNumber(slide.mpp, 4) }) : t('info.unknown')],
+    [t('info.objective'), slide.objective ? `${formatNumber(slide.objective, 1)}×` : t('info.unknown')],
+    [t('info.format'), slide.format || t('info.unknown')],
+    [t('info.added'), slide.added_at ? formatDateTime(slide.added_at) : t('info.unknown')],
+  ];
+  if (slide.size_bytes) rows.push([t('info.fileSize'), sizeText(slide.size_bytes)]);
+  if (slide.original_name) rows.push([t('info.fileName'), slide.original_name]);
+  infoDialog({ title: t('info.title'), sections: [{ rows }] });
+}
+
+function sizeText(bytes) {
+  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${formatNumber(value, unit >= 2 ? 1 : 0)} ${units[unit]}`;
+}
+
+// Окно справки по горячим клавишам (ИН-9): открывается кнопкой и клавишей «?».
+function showHelp() {
+  infoDialog({
+    title: t('help.title'),
+    sections: [
+      {
+        title: t('help.zoomGroup'),
+        rows: [
+          ['0', t('help.fit')],
+          ['1 … 5', t('help.fixed')],
+          ['+', t('help.zoomIn')],
+          ['−', t('help.zoomOut')],
+        ],
+      },
+      {
+        title: t('help.moveGroup'),
+        rows: [
+          ['← ↑ → ↓', t('help.arrows')],
+          ['Page Down / Page Up', t('help.pageKeys')],
+        ],
+      },
+      {
+        title: t('help.viewGroup'),
+        rows: [
+          ['R', t('help.reset')],
+          ['F', t('help.fullscreen')],
+          ['L', t('help.label')],
+          ['I', t('help.adjust')],
+          ['C', t('help.compare')],
+          ['Q', t('help.switchPane')],
+          ['S', t('help.info')],
+          ['?', t('help.help')],
+        ],
+      },
+    ],
+  });
+}
+
+// Кнопки, которым не хватило ширины, переезжают в меню «ещё» (В-4). Порядок
+// сохраняется: из панели уходит последняя видимая, возвращается первая в меню.
+function layoutTopbar() {
+  const actions = $('topbarActions');
+  const anchor = $('moreAnchor');
+  const menu = $('morePopover');
+  while (menu.firstElementChild) actions.insertBefore(menu.firstElementChild, anchor);
+  anchor.hidden = true;
+
+  const movable = () => [...actions.children].filter(
+    (node) => node !== anchor && !node.hidden && !(node.id === 'linkAnchor' && $('btnLink').hidden),
+  );
+  let guard = 0;
+  while (actions.scrollWidth > actions.clientWidth + 1 && guard < 20) {
+    const items = movable();
+    if (items.length <= 1) break;
+    anchor.hidden = false;
+    menu.prepend(items[items.length - 1]);
+    guard += 1;
+  }
+  if (!menu.firstElementChild) {
+    anchor.hidden = true;
+    menu.hidden = true;
+    $('btnMore').setAttribute('aria-expanded', 'false');
+  }
 }
 
 function showNote(text) {
@@ -527,11 +651,11 @@ function initSlidesPanel(slide) {
     const caption = document.createElement('span');
     caption.textContent = sibling.title;
     link.append(image, caption);
-    // В режиме сравнения щелчок заменяет скан в активной половине (С-10)
-    link.addEventListener('click', async (event) => {
-      if (panes.length < 2) return;
+    // Щелчок заменяет скан в активной половине: страница не перезагружается,
+    // настройки панелей и свёрнутый список остаются как были (С-10)
+    link.addEventListener('click', (event) => {
       event.preventDefault();
-      await replaceActive(sibling.id);
+      openInActive(sibling.id);
     });
     item.append(link);
     list.append(item);
@@ -560,16 +684,32 @@ async function replaceActive(slideId) {
   const slide = await loadSlide(slideId, { silent: true });
   if (!slide) return showNote(t('compare.noAccess'));
   const index = panes.indexOf(active);
-  const neighbour = panes[index ? 0 : 1];
+  const others = panes.filter((pane) => pane !== active); // при сравнении — соседняя половина
   active.destroy();
-  panes.splice(index, 1);
   const pane = addPane(slide);
   // Новая половина встаёт на своё место: слева или справа от разделителя
-  if (index === 0) $('panes').insertBefore(pane.element, $('splitter'));
+  if (index === 0 && others.length) $('panes').insertBefore(pane.element, $('splitter'));
   setLinked(false);
-  panes = index === 0 ? [pane, neighbour] : [neighbour, pane];
+  panes = index === 0 ? [pane, ...others] : [...others, pane];
   setActive(pane);
   applyCompareLayout();
+}
+
+// Следующий и предыдущий скан папки (ИН-10). В режиме сравнения меняется
+// только активная половина.
+function stepSlide(step) {
+  const list = active?.slide.siblings ?? [];
+  if (list.length < 2) return;
+  const index = list.findIndex((row) => row.id === active.slide.id);
+  if (index < 0) return;
+  const next = list[(index + step + list.length) % list.length];
+  if (next.id !== active.slide.id) replaceActive(next.id);
+}
+
+// Щелчок по скану в списке случая: в обычном режиме половина одна, и её
+// содержимое меняется так же, как в режиме сравнения (С-10).
+function openInActive(slideId) {
+  if (active?.slide.id !== slideId) replaceActive(slideId);
 }
 
 function markCurrentThumb() {
@@ -598,9 +738,17 @@ function initHotkeys() {
     ArrowDown: () => active?.panByFraction(0, 1, PAN_STEP),
     KeyF: toggleFullscreen,
     KeyR: () => forEachPane((pane) => pane.resetView()),
-    Tab: () => {
+    // Tab возвращён браузеру: им переходят по элементам страницы (ИН-15)
+    KeyQ: () => {
       if (panes.length > 1) setActive(panes[(panes.indexOf(active) + 1) % panes.length]);
     },
+    KeyL: () => $('btnLabel').hidden ? active?.toggleLabel?.() : $('btnLabel').click(),
+    KeyI: () => $('btnAdjust').click(),
+    KeyC: () => (panes.length > 1 ? leaveCompare() : startCompare()),
+    KeyS: showSlideInfo,
+    Slash: showHelp, // Shift+/ это «?»
+    PageDown: () => stepSlide(1),
+    PageUp: () => stepSlide(-1),
   };
   FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
     const action = () => zoomAllTo(magnification);
@@ -610,6 +758,7 @@ function initHotkeys() {
 
   document.addEventListener('keydown', (event) => {
     if (event.ctrlKey || event.altKey || event.metaKey || !active?.viewer.isOpen()) return;
+    if (document.querySelector('dialog[open]')) return; // в открытом окне клавиши принадлежат ему
     // В полях ввода клавиши принадлежат полю; у ползунков остаются только стрелки.
     if (event.target.closest('input:not([type=range], [type=checkbox]), select, textarea')) return;
     if (event.target.matches('input[type=range]') && event.code.startsWith('Arrow')) return;

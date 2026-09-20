@@ -10,21 +10,27 @@
 <body class="viewer-page">
   <header class="topbar">
     <a href="/" class="topbar-logo-link" data-i18n-tip="top.catalog.tip"><img class="topbar-logo" src="/static/img/logo.svg" alt=""></a>
-    <h1 class="topbar-title" id="slideTitle"></h1>
-    <nav class="topbar-actions">
-      <a class="btn" href="/" data-i18n="top.catalog" data-i18n-tip="top.catalog.tip"></a>
-      <button class="btn" id="btnCompare" data-i18n="top.compare" data-i18n-tip="top.compare.tip"></button>
-      <button class="btn" id="btnLink2" hidden data-i18n="compare.link" data-i18n-tip="compare.link.tip"></button>
-      <button class="btn" id="btnSwap" hidden data-i18n="compare.swap" data-i18n-tip="compare.swap.tip"></button>
-      <button class="btn" id="btnSingle" hidden data-i18n="compare.single" data-i18n-tip="compare.single.tip"></button>
-      <button class="btn" id="btnLabel" data-i18n="top.label" data-i18n-tip="top.label.tip"></button>
-      <button class="btn" id="btnAdjust" aria-expanded="false" aria-controls="adjustPanel" data-i18n-tip="top.adjust.tip">
-        <span data-i18n="top.adjust"></span><span class="saved-dot" id="adjustSavedDot" hidden data-i18n-tip="top.adjust.saved"></span>
+    <div class="topbar-slide">
+      <h1 class="topbar-title" id="slideTitle"></h1>
+      <!-- Путь до папки скана: щелчок открывает её в каталоге (ИН-3) -->
+      <a class="topbar-path" id="slidePath" hidden data-i18n-tip="top.path.tip"></a>
+    </div>
+    <nav class="topbar-actions" id="topbarActions">
+      <!-- Кнопки идут значками (В-1); полное название остаётся в подсказке и в
+           aria-label (В-5). Те, что не поместились, уходят в меню «ещё» (В-4) -->
+      <a class="btn btn-icon" href="/" data-icon="catalog" data-i18n-label="top.catalog" data-i18n-tip="top.catalog.tip"></a>
+      <button class="btn btn-icon btn-with-text" id="btnCompare" data-icon="compare" data-i18n-tip="top.compare.tip"><span data-i18n="top.compare"></span></button>
+      <button class="btn btn-icon" id="btnLink2" hidden data-icon="linkPanes" data-i18n-label="compare.link" data-i18n-tip="compare.link.tip"></button>
+      <button class="btn btn-icon" id="btnSwap" hidden data-icon="swap" data-i18n-label="compare.swap" data-i18n-tip="compare.swap.tip"></button>
+      <button class="btn btn-icon" id="btnSingle" hidden data-icon="single" data-i18n-label="compare.single" data-i18n-tip="compare.single.tip"></button>
+      <button class="btn btn-icon" id="btnLabel" data-icon="label" data-i18n-label="top.label" data-i18n-tip="top.label.tip"></button>
+      <button class="btn btn-icon" id="btnAdjust" aria-expanded="false" aria-controls="adjustPanel" data-icon="adjust" data-i18n-label="top.adjust" data-i18n-tip="top.adjust.tip">
+        <span class="saved-dot" id="adjustSavedDot" hidden data-i18n-tip="top.adjust.saved"></span>
       </button>
-      <button class="btn" id="btnReset" data-i18n="top.reset" data-i18n-tip="top.reset.tip"></button>
-      <button class="btn" id="btnFullscreen" data-i18n="top.fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
-      <div class="popover-anchor">
-        <button class="btn" id="btnLink" hidden aria-expanded="false" aria-controls="linkPopover" data-i18n="top.link" data-i18n-tip="top.link.tip"></button>
+      <button class="btn btn-icon" id="btnReset" data-icon="reset" data-i18n-label="top.reset" data-i18n-tip="top.reset.tip"></button>
+      <button class="btn btn-icon" id="btnFullscreen" data-icon="fullscreen" data-i18n-label="top.fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
+      <div class="popover-anchor" id="linkAnchor">
+        <button class="btn btn-icon" id="btnLink" hidden aria-expanded="false" aria-controls="linkPopover" data-icon="share" data-i18n-label="top.link" data-i18n-tip="top.link.tip"></button>
         <div class="popover" id="linkPopover" hidden>
           <input type="text" id="linkUrl" readonly aria-label="URL">
           <label class="check"><input type="checkbox" id="linkWithAdjust"> <span data-i18n="link.withAdjust"></span></label>
@@ -33,6 +39,13 @@
             <button class="btn btn-primary" id="linkCopy" data-i18n="link.copy"></button>
           </div>
         </div>
+      </div>
+      <button class="btn btn-icon" id="btnInfo" data-icon="info" data-i18n-label="top.info" data-i18n-tip="top.info.tip"></button>
+      <button class="btn btn-icon" id="btnHelp" data-icon="help" data-i18n-label="top.help" data-i18n-tip="top.help.tip"></button>
+      <!-- Кнопки, которым не хватило ширины, переезжают сюда (В-4) -->
+      <div class="popover-anchor topbar-more" id="moreAnchor" hidden>
+        <button class="btn btn-icon" id="btnMore" aria-expanded="false" aria-controls="morePopover" data-icon="more" data-i18n-label="top.more" data-i18n-tip="top.more.tip"></button>
+        <div class="popover popover-menu" id="morePopover" hidden></div>
       </div>
     </nav>
     <div class="topbar-user">
@@ -94,10 +107,7 @@
   </div>
 
   <footer class="statusbar">
-    <span id="statusSize"></span>
-    <span id="statusCursor"></span>
     <span id="statusMag"></span>
-    <span id="statusMpp"></span>
     <span class="status-tiles" id="statusTiles" aria-live="polite"></span>
   </footer>
 
@@ -105,6 +115,7 @@
     <section class="pane">
       <div class="pane-head">
         <span class="pane-title" data-role="title"></span>
+        <a class="pane-path" data-role="path" hidden data-i18n-tip="top.path.tip"></a>
         <output class="pane-zoom" data-role="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
         <button class="icon-btn" data-role="paneLabel" hidden data-i18n-tip="top.label.tip">🏷</button>
         <button class="icon-btn" data-role="paneClose" hidden data-i18n-tip="compare.close.tip">×</button>

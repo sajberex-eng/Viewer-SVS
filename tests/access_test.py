@@ -286,6 +286,44 @@ def main() -> None:
         check("в журнале есть изменение доступа", "access.change" in actions)
         check("в журнале нет имени файла", all("Иванов" not in str(row) for row in entries))
 
+        # ---------- перемещение папки (КД-4) ----------
+        moved = admin.post("/api/folders", json={"name": "Перенос", "parent_id": top}).json()["id"]
+        other = admin.post("/api/folders", json={"name": "2026-09-20"}).json()["id"]
+        make_slide("dddddddddddd", moved)
+
+        response = admin.patch(f"/api/folders/{moved}", json={"parent_id": other, "move": True})
+        check("папка переносится в другую папку", response.status_code == 200, f"({response.text[:60]})")
+        check("после переноса родитель сменился",
+              db.query_one("SELECT parent_id FROM folders WHERE id = ?", (moved,))["parent_id"] == other)
+        check("скан остался в перенесённой папке",
+              db.query_one("SELECT folder_id FROM slides WHERE id = 'dddddddddddd'")["folder_id"] == moved)
+        check("ссылка на скан после переноса работает", admin.get("/api/slides/dddddddddddd").status_code == 200)
+
+        into_self = admin.patch(f"/api/folders/{moved}", json={"parent_id": moved, "move": True})
+        check("папку нельзя перенести внутрь себя", into_self.status_code == 400, f"({into_self.text[:60]})")
+
+        inner_of_moved = admin.post("/api/folders", json={"name": "Внутренняя", "parent_id": moved}).json()["id"]
+        into_child = admin.patch(f"/api/folders/{moved}", json={"parent_id": inner_of_moved, "move": True})
+        check("папку нельзя перенести в свою же подпапку", into_child.status_code == 400)
+
+        to_root = admin.patch(f"/api/folders/{moved}", json={"parent_id": None, "move": True})
+        check("без своего режима доступа папка не выносится в корень",
+              to_root.status_code == 400 and "режим" in to_root.text, f"({to_root.text[:70]})")
+        admin.post("/api/access", json={"folder_id": moved, "mode": "admins"})
+        to_root = admin.patch(f"/api/folders/{moved}", json={"parent_id": None, "move": True})
+        check("со своим режимом доступа папка выносится в корень", to_root.status_code == 200)
+
+        # Глубина: в цепочку из пяти уровней двухуровневую ветку не вставить
+        deep_chain = admin.post("/api/folders", json={"name": "Глубина"}).json()["id"]
+        for level in range(2, 5):
+            deep_chain = admin.post("/api/folders", json={"name": f"Г{level}", "parent_id": deep_chain}).json()["id"]
+        too_deep = admin.patch(f"/api/folders/{moved}", json={"parent_id": deep_chain, "move": True})
+        check("перенос, который превысит пять уровней, отклоняется",
+              too_deep.status_code == 400, f"({too_deep.text[:70]})")
+
+        actions = [row["action"] for row in admin.get("/api/journal").json()]
+        check("перемещение папки записано в журнал", "folder.move" in actions)
+
         # ---------- вложенность и названия ----------
         deep = top
         for level in range(2, 7):

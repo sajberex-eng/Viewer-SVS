@@ -1,7 +1,7 @@
 // Каталог: дерево папок, карточки сканов, загрузка и права доступа.
 import { api, logout } from './api.js';
-import { confirmDialog, formDialog, pickerDialog } from './dialog.js';
-import { applyI18n, formatNumber, setLanguage, t } from './i18n.js';
+import { chooseDialog, confirmDialog, formDialog, pickerDialog } from './dialog.js';
+import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.js';
 import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile, sha256hex } from './upload.js';
 import { canRemember, forget, keepOnly, recall } from './filestore.js';
 
@@ -31,6 +31,14 @@ async function main() {
     setUpAdmin();
   }
   await load();
+  // Ссылка из вьювера открывает папку скана (ИН-3)
+  const wanted = Number(new URLSearchParams(location.search).get('folder'));
+  if (wanted && folderById(wanted)) {
+    currentFolder = wanted;
+    for (const folder of pathOf(wanted)) expanded.add(folder.id);
+    renderTree();
+    renderSlides();
+  }
   // После каталога: прерванным загрузкам нужны названия папок
   if (user.role === 'admin') await loadPending();
 }
@@ -132,15 +140,83 @@ function folderRow(folder, depth) {
   return row;
 }
 
+// Одна кнопка «⋯» вместо трёх значков по наведению: на планшете наведения нет,
+// а с мыши значки было трудно найти (ИН-7). Перемещение папки теперь тоже
+// отсюда (КД-4).
 function folderActions(folder) {
   const actions = document.createElement('span');
   actions.className = 'tree-actions';
-  actions.append(
-    iconAction('✎', t('catalog.rename'), () => renameFolder(folder)),
-    iconAction('🔒', t('catalog.access'), () => editAccess({ folder })),
-    iconAction('×', t('catalog.deleteFolder'), () => deleteFolder(folder), 'is-danger'),
-  );
+  const button = iconAction('⋯', t('catalog.folderMenu'), () => toggleFolderMenu(folder, actions));
+  button.setAttribute('aria-haspopup', 'true');
+  button.setAttribute('aria-expanded', 'false');
+  actions.append(button);
   return actions;
+}
+
+function toggleFolderMenu(folder, anchor) {
+  const open = anchor.querySelector('.popover-menu');
+  closeFolderMenu();
+  if (open) return;
+  const menu = document.createElement('div');
+  menu.className = 'popover popover-menu';
+  const item = (text, handler, extraClass = '') => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `btn ${extraClass}`;
+    button.textContent = text;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeFolderMenu();
+      handler();
+    });
+    return button;
+  };
+  menu.append(
+    item(t('catalog.rename'), () => renameFolder(folder)),
+    item(t('catalog.moveFolder'), () => moveFolder(folder)),
+    item(t('catalog.access'), () => editAccess({ folder })),
+    item(t('catalog.deleteFolder'), () => deleteFolder(folder), 'is-danger'),
+  );
+  anchor.append(menu);
+  anchor.querySelector('.icon-btn').setAttribute('aria-expanded', 'true');
+  menu.querySelector('.btn').focus();
+}
+
+function closeFolderMenu() {
+  for (const menu of document.querySelectorAll('.tree-actions .popover-menu')) {
+    menu.parentElement.querySelector('.icon-btn')?.setAttribute('aria-expanded', 'false');
+    menu.remove();
+  }
+}
+
+// Перемещение папки (КД-4). Список — все папки, кроме самой перемещаемой и
+// того, что внутри неё: сервер такой перенос всё равно отклонит.
+async function moveFolder(folder) {
+  const inside = descendants(folder.id);
+  const items = [{ id: 'root', label: t('catalog.root'), hint: '' }];
+  for (const candidate of folders.filter((row) => !inside.has(row.id)).sort(byName)) {
+    items.push({
+      id: String(candidate.id),
+      label: candidate.name,
+      hint: pathOf(candidate.parent_id).map((row) => row.name).join(' › '),
+    });
+  }
+  const chosen = await chooseDialog({
+    title: t('catalog.moveFolder.title', { name: folder.name }),
+    hint: t('catalog.moveFolder.hint', { name: folder.name }),
+    items,
+  });
+  if (chosen === null) return;
+  try {
+    await api(`/api/folders/${folder.id}`, {
+      method: 'PATCH',
+      body: { parent_id: chosen === 'root' ? null : Number(chosen), move: true },
+    });
+  } catch (error) {
+    return setNote(error.message, true); // глубина, папка внутрь себя, нет режима доступа
+  }
+  await load();
+  setNote(t('catalog.moveFolder.done')); // после обновления: иначе сообщение сразу стирается
 }
 
 function iconAction(glyph, tip, handler, extraClass = '') {
@@ -200,16 +276,39 @@ function renderSlides() {
   const list = visibleSlides();
   // Карточки пересоздаются, только если список действительно изменился: иначе
   // миниатюры перезапрашиваются и заметно мигают при каждом обновлении.
-  const signature = list.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}`).join('|');
+  // Путь показывается там, где папка не очевидна: в корне и в поиске (ИН-2)
+  const showPath = currentFolder === null || Boolean($('search').value.trim());
+  const signature = `${showPath}|${list.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}`).join('|')}`;
   if (signature !== shownSignature) {
     shownSignature = signature;
-    $('grid').replaceChildren(...list.map(card));
+    $('grid').replaceChildren(...list.map((slide) => card(slide, showPath)));
   }
   renderCrumbs();
+  renderClosedNote();
   if (list.length) setNote('');
   else if ($('search').value.trim()) setNote(t('catalog.nothingFound'));
   else if (!slides.length) setNote(user.role === 'admin' ? t('catalog.emptyAdmin') : t('catalog.empty'));
   else setNote(t('catalog.emptyFolder'));
+}
+
+// Действующий режим доступа папки: свой либо унаследованный от папки выше.
+function effectiveMode(folderId) {
+  for (const folder of [...pathOf(folderId)].reverse()) {
+    if (folder.access_mode) return folder.access_mode;
+  }
+  return 'admins';
+}
+
+// Пока папка закрыта, загруженные в неё сканы не видит никто, кроме
+// администраторов, и об этом ничто не напоминало (ИН-8).
+function renderClosedNote() {
+  const note = $('closedNote');
+  if (!note) return;
+  const show = user.role === 'admin'
+    && currentFolder !== null
+    && effectiveMode(currentFolder) === 'admins'
+    && slides.some((slide) => descendants(currentFolder).has(slide.folder_id));
+  note.hidden = !show;
 }
 
 function renderCrumbs() {
@@ -246,7 +345,9 @@ function sizeText(bytes) {
   return `${formatNumber(bytes / 1e3)} КБ`;
 }
 
-function card(slide) {
+// showPath: в виде «Все папки» и в результатах поиска два скана с одинаковым
+// названием различаются только папкой (ИН-2).
+function card(slide, showPath = false) {
   const item = document.createElement('li');
   item.className = 'slide-item';
 
@@ -265,12 +366,22 @@ function card(slide) {
 
   const details = document.createElement('span');
   details.className = 'muted';
-  // «H&E · KFB 40× · 432 МБ»: окраска, формат файла с увеличением сканирования, размер
+  // «H&E · SVS 40× · добавлен 20.09.2026»: окраска, увеличение, дата. Размер
+  // файла врачу не нужен и приходит только администратору (ИН-11).
   const objective = slide.objective ? `${formatNumber(slide.objective)}×` : '';
   const scan = [slide.format, objective].filter(Boolean).join(' ');
-  details.textContent = [slide.stain, scan, sizeText(slide.size_bytes)].filter(Boolean).join(' · ');
+  const added = slide.added_at ? t('catalog.addedAt', { date: formatDateTime(slide.added_at).split(',')[0] }) : '';
+  const size = slide.size_bytes ? sizeText(slide.size_bytes) : '';
+  details.textContent = [slide.stain, scan, added, size].filter(Boolean).join(' · ');
 
-  link.append(image, title, details);
+  link.append(image, title);
+  if (showPath) {
+    const path = document.createElement('span');
+    path.className = 'slide-card-path muted';
+    path.textContent = pathOf(slide.folder_id).map((folder) => folder.name).join(' › ');
+    link.append(path);
+  }
+  link.append(details);
   item.append(link);
   if (user.role === 'admin') item.append(slideMenu(slide));
   return item;
@@ -305,7 +416,7 @@ function setNote(text, isError = false) {
 function renderSpace() {
   if (!space) return;
   const node = $('space');
-  node.hidden = false;
+  $('spaceBox').hidden = false;
   const free = sizeText(space.free_bytes);
   const low = space.free_bytes < space.warn_below_bytes;
   node.textContent = low
@@ -318,6 +429,32 @@ function renderSpace() {
 
 function setUpAdmin() {
   $('btnNewFolder').addEventListener('click', createFolder);
+  $('btnOpenAccess').addEventListener('click', () => {
+    const folder = folderById(currentFolder);
+    if (folder) editAccess({ folder });
+  });
+  const check = $('btnCheckStorage');
+  check.hidden = false;
+  check.addEventListener('click', async () => {
+    check.disabled = true;
+    setNote(t('catalog.checkStorage.busy'));
+    try {
+      const result = await api('/api/storage/check', { method: 'POST' });
+      await load({ silent: true });
+      // Сообщение после обновления списка: renderSlides его иначе затирает
+      setNote(t('catalog.checkStorage.done', {
+        total: result.total, missing: result.missing,
+        restored: result.restored, orphan: result.orphan_files,
+      }), result.missing > 0);
+    } catch (error) {
+      setNote(error.message, true);
+    }
+    check.disabled = false;
+  });
+  // Меню папки закрывается щелчком мимо него
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('.tree-actions')) closeFolderMenu();
+  });
   $('btnAccess').addEventListener('click', () => {
     const folder = folderById(currentFolder);
     if (folder) editAccess({ folder });
@@ -466,12 +603,21 @@ async function editAccess({ folder, slide }) {
   modeRow.append(caption, select);
 
   const note = hintNode(t('access.adminsAlways'));
+  // Откуда взялся режим, если он не задан у самой папки (КД-7)
+  const inherited = [];
+  if (current.mode === null && current.inherited_from) {
+    const source = folderById(current.inherited_from);
+    inherited.push(hintNode(t('access.inheritedFrom', {
+      folder: source ? source.name : '—',
+      mode: t(`access.${current.inherited_mode ?? 'admins'}`),
+    })));
+  }
   // Списки нужны только в режиме «Выбранные»: в остальных они сбивают с толку
   const sectionsWrap = () => select.value === 'selected';
 
   const done = await pickerDialog({
     title: t('access.title', { name: folder ? folder.name : slide.title }),
-    extraNodes: [modeRow, note],
+    extraNodes: [modeRow, ...inherited, note],
     sections: [
       {
         name: 'groups',
