@@ -160,8 +160,7 @@ export class AnnotationLayer {
     const selected = item.id === this.selectedId;
     const mark = document.createElementNS(SVG_NS, 'g');
     mark.setAttribute('class', `annot-mark${colorClass(item)}${selected ? ' is-selected' : ''}`);
-    for (const [name, d] of [['annot-arrow-halo', ARROW_SHAFT], ['annot-arrow-shaft', ARROW_SHAFT],
-                             ['annot-arrow', ARROW_HEAD]]) {
+    for (const [name, d] of [['annot-arrow-shaft', ARROW_SHAFT], ['annot-arrow', ARROW_HEAD]]) {
       const part = document.createElementNS(SVG_NS, 'path');
       part.setAttribute('class', name);
       part.setAttribute('d', d);

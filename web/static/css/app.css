@@ -342,9 +342,8 @@ input[type="range"] { accent-color: var(--accent); }
 /* Слой лежит поверх препарата и пропускает мышь: ловят её только сами пометки */
 .annot-layer {
   /* Неоново-зелёный почти не встречается в окрашенных препаратах; красный —
-     на случай зелёной окраски. Тёмная обводка держит цвет и на светлом фоне. */
+     на случай зелёной окраски. Обводки нет: решение заказчика 2026-09-20. */
   --annot-color: #39ff14;
-  --annot-edge: #06210a;
   position: absolute;
   inset: 0;
   z-index: 6;
@@ -359,7 +358,7 @@ input[type="range"] { accent-color: var(--accent); }
   vector-effect: non-scaling-stroke;  /* толщина не растёт вместе с увеличением (А-6) */
   opacity: 0.95;
 }
-.annot-layer .is-red { --annot-color: #ff1744; --annot-edge: #2b0008; }
+.annot-layer .is-red { --annot-color: #ff1744; }
 .annot-layer .annot-line.is-draft { stroke-dasharray: 5 4; }
 .annot-layer .annot-hit {
   fill: none;
@@ -373,19 +372,12 @@ input[type="range"] { accent-color: var(--accent); }
 /* Указатель — стрелка: её вершина стоит на отмеченной точке, а древко уходит
    вверх-влево и не закрывает саму клетку (А-1, А-6) */
 .annot-layer .annot-mark { pointer-events: auto; cursor: pointer; }
-.annot-layer .annot-arrow { fill: var(--annot-color); stroke: var(--annot-edge); stroke-width: 0.5; stroke-linejoin: round; }
+.annot-layer .annot-arrow { fill: var(--annot-color); }
 .annot-layer .annot-arrow-shaft { stroke: var(--annot-color); stroke-width: 2.4; stroke-linecap: round; fill: none; }
-/* Тёмная подложка под древком — волосок по краю (решение заказчика 2026-09-20: обводка
-   почти не нужна): без неё яркий цвет сливается со светлым фоном стекла */
-.annot-layer .annot-arrow-halo { stroke: var(--annot-edge); stroke-width: 3.2; stroke-linecap: round; fill: none; }
 /* Номер аннотации: тот же, что в списке сбоку */
 .annot-layer .annot-number {
   font: 700 13px/1 system-ui, sans-serif;
   fill: var(--annot-color);
-  stroke: var(--annot-edge);
-  stroke-width: 1.4;
-  stroke-linejoin: round;
-  paint-order: stroke;
   user-select: none;
 }
 /* Выбранная аннотация цвет не меняет — вокруг неё белое свечение */
