@@ -353,6 +353,20 @@ def main() -> None:
               moved.status_code == 200 and moved.json()["points"] == [[300.0, 400.0]]
               and moved.json()["comment"] == "митоз, повтор", f"({moved.text[:70]})")
 
+        # Цвет: зелёный по умолчанию, красный на выбор; правка цвета не трогает остальное
+        check("новая аннотация неоново-зелёная", point.json()["color"] == "green", f"({point.json().get('color')})")
+        recolored = alice.patch(f"/api/annotations/{point_id}", json={"color": "red"})
+        check("автор перекрашивает аннотацию в красный",
+              recolored.status_code == 200 and recolored.json()["color"] == "red"
+              and recolored.json()["comment"] == "митоз, повтор" and recolored.json()["points"] == [[300.0, 400.0]],
+              f"({recolored.text[:70]})")
+        check("правка комментария цвет не сбрасывает",
+              alice.patch(f"/api/annotations/{point_id}", json={"comment": "митоз"}).json()["color"] == "red")
+        check("неизвестный цвет отклоняется",
+              alice.patch(f"/api/annotations/{point_id}", json={"color": "blue"}).status_code == 400)
+        check("порядок списка постоянный: по нему считаются номера",
+              [a["id"] for a in alice.get("/api/slides/aaaaaaaaaaaa/annotations").json()] == [point_id, polygon_id])
+
         # Чужую не тронуть: делаем второго патолога
         make_user("user-c")
         user_c_id = db.query_one("SELECT id FROM users WHERE login = 'user-c'")["id"]

@@ -59,6 +59,9 @@ export function formDialog({ title, fields, submitLabel, danger, onSubmit }) {
     if (field.type === 'textarea') {
       input = document.createElement('textarea');
       input.rows = field.rows ?? 3;
+    } else if (field.type === 'select') {
+      input = document.createElement('select');
+      for (const option of field.options) input.append(new Option(option.label, option.value));
     } else {
       input = document.createElement('input');
       input.type = field.type ?? 'text';

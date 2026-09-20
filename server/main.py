@@ -147,11 +147,13 @@ class AnnotationRequest(BaseModel):
     kind: str
     points: list[list[float]]
     comment: str = ""
+    color: str | None = None
 
 
 class AnnotationPatch(BaseModel):
     points: list[list[float]] | None = None
     comment: str | None = None
+    color: str | None = None
 
 
 def create_app() -> FastAPI:
@@ -536,7 +538,7 @@ def create_app() -> FastAPI:
         require_slide(slide_id, user)
         if not annotationsvc.can_annotate(db, user):
             raise HTTPException(403, "Размечать сканы могут патологи")
-        created = annotationsvc.create(db, slide_id, body.kind, body.points, body.comment, user)
+        created = annotationsvc.create(db, slide_id, body.kind, body.points, body.comment, user, body.color)
         audit.log(
             db, request, audit.ANNOTATION_CREATE, user=user, object_type="annotation",
             object_id=created["id"], detail=f"{body.kind}, скан {slide_id}",  # текст комментария не пишем (А-8)
@@ -548,7 +550,7 @@ def create_app() -> FastAPI:
         row = require_annotation(annotation_id, user)
         if not annotationsvc.can_annotate(db, user) or not annotationsvc.can_edit(row, user):
             raise HTTPException(403, "Чужую аннотацию изменить нельзя")
-        updated = annotationsvc.update(db, row, body.points, body.comment, user)
+        updated = annotationsvc.update(db, row, body.points, body.comment, user, body.color)
         audit.log(
             db, request, audit.ANNOTATION_UPDATE, user=user, object_type="annotation",
             object_id=annotation_id, detail=f"{row['kind']}, скан {row['slide_id']}",

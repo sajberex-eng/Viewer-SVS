@@ -14,7 +14,7 @@ import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Группы, которые заводятся при создании базы. Дальше администратор
 # сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
@@ -174,6 +174,7 @@ CREATE TABLE annotations (
     kind       TEXT NOT NULL CHECK (kind IN ('point', 'polygon')),
     points     TEXT NOT NULL,            -- JSON: [[x, y], ...] в пикселях скана
     comment    TEXT NOT NULL DEFAULT '',
+    color      TEXT NOT NULL DEFAULT 'green',  -- версия 5: 'green' или 'red', проверяет annotations.py
     author_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
     author     TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -366,7 +367,12 @@ class Database:
                         conn.execute("ALTER TABLE users DROP COLUMN must_change_password")
                         version = 3
                     if version == 3:
-                        conn.executescript(ANNOTATIONS_SCHEMA)
+                        conn.executescript(ANNOTATIONS_SCHEMA)  # таблица сразу с цветом
+                        version = 5
+                    if version == 4:
+                        # Цвет аннотации (решение заказчика 2026-09-20): прежние становятся зелёными
+                        conn.execute("ALTER TABLE annotations ADD COLUMN color TEXT NOT NULL DEFAULT 'green'")
+                        version = 5
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

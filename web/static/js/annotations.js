@@ -13,6 +13,8 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 // экранных точках: на любом увеличении стрелка одинаковая.
 const ARROW_HEAD = 'M0 0 L-11 -4 L-4 -11 Z';
 const ARROW_SHAFT = 'M-5.5 -5.5 L-17 -17';
+// Номер стоит у хвоста стрелки, правым краем к нему: клетку он не закрывает
+const NUMBER_AT = { x: -19, y: -20 };
 const HANDLE_SIZE = 9;   // ручка вершины при правке (А-14)
 const MIN_POLYGON = 3;
 
@@ -109,18 +111,19 @@ export class AnnotationLayer {
     this.screen.replaceChildren();
     this.marks.clear();
 
-    for (const item of this.items) {
-      if (item.kind === 'polygon') this.#drawPolygon(item);
-      else this.#drawPoint(item);
-    }
+    // Номер аннотации — её место в списке скана: тот же стоит в списке сбоку
+    this.items.forEach((item, index) => {
+      if (item.kind === 'polygon') this.#drawPolygon(item, index + 1);
+      else this.#drawPoint(item, index + 1);
+    });
     if (this.draft.length) this.#drawDraft();
     this.place();
   }
 
-  #drawPolygon(item) {
+  #drawPolygon(item, number) {
     const selected = item.id === this.selectedId;
     const group = document.createElementNS(SVG_NS, 'g');
-    group.setAttribute('class', `annot-shape${selected ? ' is-selected' : ''}`);
+    group.setAttribute('class', `annot-shape${colorClass(item)}${selected ? ' is-selected' : ''}`);
     // Широкая прозрачная линия — только чтобы по контуру было легко попасть
     const hit = document.createElementNS(SVG_NS, 'path');
     hit.setAttribute('class', 'annot-hit');
@@ -131,6 +134,14 @@ export class AnnotationLayer {
     group.append(hit, line);
     this.#bind(group, item);
     this.shapes.append(group);
+
+    // Номер контура — у его первой вершины, в экранных координатах
+    const label = document.createElementNS(SVG_NS, 'g');
+    label.setAttribute('class', `annot-mark${colorClass(item)}${selected ? ' is-selected' : ''}`);
+    label.append(numberNode(number, -6, -6));
+    this.#bind(label, item);
+    this.screen.append(label);
+    this.marks.set(label, item.points[0]);
 
     if (selected && item.can_edit) {
       item.points.forEach((point, index) => {
@@ -145,10 +156,10 @@ export class AnnotationLayer {
     }
   }
 
-  #drawPoint(item) {
+  #drawPoint(item, number) {
     const selected = item.id === this.selectedId;
     const mark = document.createElementNS(SVG_NS, 'g');
-    mark.setAttribute('class', `annot-mark${selected ? ' is-selected' : ''}`);
+    mark.setAttribute('class', `annot-mark${colorClass(item)}${selected ? ' is-selected' : ''}`);
     for (const [name, d] of [['annot-arrow-halo', ARROW_SHAFT], ['annot-arrow-shaft', ARROW_SHAFT],
                              ['annot-arrow', ARROW_HEAD]]) {
       const part = document.createElementNS(SVG_NS, 'path');
@@ -156,6 +167,7 @@ export class AnnotationLayer {
       part.setAttribute('d', d);
       mark.append(part);
     }
+    mark.append(numberNode(number, NUMBER_AT.x, NUMBER_AT.y));
     this.#bind(mark, item);
     if (selected && item.can_edit) this.#bindDrag(mark, item, 0);
     this.screen.append(mark);
@@ -224,7 +236,8 @@ export class AnnotationLayer {
   showTip(item, event) {
     if (!this.visible) return;
     const text = item.comment || t('annot.noComment');
-    this.tip.textContent = `${text} — ${item.author}`;
+    const number = this.items.indexOf(item) + 1;
+    this.tip.textContent = `${t('annot.number', { n: number })} ${text} — ${item.author}`;
     this.tip.hidden = false;
     // Подсказка не должна вылезать за край половины: у края она перескакивает
     // влево и вверх от указателя, иначе текст сжимается в столбец
@@ -300,6 +313,20 @@ export class AnnotationLayer {
     if (this.draft.length > MIN_POLYGON) this.draft.pop();
     this.closeDraft();
   }
+}
+
+function colorClass(item) {
+  return item.color === 'red' ? ' is-red' : '';
+}
+
+function numberNode(number, x, y) {
+  const text = document.createElementNS(SVG_NS, 'text');
+  text.setAttribute('class', 'annot-number');
+  text.setAttribute('x', x);
+  text.setAttribute('y', y);
+  text.setAttribute('text-anchor', 'end');
+  text.textContent = String(number);
+  return text;
 }
 
 // Контур замкнут (аннотация) или разомкнут (начатый черновик)

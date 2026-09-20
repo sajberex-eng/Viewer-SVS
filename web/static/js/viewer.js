@@ -738,17 +738,24 @@ async function saveGeometry(pane, item) {
 
 async function editComment(item) {
   const values = await formDialog({
-    title: t('annot.commentTitle'),
+    title: t('annot.editTitle'),
     submitLabel: t('annot.save'),
     fields: [{
       name: 'comment', label: t('annot.commentLabel'), type: 'textarea',
       hint: t('annot.commentHint'), maxLength: 1000, value: item.comment,
+    }, {
+      name: 'color', label: t('annot.colorLabel'), type: 'select', value: item.color,
+      hint: t('annot.colorHint'),
+      options: [
+        { value: 'green', label: t('annot.color.green') },
+        { value: 'red', label: t('annot.color.red') },
+      ],
     }],
   });
   if (values === null) return;
   try {
     await api(`/api/annotations/${encodeURIComponent(item.id)}`, {
-      method: 'PATCH', body: { comment: values.comment },
+      method: 'PATCH', body: { comment: values.comment, color: values.color },
     });
   } catch (error) {
     return showNote(error.message);
@@ -759,7 +766,10 @@ async function editComment(item) {
 async function removeAnnotation(item) {
   const ok = await confirmDialog({
     title: t('annot.deleteTitle'),
-    text: t('annot.deleteText', { name: item.comment || t('annot.noComment') }),
+    text: t('annot.deleteText', {
+      n: (active?.annotationItems ?? []).indexOf(item) + 1,
+      name: item.comment || t('annot.noComment'),
+    }),
     submitLabel: t('common.delete'),
   });
   if (!ok) return;
@@ -779,19 +789,23 @@ function renderAnnotationList() {
   const empty = $('annotEmpty');
   empty.hidden = Boolean(items.length);
   empty.textContent = annotationsShown ? t('annot.empty') : t('annot.emptyHidden');
-  list.replaceChildren(...items.map(annotationRow));
+  list.replaceChildren(...items.map((item, index) => annotationRow(item, index + 1)));
   updateAnnotationHint();
 }
 
-function annotationRow(item) {
+function annotationRow(item, number) {
   const row = document.createElement('li');
   row.className = 'annot-row';
   row.dataset.id = item.id;
   if (item.id === active?.annotations.selectedId) row.classList.add('is-selected');
 
+  // Тот же номер стоит на препарате рядом со стрелкой или контуром
+  const badge = document.createElement('span');
+  badge.className = `annot-row-number${item.color === 'red' ? ' is-red' : ''}`;
+  badge.textContent = String(number);
   const text = document.createElement('span');
   text.className = 'annot-row-text';
-  text.textContent = item.comment || t('annot.noComment');
+  text.append(badge, item.comment || t('annot.noComment'));
   const meta = document.createElement('span');
   meta.className = 'annot-row-meta';
   meta.textContent = `${t(`annot.kind.${item.kind}`)} · ${t('annot.byAuthor', {

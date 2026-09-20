@@ -341,6 +341,10 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* Слой лежит поверх препарата и пропускает мышь: ловят её только сами пометки */
 .annot-layer {
+  /* Неоново-зелёный почти не встречается в окрашенных препаратах; красный —
+     на случай зелёной окраски. Тёмная обводка держит цвет и на светлом фоне. */
+  --annot-color: #39ff14;
+  --annot-edge: #06210a;
   position: absolute;
   inset: 0;
   z-index: 6;
@@ -350,11 +354,12 @@ input[type="range"] { accent-color: var(--accent); }
 .annot-layer.is-hidden { display: none; }
 .annot-layer .annot-line {
   fill: none;
-  stroke: var(--brand-accent);
-  stroke-width: 1.6;
+  stroke: var(--annot-color);
+  stroke-width: 1.8;
   vector-effect: non-scaling-stroke;  /* толщина не растёт вместе с увеличением (А-6) */
-  opacity: 0.85;
+  opacity: 0.95;
 }
+.annot-layer .is-red { --annot-color: #ff1744; --annot-edge: #2b0008; }
 .annot-layer .annot-line.is-draft { stroke-dasharray: 5 4; }
 .annot-layer .annot-hit {
   fill: none;
@@ -364,16 +369,27 @@ input[type="range"] { accent-color: var(--accent); }
   pointer-events: stroke;
   cursor: pointer;
 }
-.annot-layer .annot-shape.is-selected .annot-line { stroke: var(--brand); stroke-width: 2.4; opacity: 1; }
+.annot-layer .annot-shape.is-selected .annot-line { stroke-width: 3; opacity: 1; }
 /* Указатель — стрелка: её вершина стоит на отмеченной точке, а древко уходит
    вверх-влево и не закрывает саму клетку (А-1, А-6) */
 .annot-layer .annot-mark { pointer-events: auto; cursor: pointer; }
-.annot-layer .annot-arrow { fill: var(--brand-accent); fill-opacity: 0.9; stroke: #ffffff; stroke-width: 1; }
-.annot-layer .annot-arrow-shaft { stroke: var(--brand-accent); stroke-width: 2.2; stroke-linecap: round; fill: none; }
-/* Белая подложка под древком: стрелка видна и на тёмном препарате */
-.annot-layer .annot-arrow-halo { stroke: #ffffff; stroke-width: 4.2; stroke-linecap: round; fill: none; opacity: 0.85; }
-.annot-layer .annot-mark.is-selected .annot-arrow { fill: var(--brand); }
-.annot-layer .annot-mark.is-selected .annot-arrow-shaft { stroke: var(--brand); }
+.annot-layer .annot-arrow { fill: var(--annot-color); stroke: var(--annot-edge); stroke-width: 1; stroke-linejoin: round; }
+.annot-layer .annot-arrow-shaft { stroke: var(--annot-color); stroke-width: 2.4; stroke-linecap: round; fill: none; }
+/* Тёмная подложка под древком: яркий цвет не сливается со светлым фоном стекла */
+.annot-layer .annot-arrow-halo { stroke: var(--annot-edge); stroke-width: 4.4; stroke-linecap: round; fill: none; }
+/* Номер аннотации: тот же, что в списке сбоку */
+.annot-layer .annot-number {
+  font: 700 13px/1 system-ui, sans-serif;
+  fill: var(--annot-color);
+  stroke: var(--annot-edge);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  user-select: none;
+}
+/* Выбранная аннотация цвет не меняет — вокруг неё белое свечение */
+.annot-layer .annot-mark.is-selected { filter: drop-shadow(0 0 2px #ffffff) drop-shadow(0 0 3px #ffffff); }
+.annot-layer .annot-mark.is-selected .annot-number { font-size: 15px; }
 .annot-layer .annot-dot { fill: var(--brand); stroke: #ffffff; stroke-width: 1.2; }
 .annot-layer .annot-handle {
   fill: #ffffff;
@@ -441,6 +457,20 @@ input[type="range"] { accent-color: var(--accent); }
 .annot-row:hover { background: #f5f5f7; }
 .annot-row.is-selected { border-color: var(--brand); background: var(--brand-tint); }
 .annot-row-text { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.annot-row-number {
+  display: inline-block;
+  min-width: 18px;
+  margin-right: 6px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: #06210a;
+  color: #39ff14;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+.annot-row-number.is-red { background: #2b0008; color: #ff5470; }
 .annot-row-meta { color: var(--muted); }
 .annot-row-actions { display: flex; gap: 8px; margin-top: 2px; }
 

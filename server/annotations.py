@@ -20,6 +20,9 @@ from .db import Database, utc_iso
 
 PATHOLOGISTS = "Патологи"  # группа, участники которой размечают сканы
 KINDS = ("point", "polygon")
+# Неоново-зелёный почти не встречается в окрашенных препаратах, поэтому он по
+# умолчанию; ярко-красный — на случай зелёной окраски (решение заказчика 2026-09-20)
+COLORS = ("green", "red")
 MAX_POINTS = 500  # разумный предел на контур: дальше это уже не разметка
 MAX_COMMENT = 1000
 MIN_POLYGON_POINTS = 3
@@ -80,6 +83,14 @@ def _clean_comment(comment: str | None) -> str:
     return text
 
 
+def _clean_color(color: str | None) -> str:
+    if color is None:
+        return COLORS[0]
+    if color not in COLORS:
+        raise AnnotationError("Неизвестный цвет аннотации")
+    return color
+
+
 def as_dict(row, user) -> dict:
     """Аннотация для страницы. `can_edit` считается здесь, чтобы у клиента не
     было своей копии правил и они не разошлись."""
@@ -88,6 +99,7 @@ def as_dict(row, user) -> dict:
         "kind": row["kind"],
         "points": json.loads(row["points"]),
         "comment": row["comment"],
+        "color": row["color"],
         "author": row["author"],
         "created_at": utc_iso(row["created_at"]),
         "updated_at": utc_iso(row["updated_at"]),
@@ -113,27 +125,30 @@ def get(db: Database, annotation_id: str):
     return db.query_one("SELECT * FROM annotations WHERE id = ?", (annotation_id,))
 
 
-def create(db: Database, slide_id: str, kind: str, points, comment: str | None, user) -> dict:
+def create(db: Database, slide_id: str, kind: str, points, comment: str | None, user,
+           color: str | None = None) -> dict:
     stored = _clean_points(kind, points)
     text = _clean_comment(comment)
+    shade = _clean_color(color)
     annotation_id = secrets.token_hex(6)
     db.execute(
         """
-        INSERT INTO annotations (id, slide_id, kind, points, comment, author_id, author)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO annotations (id, slide_id, kind, points, comment, color, author_id, author)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (annotation_id, slide_id, kind, stored, text, user["id"], user["login"]),
+        (annotation_id, slide_id, kind, stored, text, shade, user["id"], user["login"]),
     )
     return as_dict(get(db, annotation_id), user)
 
 
-def update(db: Database, row, points, comment: str | None, user) -> dict:
-    """Правка без перерисовки (А-14): двигаются вершины, меняется комментарий."""
+def update(db: Database, row, points, comment: str | None, user, color: str | None = None) -> dict:
+    """Правка без перерисовки (А-14): двигаются вершины, меняются комментарий и цвет."""
     stored = _clean_points(row["kind"], points) if points is not None else row["points"]
     text = _clean_comment(comment) if comment is not None else row["comment"]
+    shade = _clean_color(color) if color is not None else row["color"]
     db.execute(
-        "UPDATE annotations SET points = ?, comment = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (stored, text, row["id"]),
+        "UPDATE annotations SET points = ?, comment = ?, color = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (stored, text, shade, row["id"]),
     )
     return as_dict(get(db, row["id"]), user)
 
