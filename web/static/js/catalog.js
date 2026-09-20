@@ -2,7 +2,8 @@
 import { api, logout } from './api.js';
 import { confirmDialog, formDialog, pickerDialog } from './dialog.js';
 import { applyI18n, formatNumber, setLanguage, t } from './i18n.js';
-import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile } from './upload.js';
+import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile, sha256hex } from './upload.js';
+import { canRemember, forget, keepOnly, recall } from './filestore.js';
 
 const $ = (id) => document.getElementById(id);
 const MODES = ['admins', 'all', 'selected'];
@@ -322,9 +323,9 @@ function setUpAdmin() {
     if (folder) editAccess({ folder });
   });
   $('fileInput').accept = SLIDE_EXTENSIONS.join(',');
-  $('btnUpload').addEventListener('click', () => $('fileInput').click());
+  $('btnUpload').addEventListener('click', async () => enqueue(await pickFiles()));
   $('fileInput').addEventListener('change', (event) => {
-    enqueue([...event.target.files]);
+    enqueue([...event.target.files].map((file) => ({ file, handle: null })));
     event.target.value = '';
   });
   setUpDropZone();
@@ -516,18 +517,65 @@ async function editAccess({ folder, slide }) {
 
 const queue = new UploadQueue(renderUploads);
 
-function enqueue(files) {
-  const accepted = files.filter((file) => isSlideFile(file.name));
-  const rejected = files.filter((file) => !accepted.includes(file));
+// Окно выбора файлов. В Chrome и Edge берём File System Access API: он отдаёт
+// «ручку» файла, которую можно запомнить между сеансами (ЗГ-6). В остальных
+// браузерах — обычное поле выбора файла, как раньше (ЗГ-7).
+async function pickFiles({ multiple = true } = {}) {
+  if (typeof window.showOpenFilePicker !== 'function') {
+    return new Promise((resolve) => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.multiple = multiple;
+      input.accept = SLIDE_EXTENSIONS.join(',');
+      input.addEventListener('change', () => resolve([...input.files].map((file) => ({ file, handle: null }))));
+      input.addEventListener('cancel', () => resolve([]));
+      input.click();
+    });
+  }
+  let handles;
+  try {
+    handles = await window.showOpenFilePicker({
+      multiple,
+      types: [{ description: t('upload.fileKind'), accept: { '*/*': [...SLIDE_EXTENSIONS] } }],
+    });
+  } catch {
+    return []; // окно закрыли
+  }
+  return Promise.all(handles.map(async (handle) => ({ file: await handle.getFile(), handle })));
+}
+
+// picks это [{file, handle}]. Файл, совпадающий с прерванной загрузкой по имени
+// и размеру, докачивается в свою папку, а не в открытую сейчас (ЗГ-8).
+function enqueue(picks) {
+  const accepted = picks.filter(({ file }) => isSlideFile(file.name));
+  const rejected = picks.filter((pick) => !accepted.includes(pick));
   if (rejected.length) {
-    setNote(t('upload.wrongFormat', { names: rejected.map((f) => f.name).join(', '), formats: SLIDE_EXTENSIONS.join(' ') }), true);
+    setNote(t('upload.wrongFormat', {
+      names: rejected.map(({ file }) => file.name).join(', '),
+      formats: SLIDE_EXTENSIONS.join(' '),
+    }), true);
   }
   if (!accepted.length) return;
+
+  const fresh = [];
+  for (const pick of accepted) {
+    const state = pending.find((row) => row.original_name === pick.file.name && row.size === pick.file.size);
+    if (state) {
+      pending = pending.filter((row) => row.id !== state.id); // два одинаковых файла найдут разные загрузки
+      resumeWith(state, pick);
+    } else {
+      fresh.push(pick);
+    }
+  }
+  if (!fresh.length) {
+    renderUploads(queue.tasks);
+    return;
+  }
   if (currentFolder === null) {
     setNote(t('catalog.selectFolder'), true);
     return;
   }
-  queue.add(accepted, currentFolder);
+  queue.add(fresh, currentFolder);
 }
 
 function setUpDropZone() {
@@ -555,16 +603,41 @@ function setUpDropZone() {
     event.preventDefault();
     depth = 0;
     $('dropHint').hidden = true;
-    enqueue([...event.dataTransfer.files]);
+    // Ручки файлов надо запросить прямо сейчас: после первого await список
+    // items уже пуст. Поэтому сначала синхронно, разбор — потом.
+    const files = [...event.dataTransfer.files];
+    const handles = handlesFromDrop(event.dataTransfer);
+    dropped(files, handles);
   });
+}
+
+function handlesFromDrop(transfer) {
+  if (!canRemember) return null;
+  const items = [...transfer.items].filter((item) => item.kind === 'file');
+  if (!items.length || typeof items[0].getAsFileSystemHandle !== 'function') return null;
+  return items.map((item) => item.getAsFileSystemHandle().catch(() => null));
+}
+
+async function dropped(files, handles) {
+  let picks = files.map((file) => ({ file, handle: null }));
+  if (handles) {
+    const ready = await Promise.all(handles);
+    // Хотя бы одна ручка не получена (папка, особый источник) — берём обычные
+    // файлы: без ручки загрузка просто не переживёт перезапуск браузера
+    if (ready.length === files.length && ready.every((handle) => handle?.kind === 'file')) {
+      picks = await Promise.all(ready.map(async (handle) => ({ file: await handle.getFile(), handle })));
+    }
+  }
+  enqueue(picks);
 }
 
 function setUpUploads() {
   $('btnClearUploads').addEventListener('click', () => queue.clearFinished());
 }
 
-// Прерванные загрузки прошлого сеанса: сервер помнит принятые части, но файл
-// заново выбирает человек — браузер не может открыть его с диска сам.
+// Прерванные загрузки прошлого сеанса: сервер помнит принятые части. В Chrome
+// и Edge браузер помнит и сам файл (ЗГ-6), в остальных браузерах его выбирает
+// человек (ЗГ-7). Продолжить может любой администратор, не только начавший (ЗГ-4).
 let pending = [];
 
 async function loadPending() {
@@ -573,25 +646,114 @@ async function loadPending() {
   } catch {
     pending = [];
   }
+  if (canRemember) {
+    await keepOnly(pending.map((row) => row.id)); // записи о завершённых загрузках не копятся
+    for (const row of pending) {
+      const saved = await recall(row.id);
+      // Ручка годится, только если это тот же файл: иначе пусть выбирают заново
+      row.handle = saved && saved.name === row.original_name && saved.size === row.size ? saved.handle : null;
+    }
+  }
   renderUploads(queue.tasks);
 }
 
-function resumeUpload(state) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = SLIDE_EXTENSIONS.join(',');
-  input.addEventListener('change', () => {
-    const file = input.files[0];
-    if (!file) return;
-    if (file.name !== state.original_name || file.size !== state.size) {
-      setNote(t('upload.wrongFile', { name: state.original_name }), true);
-      return;
+// Тот ли это файл (ЗГ-5): последняя принятая часть сверяется с тем же участком
+// выбранного файла. Имя и размер могут совпасть у двух разных сканов, а
+// дописывать чужие байты нельзя — получится испорченный файл.
+async function sameFile(state, file) {
+  if (file.name !== state.original_name || file.size !== state.size) return false;
+  let received = state.received;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const length = Math.min(state.part_size, received);
+    if (!length) return true; // принятого нет, сверять нечего
+    let checksum;
+    try {
+      checksum = await sha256hex(await file.slice(received - length, received).arrayBuffer());
+    } catch {
+      return false; // файл не читается
     }
-    setNote('');
-    pending = pending.filter((row) => row.id !== state.id);
-    queue.add([file], state.folder_id, state.received);
+    if (!checksum) return true; // без Web Crypto (сайт не по HTTPS) сверить нечем
+    const answer = await api(`/api/uploads/${state.id}/verify`, { method: 'POST', body: { checksum } });
+    if (answer.match) return true;
+    if (answer.received === received) return false;
+    received = answer.received; // наши сведения устарели: считаем по свежим
+  }
+  return false;
+}
+
+// Продолжить загрузку выбранным файлом.
+async function resumeWith(state, pick) {
+  pending = pending.filter((row) => row.id !== state.id);
+  renderUploads(queue.tasks);
+  let ok = false;
+  try {
+    ok = await sameFile(state, pick.file);
+  } catch (error) {
+    setNote(error.message, true);
+  }
+  if (!ok) {
+    await offerRestart(state, pick);
+    return;
+  }
+  setNote('');
+  queue.add([pick], state.folder_id, state.received);
+}
+
+// Выбран файл с тем же именем и размером, но другим содержимым: либо начинаем
+// этот файл с нуля, либо оставляем прерванную загрузку ждать нужный файл.
+async function offerRestart(state, pick) {
+  const restart = await confirmDialog({
+    title: t('upload.mismatchTitle'),
+    text: t('upload.mismatchText', { name: state.original_name }),
+    submitLabel: t('upload.restart'),
+    danger: true,
   });
-  input.click();
+  if (!restart) {
+    await loadPending();
+    return;
+  }
+  try {
+    await api(`/api/uploads/${state.id}`, { method: 'DELETE' });
+  } catch { /* её могли уже удалить */ }
+  forget(state.id);
+  setNote('');
+  queue.add([pick], state.folder_id);
+  await loadPending();
+}
+
+// Кнопка «Продолжить» у прерванной загрузки.
+async function resumeUpload(state) {
+  if (state.handle) {
+    // Разрешение спрашивается прямо в обработчике нажатия: браузер требует
+    // действия человека. Окно выбора файла при этом не открывается (ЗГ-6).
+    let granted = 'prompt';
+    try {
+      granted = await state.handle.queryPermission({ mode: 'read' });
+      if (granted !== 'granted') granted = await state.handle.requestPermission({ mode: 'read' });
+    } catch {
+      granted = 'denied';
+    }
+    if (granted === 'granted') {
+      try {
+        const file = await state.handle.getFile();
+        await resumeWith(state, { file, handle: state.handle });
+        return;
+      } catch { /* файл переименовали, удалили или диск отключён */ }
+    }
+    forget(state.id);
+    state.handle = null;
+    setNote(t('upload.fileGone', { name: state.original_name }), true);
+    renderUploads(queue.tasks);
+    return;
+  }
+  const picks = await pickFiles({ multiple: false });
+  if (!picks.length) return;
+  if (picks[0].file.name !== state.original_name || picks[0].file.size !== state.size) {
+    setNote(t('upload.wrongFile', { name: state.original_name }), true);
+    return;
+  }
+  setNote('');
+  await resumeWith(state, picks[0]);
 }
 
 async function dropPending(state) {
@@ -602,6 +764,7 @@ async function dropPending(state) {
   });
   if (!ok) return;
   await api(`/api/uploads/${state.id}`, { method: 'DELETE' });
+  forget(state.id);
   pending = pending.filter((row) => row.id !== state.id);
   renderUploads(queue.tasks);
   await load();
@@ -670,8 +833,10 @@ function emptyRow() {
 function pendingRow(state) {
   const item = emptyRow();
   item.classList.add('is-paused');
+  const resume = actionButton(t('upload.resume'), () => resumeUpload(state));
+  resume.dataset.role = 'resume';
   item.querySelector('.upload-actions').append(
-    actionButton(t('upload.resume'), () => resumeUpload(state)),
+    resume,
     actionButton(t('common.delete'), () => dropPending(state), 'is-danger'),
   );
   return item;
@@ -688,6 +853,10 @@ function fillPending(row, state) {
     done,
     left: sizeText(state.size - state.received),
   });
+  // Подсказка: помнит ли браузер сам файл или его нужно выбрать (ЗГ-6, ЗГ-7)
+  row.querySelector('[data-role="resume"]').title = state.handle
+    ? t('upload.resumeRemembered', { name: state.original_name })
+    : t('upload.resumePick', { name: state.original_name });
 }
 
 function uploadRow(task) {

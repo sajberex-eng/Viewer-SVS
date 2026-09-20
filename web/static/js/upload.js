@@ -1,6 +1,7 @@
 // Загрузка сканов частями с докачкой. Одновременно передаются два файла (ТЗ Х-6),
 // остальные ждут в очереди: канал у администратора один, а сервер слабый.
 import { ApiError, api } from './api.js';
+import { forget, remember } from './filestore.js';
 import { t } from './i18n.js';
 
 // Однофайловые форматы сканов; тот же список на сервере (storage.SLIDE_EXTENSIONS)
@@ -21,7 +22,7 @@ const TEMPORARY = new Set([0, 408, 429, 500, 502, 503, 504]);
 // Контрольная сумма части (ТЗ Х-5). Web Crypto доступен только в защищённом
 // контексте: по HTTPS и на localhost. Если его нет, часть уходит без суммы,
 // целостность файла всё равно проверяется при открытии скана.
-async function sha256hex(buffer) {
+export async function sha256hex(buffer) {
   if (!crypto?.subtle) return null;
   const digest = await crypto.subtle.digest('SHA-256', buffer);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -75,8 +76,11 @@ async function request(path, { method = 'POST', body, headers } = {}) {
 }
 
 class Task {
-  constructor(file, folderId, queue, startedAt = 0) {
-    this.file = file;
+  // pick это {file, handle}: ручка есть только в Chrome и Edge и нужна, чтобы
+  // после перезапуска браузера не выбирать файл заново (ЗГ-6)
+  constructor(pick, folderId, queue, startedAt = 0) {
+    this.file = pick.file ?? pick;
+    this.handle = pick.handle ?? null;
     this.folderId = folderId;
     this.queue = queue;
     this.id = `t${Date.now()}${Math.random().toString(16).slice(2, 8)}`;
@@ -94,7 +98,10 @@ class Task {
   cancel() {
     this.cancelled = true;
     this.status = 'canceled';
-    if (this.uploadId) api(`/api/uploads/${this.uploadId}`, { method: 'DELETE' }).catch(() => {});
+    if (this.uploadId) {
+      api(`/api/uploads/${this.uploadId}`, { method: 'DELETE' }).catch(() => {});
+      forget(this.uploadId);
+    }
     this.queue.changed();
   }
 
@@ -126,6 +133,7 @@ class Task {
         }
       }
       this.status = 'done';
+      forget(this.uploadId); // файл догружен, помнить его больше незачем
     } catch (error) {
       if (this.cancelled) return;
       this.status = 'error';
@@ -143,6 +151,9 @@ class Task {
     });
     this.uploadId = state.id;
     this.sent = state.received;
+    // Ручка файла запоминается сразу: если браузер закроют через минуту,
+    // загрузка продолжится без выбора файла (ЗГ-6)
+    if (this.handle) remember(state.id, this.handle, { name: this.file.name, size: this.file.size });
     return state.part_size;
   }
 
@@ -212,24 +223,60 @@ export class UploadQueue {
     this.tasks = [];
     this.onChange = onChange;
     this.running = 0;
+    this.wakeLock = null;
+    this.wakeDenied = false; // браузер отказал: не просить снова до следующей загрузки
     // Уход со страницы обрывает загрузку: браузер переспрашивает (ЗГ-3)
     addEventListener('beforeunload', (event) => {
       if (!this.active.length) return;
       event.preventDefault();
       event.returnValue = ''; // старые браузеры задают вопрос только так
     });
+    // Система могла усыпить компьютер, пока вкладка была свёрнута: после
+    // возвращения замок берётся заново (ЗГ-9)
+    addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      this.wakeDenied = false; // на видимой вкладке замок обычно дают
+      this.keepAwake();
+    });
   }
 
   changed() {
+    this.keepAwake();
     this.onChange(this.tasks);
+  }
+
+  // Пока идёт загрузка, просим систему не засыпать. Браузер вправе отказать
+  // (Firefox, Safari, вкладка в фоне) — это не ошибка, загрузка идёт как шла.
+  async keepAwake() {
+    if (!navigator.wakeLock) return;
+    const needed = this.active.length > 0;
+    if (needed && !this.wakeLock && !this.wakeDenied && document.visibilityState === 'visible') {
+      try {
+        this.wakeLock = await navigator.wakeLock.request('screen');
+        this.wakeLock.addEventListener('release', () => { this.wakeLock = null; });
+      } catch {
+        // Отказ — не ошибка: просто не просим снова на каждую принятую часть
+        this.wakeLock = null;
+        this.wakeDenied = true;
+      }
+    } else if (!needed) {
+      this.wakeDenied = false;
+      if (this.wakeLock) {
+        try {
+          await this.wakeLock.release();
+        } catch { /* уже отпущен системой */ }
+        this.wakeLock = null;
+      }
+    }
   }
 
   get active() {
     return this.tasks.filter((task) => task.status === 'waiting' || task.status === 'running');
   }
 
-  add(files, folderId, startedAt = 0) {
-    for (const file of files) this.tasks.push(new Task(file, folderId, this, startedAt));
+  // picks это File или {file, handle}
+  add(picks, folderId, startedAt = 0) {
+    for (const pick of picks) this.tasks.push(new Task(pick, folderId, this, startedAt));
     this.changed();
     this.pump();
   }

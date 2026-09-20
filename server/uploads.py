@@ -68,18 +68,21 @@ class Uploads:
     def _path(self, upload_id: str) -> Path:
         return self._dir / f"{upload_id}.part"
 
-    def _row(self, upload_id: str, user):
+    def _row(self, upload_id: str):
+        """Загрузка по идентификатору.
+
+        Чужую загрузку продолжает любой администратор (ЗГ-4): человек, начавший
+        её, может уйти в отпуск, а файл на 80 % занимает место на диске. Кто
+        продолжил — видно в журнале.
+        """
         row = self._db.query_one("SELECT * FROM uploads WHERE id = ?", (upload_id,))
         if row is None:
             raise UploadError("Загрузка не найдена: возможно, она была отменена", 404)
-        if row["user_id"] != user["id"]:
-            raise UploadError("Эту загрузку начал другой администратор", 403)
         return row
 
-    def pending(self, user) -> list[dict]:
-        rows = self._db.query(
-            "SELECT * FROM uploads WHERE user_id = ? ORDER BY started_at", (user["id"],)
-        )
+    def pending(self, user=None) -> list[dict]:
+        """Все незавершённые загрузки: маршрут доступен только администраторам."""
+        rows = self._db.query("SELECT * FROM uploads ORDER BY started_at")
         return [
             UploadState(r["id"], r["folder_id"], r["original_name"], r["size"], r["received"]).as_dict()
             for r in rows
@@ -98,10 +101,12 @@ class Uploads:
         if self._catalog.folder(folder_id) is None:
             raise UploadError("Папка не найдена")
 
-        # Повторное начало той же загрузки — это докачка после обрыва связи
+        # Повторное начало той же загрузки — это докачка после обрыва связи.
+        # Начавший её администратор не важен (ЗГ-4): файл опознаётся по папке,
+        # имени и размеру.
         existing = self._db.query_one(
-            "SELECT * FROM uploads WHERE user_id = ? AND folder_id = ? AND original_name = ? AND size = ?",
-            (user["id"], folder_id, name, size),
+            "SELECT * FROM uploads WHERE folder_id = ? AND original_name = ? AND size = ?",
+            (folder_id, name, size),
         )
         if existing is not None:
             received = self._actual_size(existing["id"])
@@ -109,7 +114,10 @@ class Uploads:
                 "UPDATE uploads SET received = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (received, existing["id"]),
             )
-            return UploadState(existing["id"], folder_id, name, size, received).as_dict()
+            state = UploadState(existing["id"], folder_id, name, size, received).as_dict()
+            # Для журнала: продолжает не тот, кто начинал
+            state["started_by"] = existing["user_id"] if existing["user_id"] != user["id"] else None
+            return state
 
         try:
             self._storage.check_can_accept(size + self._reserved_by_queue())
@@ -133,8 +141,28 @@ class Uploads:
         path = self._path(upload_id)
         return path.stat().st_size if path.exists() else 0
 
+    def verify_tail(self, upload_id: str, checksum: str) -> dict:
+        """Сверяет последнюю принятую часть с тем же участком выбранного файла (ЗГ-5).
+
+        После перезапуска браузера человек выбирает файл заново, и это может
+        оказаться другой файл с тем же именем и размером. Дописывать к нему
+        нельзя: получится мусор, который откроется как испорченный скан.
+        Сравнивается хвост длиной в одну часть — этого достаточно, а читать
+        гигабайты ради проверки незачем.
+        """
+        self._row(upload_id)
+        received = self._actual_size(upload_id)
+        length = min(PART_SIZE, received)
+        if not length:  # принятого нет: сверять нечего, файл пишется с начала
+            return {"received": 0, "length": 0, "match": True}
+        digest = hashlib.sha256()
+        with self._path(upload_id).open("rb") as handle:
+            handle.seek(received - length)
+            digest.update(handle.read(length))
+        return {"received": received, "length": length, "match": digest.hexdigest() == checksum}
+
     def accept_part(self, upload_id: str, offset: int, data: bytes, checksum: str | None, user) -> dict:
-        row = self._row(upload_id, user)
+        row = self._row(upload_id)
         path = self._path(upload_id)
         received = self._actual_size(upload_id)
         if offset != received:
@@ -156,7 +184,7 @@ class Uploads:
 
     def complete(self, upload_id: str, user) -> str:
         """Проверяет принятый файл и добавляет его в каталог. Возвращает id скана."""
-        row = self._row(upload_id, user)
+        row = self._row(upload_id)
         path = self._path(upload_id)
         received = self._actual_size(upload_id)
         if received != row["size"]:
@@ -189,8 +217,8 @@ class Uploads:
         self._forget(upload_id)
         return slide_id
 
-    def cancel(self, upload_id: str, user) -> None:
-        self._row(upload_id, user)
+    def cancel(self, upload_id: str, user=None) -> None:
+        self._row(upload_id)
         self._forget(upload_id)
 
     def _forget(self, upload_id: str) -> None:

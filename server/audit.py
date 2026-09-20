@@ -34,6 +34,7 @@ GROUP_RENAME = "group.rename"
 GROUP_MEMBERS = "group.members"
 GROUP_DELETE = "group.delete"
 UPLOAD_START = "upload.start"
+UPLOAD_RESUME = "upload.resume"  # прерванную загрузку продолжил другой администратор (ЗГ-4)
 
 
 def client_ip(request: Request) -> str:

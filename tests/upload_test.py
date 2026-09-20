@@ -139,6 +139,45 @@ def main() -> None:
         check("принятый файл на диске лежит во временной папке",
               [p.name for p in uploads_dir.glob("*.part")] == [f"{upload_id}.part"])
 
+        # ---------- этап 6: тот ли это файл и кто продолжает ----------
+        part_size = resumed["part_size"]
+        received = len(payload)
+        tail = min(part_size, received)
+        good = hashlib.sha256(payload[received - tail : received]).hexdigest()
+        answer = admin.post(f"/api/uploads/{upload_id}/verify", json={"checksum": good}).json()
+        check("сверка последней части: тот же файл опознан (ЗГ-5)",
+              answer["match"] is True and answer["received"] == received, f"({answer})")
+        answer = admin.post(f"/api/uploads/{upload_id}/verify", json={"checksum": "0" * 64}).json()
+        check("сверка последней части: другой файл отклонён (ЗГ-5)", answer["match"] is False)
+        check("сверка чужой загрузкой недоступна пользователю",
+              alice.post(f"/api/uploads/{upload_id}/verify", json={"checksum": good}).status_code == 403)
+        check("сверка несуществующей загрузки: 404",
+              admin.post("/api/uploads/нет-такой/verify", json={"checksum": good}).status_code == 404)
+
+        # ЗГ-4: прерванную загрузку продолжает любой администратор, в журнал
+        # пишется, кто именно
+        make_user("admin-two", "admin")
+        second = TestClient(app)
+        login(second, "admin-two")
+        check("другой администратор видит прерванную загрузку",
+              upload_id in [u["id"] for u in second.get("/api/uploads").json()])
+        takeover = second.post("/api/uploads", json=body)
+        check("другой администратор продолжает чужую загрузку (ЗГ-4)",
+              takeover.status_code == 200 and takeover.json()["id"] == upload_id,
+              f"({takeover.text[:60]})")
+        check("в ответе нет служебной пометки о том, кто начинал",
+              "started_by" not in takeover.json())
+        journal = admin.get("/api/journal").json()
+        resume_rows = [row for row in journal if row["action"] == "upload.resume"]
+        check("в журнале записано, кто продолжил и кто начинал",
+              len(resume_rows) == 1 and resume_rows[0]["actor"] == "admin-two"
+              and "admin-test" in (resume_rows[0]["detail"] or ""), f"({resume_rows[:1]})")
+        check("в журнале нет имени файла", all("Иванов" not in str(row) for row in journal))
+        # Начавший загрузку продолжает её без пометки: это обычная докачка
+        admin.post("/api/uploads", json=body)
+        check("свой же повтор в журнал как «чужая загрузка» не пишется",
+              len([r for r in admin.get("/api/journal").json() if r["action"] == "upload.resume"]) == 1)
+
         premature = admin.post("/api/uploads", json={**body, "name": "Другой.svs"}).json()
         check("незаконченный файл нельзя завершить (409)",
               admin.post(f"/api/uploads/{premature['id']}/complete").status_code == 409)

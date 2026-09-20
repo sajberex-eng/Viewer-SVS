@@ -138,6 +138,10 @@ class UploadStart(BaseModel):
     size: int
 
 
+class UploadVerify(BaseModel):
+    checksum: str
+
+
 def create_app() -> FastAPI:
     # Uvicorn настраивает только свои журналы, поэтому сообщения сервиса (прогрев,
     # проверка хранилища, уборка загрузок) до сих пор никуда не попадали: у корневого
@@ -751,7 +755,19 @@ def create_app() -> FastAPI:
                 db, request, audit.UPLOAD_START, user=user, object_type="upload", object_id=state["id"],
                 detail=f"{body.size / 1e6:.0f} МБ",  # имя файла в журнал не пишется
             )
+        started_by = state.pop("started_by", None)
+        if started_by is not None:  # чужую загрузку продолжает другой администратор (ЗГ-4)
+            row = db.query_one("SELECT login FROM users WHERE id = ?", (started_by,))
+            audit.log(
+                db, request, audit.UPLOAD_RESUME, user=user, object_type="upload", object_id=state["id"],
+                detail=f"начал: {row['login'] if row else 'удалённый пользователь'}",
+            )
         return state
+
+    @app.post("/api/uploads/{upload_id}/verify")
+    async def verify_upload(upload_id: str, body: UploadVerify, user=Depends(require_admin)):
+        """Тот ли это файл: сверка последней принятой части (ЗГ-5)."""
+        return await run_in_threadpool(uploads.verify_tail, upload_id, body.checksum)
 
     @app.put("/api/uploads/{upload_id}")
     async def upload_part(upload_id: str, offset: int, request: Request, user=Depends(require_admin)):

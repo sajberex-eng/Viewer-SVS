@@ -104,6 +104,13 @@ const STRINGS = {
     'upload.readError': 'Не удалось прочитать файл на этом компьютере',
     'upload.wrongFormat': 'Этот формат не принимается: {names}. Можно: {formats}',
     'upload.cancel.tip': 'Отменить загрузку',
+    'upload.fileKind': 'Сканы',
+    'upload.resumeRemembered': 'Браузер помнит этот файл: нужно только подтвердить чтение ({name})',
+    'upload.resumePick': 'Выберите тот же файл: {name}',
+    'upload.fileGone': 'Файл больше не доступен на этом компьютере. Выберите его заново: {name}',
+    'upload.mismatchTitle': 'Файл не совпадает',
+    'upload.mismatchText': 'Имя и размер совпадают с прерванной загрузкой «{name}», но содержимое другое. Дописать к принятому нельзя: скан получится испорченным. Начать загрузку этого файла заново?',
+    'upload.restart': 'Начать заново',
 
     'users.heading': 'Пользователи',
     'users.add': 'Новый пользователь',
@@ -181,6 +188,7 @@ const STRINGS = {
     'action.group.members': 'Изменён состав группы',
     'action.group.delete': 'Удалена группа',
     'action.upload.start': 'Начата загрузка',
+    'action.upload.resume': 'Продолжена чужая загрузка',
 
     'profile.title': 'Смена пароля',
     'profile.current': 'Текущий пароль',
