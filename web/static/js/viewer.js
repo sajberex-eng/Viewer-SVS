@@ -10,6 +10,9 @@ import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.
 import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
 
 const PAN_STEP = 0.2; // доля видимой области на одно нажатие стрелки
+// Телефон: тот же порог, что в стилях. Список сканов лежит поверх изображения,
+// поэтому после выбора его нужно закрыть (М-8).
+const phone = () => matchMedia('(max-width: 700px)').matches;
 // Минимальная ширина области двух половин. Считается именно она, а не ширина
 // окна: при масштабировании Windows (150–200 %) экран 2256 точек даёт браузеру
 // около 1128, и проверка по окну запрещала бы сравнение без причины.
@@ -73,8 +76,10 @@ async function main() {
       // Связь включается, когда открылись обе половины: порядок не гарантирован
       if (query.get('link') === '1') whenAllOpen(() => setLinked(true));
     });
-    applyCompareLayout();
   }
+  // Раскладка считается всегда, а не только при двух сканах: от неё зависит и
+  // видимость кнопки «Сравнить», которой на телефоне быть не должно (М-1)
+  applyCompareLayout();
 }
 
 async function loadSlide(id, { silent = false } = {}) {
@@ -198,7 +203,7 @@ function applyCompareLayout() {
   for (const id of ['btnSwap', 'btnSingle', 'btnLink2']) $(id).hidden = !comparing;
   $('adjustBoth').hidden = !comparing;
   $('adjustTarget').hidden = !comparing;
-  $('btnCompare').hidden = comparing;
+  updateCompareButton(comparing);
   updateLabelButton();
   if (comparing) ensureSplitter();
   else $('splitter')?.remove();
@@ -207,6 +212,8 @@ function applyCompareLayout() {
     pane.parts.paneClose.hidden = !comparing;
     pane.resize(); // у ещё не открытого скана области просмотра нет
   }
+  // Набор видимых кнопок изменился — раскладку панели надо пересчитать (В-4)
+  layoutTopbar();
 }
 
 function ensureSplitter() {
@@ -274,6 +281,17 @@ async function startCompare() {
   const pane = addPane(slide);
   applyCompareLayout();
   setActive(pane);
+}
+
+// На телефоне сравнения нет совсем: две половины по 180 точек бесполезны
+// (раздел 13.5 ТЗ), поэтому кнопки там нет. На узком окне компьютера кнопка
+// остаётся, но неактивна и объясняет причину подсказкой.
+function updateCompareButton(comparing) {
+  const button = $('btnCompare');
+  button.hidden = comparing || phone();
+  const narrow = panesWidthIfCompared() < MIN_PANES_WIDTH;
+  button.disabled = narrow;
+  button.title = narrow ? t('compare.tooNarrow') : t('top.compare.tip');
 }
 
 function leaveCompare() {
@@ -405,6 +423,7 @@ function initTopbar() {
   });
   addEventListener('resize', () => {
     if (panes.length > 1) for (const pane of panes) pane.resize();
+    updateCompareButton(panes.length > 1); // поворот телефона меняет ширину
     layoutTopbar();
   });
   layoutTopbar();
@@ -656,6 +675,7 @@ function initSlidesPanel(slide) {
     link.addEventListener('click', (event) => {
       event.preventDefault();
       openInActive(sibling.id);
+      if (phone()) collapseSlidesPanel(true); // панель лежит поверх препарата (М-8)
     });
     item.append(link);
     list.append(item);

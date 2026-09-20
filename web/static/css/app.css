@@ -692,8 +692,13 @@ input[type="range"] { accent-color: var(--accent); }
   /* верхняя панель: убираем лишнее, чтобы кнопки помещались */
   .topbar { gap: 8px; padding: 0 8px; }
   .topbar-title { font-size: 14px; min-width: 0; }
-  /* во вьювере шапка одна строка: название убираем, место нужно кнопкам */
-  .viewer-page .topbar-title { display: none; }
+  /* Во вьювере шапка в одну строку: кнопки стали значками (этап 7), поэтому
+     название скана помещается, а путь на телефоне убираем — он длиннее. */
+  .viewer-page .topbar-slide { max-width: 36%; }
+  .viewer-page .topbar-title { font-size: 13px; }
+  .topbar-path { display: none; }
+  /* Кнопки чуть уже: на экране 375 точек это лишняя кнопка в панели, а не в меню */
+  .btn-icon { padding: 0 6px; }
   .topbar-user { gap: 6px; }
   .topbar-user span { display: none; }
 
@@ -707,12 +712,32 @@ input[type="range"] { accent-color: var(--accent); }
   .catalog-page .topbar-actions:not(:has(.btn:not([hidden]))),
   .admin-page .topbar-actions:not(:has(.btn:not([hidden]))) { display: none; }
 
-  /* вьювер: панели меньше, чтобы препарат было видно */
-  .zoom-panel { width: 44px; padding: 4px 3px; gap: 4px; }
-  .zoom-btn { height: 30px; font-size: 12px; }
-  .zoom-slider { height: 90px; }
   .minimap-view { width: 150px; height: 110px; }
+
+  /* Строка состояния на телефоне: только увеличение (М-4). Сообщения об
+     ошибках всё же показываются: иначе о них негде узнать. */
   .statusbar { font-size: 11px; overflow-x: auto; }
+  .status-tiles:not(.is-error) { display: none; }
+
+  /* Список сканов случая открывается поверх изображения и закрывается после
+     выбора (М-8): на узком экране он иначе съедает половину ширины. */
+  .workspace { position: relative; }
+  .slides-panel {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 12;
+    width: 72%;
+    max-width: 280px;
+    box-shadow: 2px 0 12px rgb(0 0 0 / 18%);
+  }
+  .slides-panel.is-collapsed {
+    position: static;
+    width: 34px;
+    box-shadow: none;
+  }
+  .slides-panel.is-collapsed .slides-panel-head { padding: 4px 3px; }
 
   /* каталог: дерево папок сверху, карточки в один столбец на всю ширину */
   .catalog-layout { grid-template-columns: 1fr; }
@@ -736,4 +761,35 @@ input[type="range"] { accent-color: var(--accent); }
   .admin-main { padding: 8px; }
   /* таблицы шире экрана — прокручиваются вбок внутри своего блока */
   .admin-section { overflow-x: auto; }
+}
+
+/* Увеличения строкой внизу (М-2). Условие по высоте тоже: телефон лёжа даёт
+   812 × 375, и вертикальный столбец кнопок туда не помещается. Препарату по
+   критерию приёмки нужно не меньше 80 % высоты экрана. */
+@media (max-width: 700px), (max-height: 520px) {
+  .zoom-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    flex-direction: row;
+    justify-content: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border-radius: 0;
+    border-width: 1px 0 0;
+  }
+  .is-comparing .zoom-panel { top: auto; }
+  .zoom-buttons { display: flex; width: auto; gap: 4px; }
+  /* Кнопки повыше: пальцем в 26 точек попадать неудобно */
+  .zoom-btn { height: 36px; min-width: 34px; padding: 0 5px; font-size: 12px; }
+  /* Плавный зум пальцем делается щипком, ползунок только занимает место */
+  .zoom-slider { display: none; }
+  /* Текущее увеличение написано в строке состояния (М-4): в ряду оно занимало
+     место, которого не хватало кнопкам */
+  .zoom-panel .zoom-current { display: none; }
+  .zoom-rotate .icon-btn { width: 34px; height: 34px; font-size: 15px; }
+  /* Линейка не должна уезжать под ряд увеличений */
+  .scalebar { bottom: 52px; }
 }
