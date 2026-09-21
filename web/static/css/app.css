@@ -74,6 +74,9 @@ h1, h2 { margin: 0; font-weight: 600; }
 .btn-icon { padding: 0 8px; justify-content: center; }
 .btn-icon.btn-with-text { padding: 0 10px 0 8px; }
 .btn .icon { width: 19px; height: 19px; flex: none; display: block; }
+/* У кнопок-значков свой размер; без него значок растягивается на всю кнопку */
+.icon-btn .icon { width: 16px; height: 16px; display: block; margin: auto; }
+.icon-btn:disabled .icon { opacity: 0.45; }
 .btn:disabled .icon { opacity: 0.45; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -1026,6 +1029,7 @@ input[type="range"] { accent-color: var(--accent); }
   .zoom-tools { display: flex; width: auto; }
   .zoom-tools .popover-anchor { width: auto; }
   .zoom-tools .icon-btn { width: 34px; height: 34px; }
+  .zoom-tools .icon-btn .icon { width: 19px; height: 19px; }
   /* Ряд увеличений стоит внизу, поэтому окошко открывается вверх (М-2) */
   .rotate-popover { top: auto; bottom: calc(100% + 6px); left: auto; right: 0; width: min(260px, 88vw); }
   /* Линейка не должна уезжать под ряд увеличений */
