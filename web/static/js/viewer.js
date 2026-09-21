@@ -717,7 +717,6 @@ function showHelp() {
         rows: [
           ['← ↑ → ↓', t('help.arrows')],
           ['Page Down / Page Up', t('help.pageKeys')],
-          ['Shift + мышь', t('help.shiftAdjust')],
         ],
       },
       {
@@ -727,13 +726,37 @@ function showHelp() {
           ['F', t('help.fullscreen')],
           ['L', t('help.label')],
           ['I', t('help.adjust')],
-          ['C', t('help.compare')],
-          ['Q', t('help.switchPane')],
           ['S', t('help.info')],
-          ['M', t('help.ruler')],
           ['?', t('help.help')],
         ],
       },
+      {
+        title: t('help.toolsGroup'),
+        rows: [
+          ['M', t('help.ruler')],
+          ['A', t('help.annotations')],
+          // Меню по правой кнопке и рисование контуров — только с мышью (Т-5, А-16)
+          ...(phone() ? [] : [
+            [t('help.rightClickKey'), t('help.rightClick')],
+            ['Enter', t('help.closeShape')],
+            ['Esc', t('help.escape')],
+          ]),
+        ],
+      },
+      // Сравнение объясняется не только клавишами: привязку по ориентирам и
+      // общий курсор иначе неоткуда узнать (решение заказчика 2026-09-21).
+      // На телефоне сравнения нет совсем (М-1), поэтому и раздела нет.
+      ...(phone() ? [] : [{
+        title: t('help.compareGroup'),
+        rows: [
+          ['C', t('help.compare')],
+          ['Q', t('help.switchPane')],
+          [t('compare.link'), t('help.link')],
+          [t('bind.title'), t('help.bind')],
+          [t('help.shiftKey'), t('help.shiftAdjust')],
+          [t('help.crosshairName'), t('help.crosshair')],
+        ],
+      }]),
     ],
   });
 }

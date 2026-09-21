@@ -935,6 +935,11 @@ input[type="range"] { accent-color: var(--accent); }
   /* Пальцем по отдельной клетке не попасть: на телефоне аннотации только
      видны, инструментов рисования и правки нет (А-16) */
   .annot-tools, .annot-row-actions { display: none !important; }
+
+  /* Два столбца на узком экране не помещаются: название встаёт над пояснением */
+  .info-list { grid-template-columns: 1fr; gap: 0; }
+  .info-list dt { margin-top: 8px; color: var(--text); font-weight: 600; }
+  .info-list dt:first-child { margin-top: 0; }
   /* Панель ложится поверх препарата справа: если её поставить в ряд с
      изображением, препарату не остаётся ширины совсем */
   .annot-panel {
