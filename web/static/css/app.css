@@ -272,7 +272,6 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .zoom-buttons { display: grid; gap: 3px; width: 100%; }
 .zoom-btn { height: 26px; padding: 0; font-size: 13px; }
-.zoom-slider { writing-mode: vertical-lr; direction: rtl; width: 22px; height: 130px; margin: 2px 0; }
 .zoom-current {
   width: 100%;
   padding: 3px 0;
@@ -283,8 +282,34 @@ input[type="range"] { accent-color: var(--accent); }
   border: 1px solid #c9b63a;
   border-radius: 2px;
 }
-.zoom-rotate { display: flex; gap: 2px; }
-.zoom-rotate .icon-btn { width: 21px; height: 22px; font-size: 14px; }
+/* Кнопки инструментов идут столбцом во всю ширину панели: в ряд они шире её */
+.zoom-tools { display: grid; gap: 3px; width: 100%; }
+.zoom-tools .popover-anchor { width: 100%; }
+.zoom-tools .icon-btn { width: 100%; height: 26px; }
+.zoom-tools .icon-btn.is-active { background: var(--brand-tint); border-color: var(--brand); }
+/* Свёрнутая панель — только кнопка разворота, как у мини-карты */
+.zoom-toggle { width: 26px; height: 20px; font-size: 12px; }
+.zoom-panel.is-collapsed { width: auto; }
+.zoom-panel.is-collapsed > :not(.zoom-toggle) { display: none; }
+/* Окошко поворота открывается вправо от столбца увеличений: над препаратом
+   места больше, чем под панелью (Т-2) */
+.rotate-popover { top: 0; left: calc(100% + 6px); width: 260px; }
+.rotate-row { display: flex; align-items: center; gap: 6px; }
+.rotate-row input[type="number"] { width: 72px; }
+.rotate-steps .btn { flex: 1; justify-content: center; }
+#rotateSlider { width: 100%; }
+
+/* Пометка «отражено»: в заголовке половины и в строке состояния (Т-3) */
+.flip-mark {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 17px;
+  color: #7a3a10;
+  background: #ffe2cf;
+  border: 1px solid var(--brand-accent);
+}
 
 .minimap {
   position: absolute;
@@ -394,6 +419,64 @@ input[type="range"] { accent-color: var(--accent); }
 .annot-layer .is-draggable:active { cursor: grabbing; }
 .stage.is-marking { cursor: crosshair; }
 .stage.is-marking .osd { cursor: crosshair; }
+
+/* ---------- рулетка, ориентиры, общий курсор (Т-4, С-10, С-8) ---------- */
+
+/* Слой лежит поверх препарата и мышь не ловит: все пометки здесь временные */
+.overlay-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  overflow: visible;
+}
+/* Тёмная обводка: неоново-зелёный на светлом фоне стекла иначе теряется (Т-4) */
+.overlay-layer .overlay-line,
+.overlay-layer .overlay-cross,
+.overlay-layer .overlay-mark circle {
+  fill: none;
+  stroke: #39ff14;
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 1.5px #103000) drop-shadow(0 0 1.5px #103000);
+}
+/* Перекрестие тоньше: оно идёт за мышью и не должно спорить с препаратом (С-8) */
+.overlay-layer .overlay-cross { stroke-width: 1.4; }
+.overlay-layer .overlay-label,
+.overlay-layer .overlay-number {
+  font: 700 13px/1 system-ui, sans-serif;
+  fill: #39ff14;
+  stroke: #103000;
+  stroke-width: 3;
+  paint-order: stroke;
+  user-select: none;
+}
+.overlay-layer [hidden] { display: none; }
+
+/* Полоса привязки по ориентирам поверх половин (С-10) */
+.bind-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  padding: 8px 12px;
+  background: rgb(255 255 255 / 95%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+  font-size: 13px;
+}
+.bind-bar .btn { flex: none; }
+.bind-hint { flex: 1 1 auto; min-width: 220px; max-width: 420px; }
+
+/* right: auto перебивает правило .popover-menu: место задаётся из кода */
+.stage-menu { position: absolute; z-index: 21; width: auto; min-width: 150px; right: auto; }
 
 /* Комментарий показывается только при наведении и щелчке (А-6) */
 .annot-tip {
@@ -930,12 +1013,16 @@ input[type="range"] { accent-color: var(--accent); }
   .zoom-buttons { display: flex; width: auto; gap: 4px; }
   /* Кнопки повыше: пальцем в 26 точек попадать неудобно */
   .zoom-btn { height: 36px; min-width: 34px; padding: 0 5px; font-size: 12px; }
-  /* Плавный зум пальцем делается щипком, ползунок только занимает место */
-  .zoom-slider { display: none; }
   /* Текущее увеличение написано в строке состояния (М-4): в ряду оно занимало
      место, которого не хватало кнопкам */
   .zoom-panel .zoom-current { display: none; }
-  .zoom-rotate .icon-btn { width: 34px; height: 34px; font-size: 15px; }
+  /* Ряд внизу и так занимает одну полоску: сворачивать нечего */
+  .zoom-toggle { display: none; }
+  .zoom-tools { display: flex; width: auto; }
+  .zoom-tools .popover-anchor { width: auto; }
+  .zoom-tools .icon-btn { width: 34px; height: 34px; }
+  /* Ряд увеличений стоит внизу, поэтому окошко открывается вверх (М-2) */
+  .rotate-popover { top: auto; bottom: calc(100% + 6px); left: auto; right: 0; width: min(260px, 88vw); }
   /* Линейка не должна уезжать под ряд увеличений */
   .scalebar { bottom: 52px; }
 }

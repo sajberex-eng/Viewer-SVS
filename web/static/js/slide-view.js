@@ -5,18 +5,19 @@ import { ImageAdjuster } from './adjust.js';
 import { clampValues, loadSavedValues, saveValues } from './adjust-panel.js';
 import { applyI18n, formatNumber, t } from './i18n.js';
 
-const FIXED_MAGNIFICATIONS = [2, 4, 10, 20, 40]; // горячие клавиши 1–5
+// Горячие клавиши 1–4. С 2× ряд начинался зря: на микроскопе увеличения
+// начинаются с 4× (решение заказчика 2026-09-21).
+const FIXED_MAGNIFICATIONS = [4, 10, 20, 40];
 const MAX_DIGITAL_ZOOM = 2; // зум не дальше 2× от увеличения сканирования (Н-2)
 const SCALEBAR_MAX_PX = 180;
 const ZOOM_STEP = 1.3;
-const SLIDER_STEPS = 1000;
 
 const { Point } = OpenSeadragon;
 
 export { FIXED_MAGNIFICATIONS, ZOOM_STEP };
 
 export class SlideView {
-  constructor({ slide, container, storageKey, onActivate, onViewChange, onClose, onPickWhite }) {
+  constructor({ slide, container, storageKey, onActivate, onViewChange, onClose, onPickWhite, onContextMenu }) {
     this.slide = slide;
     this.element = container;
     this.storageKey = storageKey;
@@ -38,6 +39,12 @@ export class SlideView {
     }
     this.parts.stageRetry.addEventListener('click', () => location.reload());
     container.addEventListener('pointerdown', () => onActivate?.(this), true);
+    // Меню браузера подавляется только над самим препаратом: на мини-карте,
+    // этикетке и линейке правая кнопка работает как обычно (Т-5)
+    this.parts.stage.addEventListener('contextmenu', (event) => {
+      if (!event.target.closest('.osd, .annot-layer, .overlay-layer')) return;
+      onContextMenu?.(this, event, this.imageFromClient(event.clientX, event.clientY));
+    });
     // Крестик виден только в режиме сравнения: это решает viewer.js
     this.parts.paneClose.addEventListener('click', () => onClose(this));
 
@@ -100,10 +107,14 @@ export class SlideView {
     // Клавиатуру целиком обрабатывает страница, иначе действия шли бы дважды.
     viewer.addHandler('canvas-key', (event) => { event.preventDefaultAction = true; });
     viewer.addHandler('canvas-click', (event) => {
-      if (event.quick && this.onPickWhite?.(this, event.position)) event.preventDefaultAction = true;
+      // Пипетка берёт цвет с холста библиотеки, а он при отражении нарисован
+      // зеркально: положение щелчка приходится вернуть обратно (Т-3)
+      if (event.quick && this.onPickWhite?.(this, this.canvasPoint(event.position))) {
+        event.preventDefaultAction = true;
+      }
     });
     viewer.addHandler('open-failed', () => this.showMessage(t('viewer.storageDown')));
-    for (const event of ['pan', 'zoom', 'rotate']) {
+    for (const event of ['pan', 'zoom', 'rotate', 'flip']) {
       viewer.addHandler(event, () => this.onViewChange?.(this));
     }
     return viewer;
@@ -162,24 +173,6 @@ export class SlideView {
     for (const event of ['open', 'animation', 'resize']) {
       this.viewer.addHandler(event, this.updateZoomReadout);
     }
-  }
-
-  // Положение ползунка: логарифмическое, одинаковый ход даёт одинаковую кратность.
-  get sliderPosition() {
-    const { viewport } = this.viewer;
-    const [min, max] = [viewport.getMinZoom(), viewport.getMaxZoom()];
-    return max > min ? (SLIDER_STEPS * Math.log(viewport.getZoom(true) / min)) / Math.log(max / min) : 0;
-  }
-
-  zoomToSliderPosition(position) {
-    const { viewport } = this.viewer;
-    const [min, max] = [viewport.getMinZoom(), viewport.getMaxZoom()];
-    viewport.zoomTo(min * (max / min) ** (position / SLIDER_STEPS), null, true);
-  }
-
-  rotateBy(degrees) {
-    const { viewport } = this.viewer;
-    viewport.setRotation(viewport.getRotation() + degrees);
   }
 
   #initScalebar() {
@@ -291,7 +284,19 @@ export class SlideView {
   // Центр поля зрения в микрометрах от левого верхнего угла препарата.
   // Микрометры, а не пиксели: у сканов 20× и 40× разный размер пикселя (С-7).
   get centerMicrons() {
-    const center = this.viewer.viewport.viewportToImageCoordinates(this.viewer.viewport.getCenter(true));
+    return this.#centerMicrons(true);
+  }
+
+  // Куда половина едет, а не где она сейчас. Связь запоминается по этому
+  // положению: иначе, если отпустить Shift посреди плавного хода, она
+  // запомнит середину пути (С-11).
+  get targetCenterMicrons() {
+    return this.#centerMicrons(false);
+  }
+
+  #centerMicrons(current) {
+    const { viewport } = this.viewer;
+    const center = viewport.viewportToImageCoordinates(viewport.getCenter(current));
     const scale = this.slide.mpp || 1;
     return { x: center.x * scale, y: center.y * scale };
   }
@@ -317,6 +322,58 @@ export class SlideView {
 
   setRotation(degrees, immediately = false) {
     this.viewer.viewport.setRotation(degrees, immediately);
+  }
+
+  // ---------- зеркальное отражение (Т-3) ----------
+
+  get flipped() {
+    return this.viewer.viewport.getFlip();
+  }
+
+  // Отражается только эта половина. Библиотека зеркалит рисование (и мини-карту),
+  // но не пересчёт координат, поэтому всё остальное считается через pixelFromImage
+  // и imageFromPixel ниже.
+  setFlip(flipped) {
+    if (this.flipped === Boolean(flipped)) return;
+    this.viewer.viewport.setFlip(Boolean(flipped));
+    this.#showFlipMark();
+  }
+
+  #showFlipMark() {
+    this.parts.flipMark.hidden = !this.flipped;
+  }
+
+  // ---------- точка скана ↔ точка на экране ----------
+
+  // Отражение живёт только в рисовании, поэтому зеркалим x сами: без этого
+  // аннотации, рулетка и общий курсор встают на противоположный край.
+  #mirror(point) {
+    if (!this.flipped) return point;
+    return new Point(this.viewer.viewport.getContainerSize().x - point.x, point.y);
+  }
+
+  // Точка холста библиотеки по положению щелчка: библиотека сама вернула его
+  // в незеркальные координаты, а холст нарисован зеркально.
+  canvasPoint(position) {
+    return this.#mirror(position);
+  }
+
+  // Точка скана → точка внутри половины экрана
+  pixelFromImage(x, y) {
+    const { viewport } = this.viewer;
+    return this.#mirror(viewport.pixelFromPoint(viewport.imageToViewportCoordinates(x, y), true));
+  }
+
+  // Точка внутри половины экрана → точка скана
+  imageFromPixel(point) {
+    const { viewport } = this.viewer;
+    return viewport.viewportToImageCoordinates(viewport.pointFromPixel(this.#mirror(point), true));
+  }
+
+  // То же, но от координат события мыши на странице
+  imageFromClient(clientX, clientY) {
+    const box = this.parts.osd.getBoundingClientRect();
+    return this.imageFromPixel(new Point(clientX - box.left, clientY - box.top));
   }
 
   setActive(active) {

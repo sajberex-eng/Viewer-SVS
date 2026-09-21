@@ -71,15 +71,57 @@
       <!-- Панель увеличений одна на весь экран: в режиме сравнения она задаёт
            одинаковый масштаб обеим половинам, чтобы их можно было сопоставить -->
       <div class="zoom-panel" role="toolbar" aria-orientation="vertical">
+        <!-- Панель сворачивается, как мини-карта; по умолчанию развёрнута -->
+        <button class="icon-btn zoom-toggle" id="zoomToggle" aria-expanded="true"
+                data-i18n-tip="zoom.toggle.tip">▾</button>
+        <!-- Ползунка зума нет (Т-1): он дублировал колесо мыши -->
         <div class="zoom-buttons" id="zoomButtons"></div>
-        <input type="range" class="zoom-slider" id="zoomSlider" min="0" max="1000" step="1" data-i18n-tip="zoom.slider.tip">
         <output class="zoom-current" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
-        <div class="zoom-rotate">
-          <button class="icon-btn" id="rotateLeft" data-i18n-tip="zoom.rotateLeft.tip">⟲</button>
-          <button class="icon-btn" id="rotateRight" data-i18n-tip="zoom.rotateRight.tip">⟳</button>
+        <!-- Поворот и отражение живут в одном окошке (Т-2, Т-3, Т-6): верхняя
+             панель от них не растёт, а две кнопки ⟲⟳ больше не нужны -->
+        <div class="zoom-tools">
+          <!-- Рулетка встала на место ползунка зума (Т-4, Т-6) -->
+          <button class="icon-btn" id="btnRuler" data-icon="ruler"
+                  data-i18n-label="ruler.title" data-i18n-tip="ruler.tip"></button>
+          <!-- Привязка по ориентирам нужна только при сравнении (С-10) -->
+          <button class="icon-btn" id="btnBind" hidden data-icon="bind"
+                  data-i18n-label="bind.title" data-i18n-tip="bind.tip"></button>
+          <div class="popover-anchor" id="rotateAnchor">
+            <button class="icon-btn" id="btnRotate" aria-expanded="false" aria-controls="rotatePopover"
+                    data-icon="rotate" data-i18n-label="rotate.title" data-i18n-tip="rotate.tip"></button>
+            <div class="popover rotate-popover" id="rotatePopover" hidden>
+              <div class="rotate-row">
+                <label for="rotateNumber" data-i18n="rotate.angle"></label>
+                <input type="number" id="rotateNumber" min="-180" max="180" step="1">
+                <span>°</span>
+              </div>
+              <input type="range" id="rotateSlider" min="-180" max="180" step="1" data-i18n-tip="rotate.slider.tip">
+              <div class="rotate-row rotate-steps">
+                <button class="btn" id="rotateMinus90">−90°</button>
+                <button class="btn" id="rotateZero">0°</button>
+                <button class="btn" id="rotatePlus90">+90°</button>
+              </div>
+              <label class="check"><input type="checkbox" id="rotateFlip"> <span data-i18n="rotate.flip"></span></label>
+              <p class="muted" data-i18n="rotate.flipHint"></p>
+            </div>
+          </div>
         </div>
       </div>
       <div class="panes" id="panes"></div>
+      <!-- Меню по правой кнопке на препарате (Т-5): быстрый доступ к рулетке
+           и инструментам разметки без похода к панелям -->
+      <div class="popover popover-menu stage-menu" id="stageMenu" hidden>
+        <button class="btn" id="menuRuler" data-i18n="ruler.title"></button>
+        <button class="btn" id="menuPoint" data-i18n="annot.tool.point"></button>
+        <button class="btn" id="menuPolygon" data-i18n="annot.tool.polygon"></button>
+      </div>
+      <!-- Привязка по ориентирам: подсказка и кнопки на время разметки (С-10) -->
+      <div class="bind-bar" id="bindBar" hidden>
+        <span class="bind-hint" id="bindHint" aria-live="polite"></span>
+        <button class="btn" id="bindUndo" data-i18n="bind.undo"></button>
+        <button class="btn" id="bindCancel" data-i18n="common.cancel"></button>
+        <button class="btn btn-primary" id="bindApply" data-i18n="bind.apply"></button>
+      </div>
     </div>
 
     <!-- Аннотации: показ, инструменты (только патологам) и список (этап 9) -->
@@ -130,6 +172,7 @@
 
   <footer class="statusbar">
     <span id="statusMag"></span>
+    <span class="flip-mark" id="statusFlip" hidden data-i18n="flip.mark" data-i18n-tip="flip.mark.tip"></span>
     <span class="status-tiles" id="statusTiles" aria-live="polite"></span>
   </footer>
 
@@ -137,6 +180,8 @@
     <section class="pane">
       <div class="pane-head">
         <span class="pane-title" data-role="title"></span>
+        <!-- Отражённый скан помечен словом: на снимке экрана его иначе не отличить (Т-3) -->
+        <span class="flip-mark" data-role="flipMark" hidden data-i18n="flip.mark" data-i18n-tip="flip.mark.tip"></span>
         <a class="pane-path" data-role="path" hidden data-i18n-tip="top.path.tip"></a>
         <output class="pane-zoom" data-role="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
         <button class="icon-btn" data-role="paneLabel" hidden data-i18n-tip="top.label.tip">🏷</button>

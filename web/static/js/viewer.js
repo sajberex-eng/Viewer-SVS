@@ -8,6 +8,11 @@ import { api, logout } from './api.js';
 import { chooseDialog, confirmDialog, formDialog, infoDialog } from './dialog.js';
 import { applyIcons } from './icons.js';
 import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.js';
+// Пересчёт точек и углов между половинами: link.forward, link.backward,
+// link.rotationFor, link.fitBind — по имени модуля понятнее, чем сами по себе.
+import * as link from './link.js';
+import { bindFromViews, normalizeAngle } from './link.js';
+import { OverlayLayer } from './overlay.js';
 import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
 
 const PAN_STEP = 0.2; // доля видимой области на одно нажатие стрелки
@@ -26,7 +31,7 @@ let user = null;
 let panes = []; // одна или две половины
 let active = null;
 let linked = false;
-let linkOffset = null; // взаимное положение половин в момент связывания
+let linkBind = null; // взаимное положение половин, см. captureBind()
 let adjustPanel = null;
 let split = 50;
 // Показ аннотаций — выбор пользователя, общий для всех сканов (А-11)
@@ -66,6 +71,10 @@ async function main() {
   initTopbar();
   initAnnotations();
   initZoomPanel();
+  initRotatePanel();
+  initRuler();
+  initBinding();
+  initShiftAdjust();
   initHotkeys();
 
   const first = addPane(slide);
@@ -108,10 +117,11 @@ async function loadSlide(id, { silent = false } = {}) {
 function attachAnnotations(pane) {
   pane.annotations = new AnnotationLayer({
     view: pane,
+    // item === null — выделение сняли щелчком по препарату
     onSelect: (item) => {
       if (pane !== active) setActive(pane);
       renderAnnotationList();
-      highlightRow(item.id);
+      highlightRow(item?.id ?? null);
     },
     onSave: (item) => saveGeometry(pane, item),
     onFinishDraft: (kind, points) => createAnnotation(pane, kind, points),
@@ -148,10 +158,35 @@ function addPane(slide) {
     onViewChange: onPaneChanged,
     onClose: closePane,
     onPickWhite: (pane, position) => (active === pane ? adjustPanel.pickWhite(position) : false),
+    onContextMenu: openStageMenu,
   });
   panes.push(view);
   attachAnnotations(view);
+  view.overlay = new OverlayLayer({ view, onLandmark: updateBindBar });
+  // Общий курсор: перекрестие в соседней половине идёт за мышью (С-8)
+  element.addEventListener('pointermove', (event) => showCrosshairFrom(view, event));
+  element.addEventListener('pointerleave', () => updateCrosshair(null));
   return view;
+}
+
+// Место, на которое указывает мышь в одной половине, отмечается перекрестием
+// в другой. Точка пересчитывается связью, поэтому курсор точен настолько,
+// насколько точна привязка (С-8). На сенсорном экране его нет.
+function showCrosshairFrom(pane, event) {
+  if (!linked || panes.length !== 2 || matchMedia('(pointer: coarse)').matches) return;
+  if (!event.target.closest?.('.osd, .annot-layer, .overlay-layer')) return updateCrosshair(null);
+  const at = pane.imageFromClient(event.clientX, event.clientY);
+  const toSecond = pane === panes[0];
+  const target = toSecond ? panes[1] : panes[0];
+  const scale = pane.slide.mpp || 1;
+  const microns = { x: at.x * scale, y: at.y * scale };
+  const there = toSecond ? link.forward(linkBind, microns) : link.backward(linkBind, microns);
+  const targetScale = target.slide.mpp || 1;
+  updateCrosshair(target, [there.x / targetScale, there.y / targetScale]);
+}
+
+function updateCrosshair(target, point = null) {
+  for (const pane of panes) pane.overlay?.setCrosshair(pane === target ? point : null);
 }
 
 function closePane(view) {
@@ -184,25 +219,45 @@ function setActive(view) {
 
 // ---------- связанная навигация (С-6, С-7) ----------
 
-function setLinked(value) {
+// bind задан — связь берётся готовой (привязка по ориентирам, С-10);
+// без него запоминается то, как половины стоят сейчас (С-6).
+function setLinked(value, bind = null) {
   // Связывать можно только открытые половины: у неоткрытой ещё нет координат
   linked = value && panes.length === 2 && panes.every((pane) => pane.viewer.isOpen());
-  $('btnLink2').classList.toggle('is-active', linked);
-  $('btnLink2').textContent = linked ? t('compare.unlink') : t('compare.link');
+  const button = $('btnLink2');
+  button.classList.toggle('is-active', linked);
+  // У кнопки только значок: подпись живёт в подсказке, в aria-label и в меню
+  // «ещё». Записывать её в textContent нельзя — сотрётся значок (В-1).
+  const label = t(linked ? 'compare.unlink' : 'compare.link');
+  button.dataset.label = label;
+  button.setAttribute('aria-label', label);
+  button.title = t(linked ? 'compare.unlink.tip' : 'compare.link.tip');
   if (!linked) {
-    linkOffset = null;
+    linkBind = null;
+    updateCrosshair(null);
     return;
   }
-  // Связь относительная по положению: запоминаем, как половины стоят сейчас,
-  // и держим это смещение — пользователь сначала совмещает участки вручную (С-6).
-  // Увеличение, наоборот, уравнивается: 10× слева это 10× справа (С-7).
   const [a, b] = panes;
-  linkOffset = {
-    dx: b.centerMicrons.x - a.centerMicrons.x,
-    dy: b.centerMicrons.y - a.centerMicrons.y,
-    rotation: b.rotation - a.rotation,
-  };
+  if (bind) {
+    linkBind = bind;
+    onPaneChanged(a); // вторая половина сразу встаёт по привязке
+    return;
+  }
+  captureBind();
+  // Увеличение уравнивается: 10× слева это 10× справа (С-7)
   if (a.magnification && b.magnification) b.setMagnification(a.magnification, true);
+}
+
+// Связь запоминает, как половины стоят сейчас: пользователь сначала совмещает
+// одинаковые участки вручную (С-6), затем связывает. Сама запись взаимного
+// положения и все расчёты по нему живут в link.js.
+function captureBind() {
+  const [a, b] = panes.map((pane) => ({
+    flipped: pane.flipped,
+    rotation: pane.rotation,
+    centerMicrons: pane.targetCenterMicrons,
+  }));
+  linkBind = bindFromViews(a, b);
 }
 
 function whenAllOpen(action) {
@@ -220,10 +275,11 @@ let syncing = false;
 
 function onPaneChanged(view) {
   if (active === view) updateStatusBar();
-  if (!linked || syncing || panes.length !== 2) return;
+  // Пока держат Shift, половины идут врозь: правится взаимное положение (С-11)
+  if (!linked || syncing || shiftFrom || panes.length !== 2) return;
   const [a, b] = panes;
-  const [source, target] = view === a ? [a, b] : [b, a];
-  const sign = view === a ? 1 : -1;
+  const forward = view === a;
+  const [source, target] = forward ? [a, b] : [b, a];
 
   syncing = true;
   try {
@@ -232,9 +288,9 @@ function onPaneChanged(view) {
     // Одинаковое увеличение в микроскопических единицах, а не одинаковый зум:
     // у сканов 20× и 40× разный размер пикселя (С-7)
     if (source.magnification && target.magnification) target.setMagnification(source.magnification, true);
-    target.panToMicrons({ x: center.x + sign * linkOffset.dx, y: center.y + sign * linkOffset.dy }, true);
-    const rotation = source.rotation + sign * linkOffset.rotation;
-    if (Math.abs(target.rotation - rotation) > 0.01) target.setRotation(rotation, true);
+    target.panToMicrons(forward ? link.forward(linkBind, center) : link.backward(linkBind, center), true);
+    const rotation = link.rotationFor(linkBind, source.rotation, forward);
+    if (Math.abs(normalizeAngle(target.rotation - rotation)) > 0.01) target.setRotation(rotation, true);
   } finally {
     syncing = false;
   }
@@ -247,6 +303,11 @@ function applyCompareLayout() {
   document.body.classList.toggle('is-comparing', comparing);
   $('panes').style.gridTemplateColumns = comparing ? `${split}fr 6px ${100 - split}fr` : '1fr';
   for (const id of ['btnSwap', 'btnSingle', 'btnLink2']) $(id).hidden = !comparing;
+  // Привязка по ориентирам есть только при сравнении и только если у обоих
+  // сканов известен размер пикселя (С-10)
+  const canBind = comparing && panes.every((pane) => pane.overlay?.available);
+  $('btnBind').hidden = !canBind;
+  if (!canBind) stopBinding();
   $('adjustBoth').hidden = !comparing;
   $('adjustTarget').hidden = !comparing;
   updateCompareButton(comparing);
@@ -383,17 +444,15 @@ function initZoomPanel() {
     buttons.append(button);
   });
 
-  const slider = $('zoomSlider');
-  slider.addEventListener('input', () => {
-    sliderDragging = true;
-    forEachPane((pane) => pane.zoomToSliderPosition(slider.value));
+  // Панель сворачивается, как мини-карта, и при каждом открытии страницы
+  // снова развёрнута: увеличение нужно чаще, чем место под ним
+  const toggle = $('zoomToggle');
+  toggle.addEventListener('click', () => {
+    const collapsed = toggle.closest('.zoom-panel').classList.toggle('is-collapsed');
+    toggle.textContent = collapsed ? '▸' : '▾';
+    toggle.setAttribute('aria-expanded', String(!collapsed));
   });
-  slider.addEventListener('change', () => { sliderDragging = false; });
-  $('rotateLeft').addEventListener('click', () => forEachPane((pane) => pane.rotateBy(-90)));
-  $('rotateRight').addEventListener('click', () => forEachPane((pane) => pane.rotateBy(90)));
 }
-
-let sliderDragging = false;
 
 // Действие применяется ко всем половинам; при связанной навигации хватает
 // первой, остальные подтянутся сами.
@@ -411,7 +470,6 @@ function zoomAllTo(magnification) {
 function updateZoomPanel() {
   if (!active) return;
   $('zoomCurrent').textContent = active.magnificationLabel();
-  if (!sliderDragging) $('zoomSlider').value = active.sliderPosition;
   // Кнопка неактивна, если ни одна половина такого увеличения не даёт
   const best = Math.max(...panes.map((pane) => pane.slide.objective || 0));
   for (const button of $('zoomButtons').querySelectorAll('[data-magnification]')) {
@@ -419,6 +477,74 @@ function updateZoomPanel() {
     button.disabled = !best || magnification > best;
     if (button.disabled) button.title = t('zoom.unavailable.tip');
   }
+}
+
+// ---------- поворот и отражение (Т-2, Т-3) ----------
+
+function initRotatePanel() {
+  const slider = $('rotateSlider');
+  const number = $('rotateNumber');
+  const flip = $('rotateFlip');
+  bindPopover($('btnRotate'), $('rotatePopover'), { onOpen: refreshRotatePanel });
+
+  slider.addEventListener('input', () => rotateTo(slider.valueAsNumber));
+  number.addEventListener('change', () => rotateTo(number.valueAsNumber));
+  $('rotateMinus90').addEventListener('click', () => rotateBy(-90));
+  $('rotatePlus90').addEventListener('click', () => rotateBy(90));
+  $('rotateZero').addEventListener('click', () => rotateTo(0));
+  // Отражается только выбранная половина: две отражённые половины — это те же
+  // два неотражённых среза (Т-3)
+  flip.addEventListener('change', () => setFlip(active, flip.checked));
+}
+
+// Поворот задаётся для активной половины, вторая поворачивается на тот же угол:
+// в режиме сравнения он синхронный, а взаимный угол половин задаёт привязка.
+function rotateTo(degrees) {
+  if (!active) return;
+  rotateBy(normalizeAngle(degrees) - normalizeAngle(active.rotation));
+}
+
+function rotateBy(delta) {
+  if (!active || !delta) return;
+  // При связи хватает одной половины: вторая повернётся следом, сохранив
+  // запомненный взаимный угол
+  const targets = linked ? [active] : panes;
+  for (const pane of targets) pane.setRotation(normalizeAngle(pane.rotation + delta), true);
+  refreshRotatePanel();
+}
+
+function setFlip(pane, flipped) {
+  if (!pane || pane.flipped === flipped) return;
+  pane.setFlip(flipped);
+  // Отражение меняет взаимное положение половин: связь запоминает его заново,
+  // иначе она осталась бы с отражением, которого уже нет (С-9)
+  if (linked) captureBind();
+  refreshRotatePanel();
+  updateStatusBar();
+}
+
+function refreshRotatePanel() {
+  if (!active) return;
+  const angle = Math.round(normalizeAngle(active.rotation));
+  $('rotateSlider').value = angle;
+  $('rotateNumber').value = angle;
+  $('rotateFlip').checked = active.flipped;
+  $('btnRotate').classList.toggle('is-active', angle !== 0 || active.flipped);
+}
+
+// Окошко у кнопки: открывается нажатием, закрывается щелчком мимо.
+function bindPopover(button, popover, { onOpen } = {}) {
+  const anchor = button.closest('.popover-anchor');
+  const toggle = (open = popover.hidden) => {
+    popover.hidden = !open;
+    button.setAttribute('aria-expanded', String(open));
+    if (open) onOpen?.();
+  };
+  button.addEventListener('click', () => toggle());
+  document.addEventListener('pointerdown', (event) => {
+    if (!popover.hidden && !anchor.contains(event.target)) toggle(false);
+  });
+  return toggle;
 }
 
 // ---------- верхняя панель и строка состояния ----------
@@ -521,9 +647,12 @@ function updateLabelButton() {
 function updateStatusBar() {
   if (!active) return;
   updateZoomPanel();
+  refreshRotatePanel();
+  updateRulerButton();
   // В строке состояния остаётся то, что меняется на ходу: увеличение и
   // состояние загрузки. Размеры и микрометры ушли в «Сведения о скане» (ИН-16).
   $('statusMag').textContent = t('status.mag', { mag: active.magnificationLabel() });
+  $('statusFlip').hidden = !active.flipped;  // отражение видно и на снимке экрана (Т-3)
   const status = $('statusTiles');
   status.textContent = active.tilesStatus;
   status.classList.toggle('is-error', active.tilesFailed);
@@ -578,7 +707,7 @@ function showHelp() {
         title: t('help.zoomGroup'),
         rows: [
           ['0', t('help.fit')],
-          ['1 … 5', t('help.fixed')],
+          ['1 … 4', t('help.fixed')],
           ['+', t('help.zoomIn')],
           ['−', t('help.zoomOut')],
         ],
@@ -588,6 +717,7 @@ function showHelp() {
         rows: [
           ['← ↑ → ↓', t('help.arrows')],
           ['Page Down / Page Up', t('help.pageKeys')],
+          ['Shift + мышь', t('help.shiftAdjust')],
         ],
       },
       {
@@ -600,6 +730,7 @@ function showHelp() {
           ['C', t('help.compare')],
           ['Q', t('help.switchPane')],
           ['S', t('help.info')],
+          ['M', t('help.ruler')],
           ['?', t('help.help')],
         ],
       },
@@ -634,6 +765,189 @@ function layoutTopbar() {
   }
 }
 
+// ---------- рулетка и меню по правой кнопке (Т-4, Т-5) ----------
+
+function initRuler() {
+  $('btnRuler').addEventListener('click', () => setTool(activeTool === 'ruler' ? null : 'ruler'));
+
+  const menu = $('stageMenu');
+  $('menuRuler').addEventListener('click', () => withMenuPoint((pane, point) => {
+    setTool('ruler');
+    pane.overlay.startMeasure(point);
+  }));
+  $('menuPoint').addEventListener('click', () => withMenuPoint((pane, point) => {
+    setTool(null);                                   // стрелка ставится сразу, режим не нужен
+    createAnnotation(pane, 'point', [point]);
+  }));
+  $('menuPolygon').addEventListener('click', () => withMenuPoint((pane, point) => {
+    setTool('polygon');
+    pane.annotations.startDraft(point);
+  }));
+  document.addEventListener('pointerdown', (event) => {
+    if (!menu.hidden && !menu.contains(event.target)) closeStageMenu();
+  });
+}
+
+let menuTarget = null;
+
+// Меню по правой кнопке на препарате (Т-5). На сенсорном экране его нет,
+// поэтому у каждого пункта остаётся обычный путь: кнопка и клавиша.
+function openStageMenu(pane, event, imagePoint) {
+  if (matchMedia('(pointer: coarse)').matches) return;
+  event.preventDefault();
+  setActive(pane);
+  menuTarget = { pane, point: [imagePoint.x, imagePoint.y] };
+
+  const menu = $('stageMenu');
+  const drawing = canDraw();
+  $('menuPoint').hidden = !drawing;
+  $('menuPolygon').hidden = !drawing;
+  $('menuRuler').disabled = !pane.overlay.available;
+  $('menuRuler').title = pane.overlay.available ? t('ruler.tip') : t('ruler.noMpp');
+  menu.hidden = false;
+
+  // Меню не должно вылезать за край области половин
+  const box = menu.offsetParent.getBoundingClientRect();
+  const left = Math.min(event.clientX - box.left, box.width - menu.offsetWidth - 4);
+  const top = Math.min(event.clientY - box.top, box.height - menu.offsetHeight - 4);
+  menu.style.left = `${Math.max(left, 4)}px`;
+  menu.style.top = `${Math.max(top, 4)}px`;
+}
+
+function closeStageMenu() {
+  if ($('stageMenu').hidden) return false;
+  $('stageMenu').hidden = true;
+  menuTarget = null;
+  return true;
+}
+
+function withMenuPoint(action) {
+  const target = menuTarget;
+  closeStageMenu();
+  if (target) action(target.pane, target.point);
+}
+
+// Кнопка неактивна, если в файле нет размера пикселя: мерить нечем (Т-4)
+function updateRulerButton() {
+  const button = $('btnRuler');
+  const available = Boolean(active?.overlay?.available);
+  button.disabled = !available;
+  button.title = available ? t('ruler.tip') : t('ruler.noMpp');
+  button.classList.toggle('is-active', activeTool === 'ruler');
+}
+
+// ---------- привязка по ориентирам (С-10) ----------
+//
+// Пользователь отмечает одну и ту же структуру в обеих половинах, и связь
+// считается по этим парам. Двух пар хватает для неотражённых срезов; третья
+// определяет отражение и показывает расхождение в микрометрах — по нему видно,
+// насколько срезы растянуты. Масштаб по точкам не подбирается: щелчок мышью
+// неточен, а микрометры у обеих половин и так общие.
+
+let binding = false;
+
+function initBinding() {
+  $('btnBind').addEventListener('click', () => (binding ? stopBinding() : startBinding()));
+  $('bindUndo').addEventListener('click', () => {
+    for (const pane of [...panes].reverse()) {
+      if (pane.overlay.landmarks.length) {
+        pane.overlay.setLandmarks(pane.overlay.landmarks.slice(0, -1));
+        break;
+      }
+    }
+    updateBindBar();
+  });
+  $('bindCancel').addEventListener('click', stopBinding);
+  $('bindApply').addEventListener('click', applyBinding);
+}
+
+function startBinding() {
+  if (panes.length !== 2 || !panes.every((pane) => pane.overlay.available)) return;
+  setTool(null);
+  binding = true;
+  for (const pane of panes) pane.overlay.setTool('landmarks');
+  updateBindBar();
+}
+
+function stopBinding() {
+  if (!binding) return;
+  binding = false;
+  for (const pane of panes) pane.overlay.setTool(null);
+  updateBindBar();
+}
+
+function bindPairCount() {
+  return Math.min(...panes.map((pane) => pane.overlay.landmarks.length));
+}
+
+function updateBindBar() {
+  $('bindBar').hidden = !binding;
+  $('btnBind').classList.toggle('is-active', binding);
+  if (!binding) return;
+  const counts = panes.map((pane) => pane.overlay.landmarks.length);
+  const ready = counts[0] === counts[1] && counts[0] >= 2;
+  $('bindHint').textContent = ready
+    ? t('bind.ready', { n: counts[0] })
+    : t('bind.hint', { left: counts[0], right: counts[1] });
+  $('bindApply').disabled = !ready;
+  $('bindUndo').disabled = !counts[0] && !counts[1];
+}
+
+function applyBinding() {
+  const [a, b] = panes;
+  const count = bindPairCount();
+  if (count < 2) return;
+  const first = a.overlay.landmarksInMicrons;
+  const second = b.overlay.landmarksInMicrons;
+  const pairs = Array.from({ length: count }, (_, index) => ({ first: first[index], second: second[index] }));
+
+  // По двум парам зеркальный и незеркальный варианты подходят одинаково точно,
+  // поэтому отражение берётся то, которое задал пользователь (Т-3). Третья пара
+  // различает их сама.
+  const fitted = count >= 3 ? link.fitBind(pairs) : link.fitBind(pairs, a.flipped !== b.flipped);
+  if (fitted.mirror !== (a.flipped !== b.flipped)) {
+    // Ориентиры говорят, что срезы зеркальны: вторую половину отражаем сами,
+    // иначе такую связь не показать. Пометка «отражено» об этом скажет.
+    setLinked(false);
+    b.setFlip(!b.flipped);
+  }
+  stopBinding();
+  setLinked(true, fitted);
+  showNote(count >= 3
+    ? t('bind.done', { miss: formatNumber(fitted.residual, fitted.residual < 10 ? 1 : 0) })
+    : t('bind.donePair'), { error: false });
+}
+
+// ---------- поправка связи с Shift (С-11) ----------
+//
+// Пока Shift зажат, половины идут врозь: двигается и поворачивается только
+// активная. При отпускании связь запоминает новое взаимное положение —
+// разрывать и связывать заново не нужно.
+
+let shiftFrom = null;
+
+function initShiftAdjust() {
+  addEventListener('keydown', (event) => {
+    if (event.key !== 'Shift' || shiftFrom || !linked || !active) return;
+    shiftFrom = { center: active.targetCenterMicrons, rotation: active.rotation };
+  });
+  const finish = () => {
+    const before = shiftFrom;
+    shiftFrom = null;
+    if (!before || !linked || !active) return;
+    const now = active.targetCenterMicrons;
+    const moved = Math.hypot(now.x - before.center.x, now.y - before.center.y) > 0.5
+      || Math.abs(normalizeAngle(active.rotation - before.rotation)) > 0.01;
+    if (!moved) return;
+    captureBind();
+    showNote(t('compare.bindAdjusted'), { error: false });
+  };
+  addEventListener('keyup', (event) => {
+    if (event.key === 'Shift') finish();
+  });
+  addEventListener('blur', finish); // Shift отпустили в другом окне
+}
+
 // ---------- аннотации (этап 9) ----------
 
 function initAnnotations() {
@@ -661,12 +975,25 @@ function canDraw() {
   return Boolean(active?.slide.can_annotate) && !phone();
 }
 
+// Рулетка доступна всем, инструменты разметки — только патологам (Т-4, А-3).
+// Инструмент принадлежит активной половине: в соседней он выключен.
 function setTool(tool) {
-  activeTool = canDraw() ? tool : null;
-  for (const pane of panes) pane.annotations?.setTool(pane === active ? activeTool : null);
+  if (tool === 'ruler') activeTool = active?.overlay?.available ? 'ruler' : null;
+  else activeTool = canDraw() ? tool : null;
+  if (activeTool) stopBinding();  // разметка ориентиров и инструменты не совмещаются
+  for (const pane of panes) {
+    const mine = pane === active;
+    pane.annotations?.setTool(mine && activeTool !== 'ruler' ? activeTool : null);
+    // Разметка ориентиров идёт сразу в обеих половинах и не сбивается при
+    // переходе к соседней: именно им и отмечают пары точек (С-10)
+    if (binding) pane.overlay?.setTool('landmarks');
+    else pane.overlay?.setTool(mine && activeTool === 'ruler' ? 'ruler' : null);
+  }
   $('toolPoint').classList.toggle('is-active', activeTool === 'point');
   $('toolPolygon').classList.toggle('is-active', activeTool === 'polygon');
+  updateRulerButton();
   updateAnnotationHint();
+  if (activeTool === 'ruler') showNote(t('ruler.hint'), { error: false });
 }
 
 function updateAnnotationHint() {
@@ -886,10 +1213,12 @@ async function copyAnnotationLink(item) {
   }
 }
 
-function showNote(text) {
+// Короткое сообщение в строке состояния. error: false — для подсказок вроде
+// рулетки: на телефоне видны только сообщения об ошибках (М-4).
+function showNote(text, { error = true } = {}) {
   const status = $('statusTiles');
   status.textContent = text;
-  status.classList.add('is-error');
+  status.classList.toggle('is-error', error);
   setTimeout(() => {
     if (status.textContent === text) {
       status.textContent = '';
@@ -926,7 +1255,10 @@ function buildLink(withAdjust) {
     query.set(`y${suffix}`, Math.round(center.y));
     if (pane.slide.objective) query.set(`m${suffix}`, pane.magnification.toFixed(2));
     else query.set(`z${suffix}`, pane.imageZoom.toFixed(4));
-    if (pane.rotation) query.set(`r${suffix}`, pane.rotation);
+    // Угол теперь любой, а не кратный 90°: до десятых хватает (Т-2)
+    const angle = normalizeAngle(pane.rotation);
+    if (angle) query.set(`r${suffix}`, String(Math.round(angle * 10) / 10));
+    if (pane.flipped) query.set(`f${suffix}`, '1'); // отражение тоже передаётся (Т-3)
     if (withAdjust && !isDefault(pane.adjustValues)) {
       query.set(`adj${suffix}`, AdjustPanel.serialize(pane.adjustValues));
     }
@@ -939,6 +1271,7 @@ function restoreView(pane, query, suffix) {
   const number = (name) => (query.has(name) ? Number(query.get(name)) : NaN);
   const { viewport } = pane.viewer;
   const [x, y, m, z, r] = ['x', 'y', 'm', 'z', 'r'].map((key) => number(key + suffix));
+  if (query.get(`f${suffix}`) === '1') pane.setFlip(true);
   if (Number.isFinite(r)) viewport.setRotation(r, true);
   const zoom = Number.isFinite(m) && pane.slide.objective ? m / pane.slide.objective : z;
   if (zoom > 0) viewport.zoomTo(viewport.imageToViewportZoom(zoom), null, true);
@@ -1066,8 +1399,13 @@ function initHotkeys() {
     KeyC: () => (panes.length > 1 ? leaveCompare() : startCompare()),
     KeyS: showSlideInfo,
     KeyA: () => setAnnotationsShown(!annotationsShown),  // показ аннотаций (А-11)
+    KeyM: () => setTool(activeTool === 'ruler' ? null : 'ruler'),  // рулетка (Т-4)
     Enter: () => active?.annotations.closeDraft(),       // замкнуть начатый контур (А-2)
     Escape: () => {
+      // По порядку: меню, начатое измерение, начатый контур, сам инструмент
+      if (closeStageMenu()) return;
+      if (binding) return stopBinding();
+      if (active?.overlay?.clearMeasure()) return;
       if (!active?.annotations.cancelDraft()) setTool(null);
     },
     Slash: showHelp, // Shift+/ это «?»
@@ -1084,8 +1422,9 @@ function initHotkeys() {
     if (event.ctrlKey || event.altKey || event.metaKey || !active?.viewer.isOpen()) return;
     if (document.querySelector('dialog[open]')) return; // в открытом окне клавиши принадлежат ему
     // В полях ввода клавиши принадлежат полю; у ползунков остаются только стрелки.
-    if (event.target.closest('input:not([type=range], [type=checkbox]), select, textarea')) return;
-    if (event.target.matches('input[type=range]') && event.code.startsWith('Arrow')) return;
+    // closest? — цель бывает и не элементом (например, сам документ).
+    if (event.target.closest?.('input:not([type=range], [type=checkbox]), select, textarea')) return;
+    if (event.target.matches?.('input[type=range]') && event.code.startsWith('Arrow')) return;
     const action = actions[event.code];
     if (!action) return;
     event.preventDefault();

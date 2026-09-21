@@ -87,6 +87,15 @@ export class AnnotationLayer {
     this.render();
   }
 
+  // Первая вершина приходит из меню по правой кнопке: контур начинается там,
+  // где меню открыли (Т-5)
+  startDraft(point) {
+    if (this.tool !== 'polygon') return;
+    this.draft = [point];
+    this.render();
+    this.onDraftChange?.();
+  }
+
   cancelDraft() {
     if (!this.draft.length) return false;
     this.draft = [];
@@ -187,14 +196,15 @@ export class AnnotationLayer {
     }
   }
 
-  // Пересчёт положения: матрица для контуров и экранные координаты для маркеров
+  // Пересчёт положения: матрица для контуров и экранные координаты для маркеров.
+  // Координаты берутся у половины экрана, а не у библиотеки: она зеркалит только
+  // рисование, и при отражении (Т-3) пометки встали бы на другой край скана.
   place() {
-    const { viewport } = this.viewer;
     if (!this.viewer.isOpen()) return;
     const { width, height } = this.view.slide;
-    const origin = viewport.pixelFromPoint(viewport.imageToViewportCoordinates(0, 0), true);
-    const alongX = viewport.pixelFromPoint(viewport.imageToViewportCoordinates(width, 0), true);
-    const alongY = viewport.pixelFromPoint(viewport.imageToViewportCoordinates(0, height), true);
+    const origin = this.view.pixelFromImage(0, 0);
+    const alongX = this.view.pixelFromImage(width, 0);
+    const alongY = this.view.pixelFromImage(0, height);
     const a = (alongX.x - origin.x) / width;
     const b = (alongX.y - origin.y) / width;
     const c = (alongY.x - origin.x) / height;
@@ -216,8 +226,7 @@ export class AnnotationLayer {
   }
 
   #toScreen([x, y]) {
-    const { viewport } = this.viewer;
-    return viewport.pixelFromPoint(viewport.imageToViewportCoordinates(x, y), true);
+    return this.view.pixelFromImage(x, y);
   }
 
   // ---------- подсказка и выбор ----------
@@ -268,9 +277,7 @@ export class AnnotationLayer {
       } catch { /* указатель уже отпущен */ }
       const points = item.points.map((pair) => [...pair]);
       const move = (moveEvent) => {
-        const at = this.viewer.viewport.windowToImageCoordinates(
-          new OpenSeadragon.Point(moveEvent.clientX, moveEvent.clientY),
-        );
+        const at = this.view.imageFromClient(moveEvent.clientX, moveEvent.clientY);
         points[index] = [at.x, at.y];
         item.points = points;
         this.render();
@@ -290,8 +297,19 @@ export class AnnotationLayer {
   // ---------- рисование (А-1, А-2) ----------
 
   #onClick(event) {
-    if (!this.tool || !event.quick) return;
+    // Щелчок по препарату мимо пометок снимает выделение: белое свечение
+    // отмечает ту, с которой сейчас работают, и не должно висеть всё время
+    if (!this.tool) {
+      if (event.quick && this.selectedId) {
+        this.select(null);
+        this.onSelect?.(null);
+      }
+      return;
+    }
+    if (!event.quick) return;
     event.preventDefaultAction = true;
+    // Положение щелчка библиотека зеркалит сама, когда половина отражена,
+    // поэтому здесь идёт прямой пересчёт, без view.imageFromPixel (Т-3)
     const at = this.viewer.viewport.viewportToImageCoordinates(
       this.viewer.viewport.pointFromPixel(event.position, true),
     );

@@ -39,6 +39,14 @@ const SHAPES = {
     + '<circle cx="12" cy="16.8" r="1.1" fill="currentColor" stroke="none"/>',
   // Аннотации: маркер-булавка на препарате
   annotations: '<path d="M12 21.5s7-6.1 7-11.2A7 7 0 0 0 5 10.3c0 5.1 7 11.2 7 11.2z"/><circle cx="12" cy="10" r="2.6"/>',
+  // Поворот и отражение (Т-2, Т-3): стрелка по дуге вокруг препарата
+  rotate: '<path d="M20.5 12a8.5 8.5 0 1 1-2.9-6.4"/><path d="M21 4v5.5h-5.5"/>',
+  // Рулетка (Т-4): линейка с делениями
+  ruler: '<rect x="1.8" y="7.5" width="20.4" height="9" rx="1.5" transform="rotate(-20 12 12)"/>'
+    + '<path d="M6.6 9.6l1.2 2.6M10.4 8.2l1.2 2.6M14.2 6.8l1.2 2.6M18 5.4l1.2 2.6"/>',
+  // Привязка по ориентирам (С-10): две отмеченные точки, соединённые линией
+  bind: '<circle cx="6" cy="17.5" r="2.6"/><circle cx="18" cy="6.5" r="2.6"/><path d="M8 15.6l8-7.2"/>'
+    + '<path d="M3 8.5V3.5h5M21 15.5v5h-5"/>',
   // Ещё: кнопки, которые не поместились (В-4)
   more: '<circle cx="5.5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/>'
     + '<circle cx="18.5" cy="12" r="1.7" fill="currentColor" stroke="none"/>',
