@@ -151,6 +151,9 @@ def main() -> None:
         fragments = cs.contours_from_geojson(work / "c.geojson")
         check("GeoJSON QuPath: два фрагмента, артефакт у первого",
               len(fragments) == 2 and len(fragments[0].artifacts) == 1 and not fragments[1].artifacts)
+        (work / "list.geojson").write_text(json.dumps(geo["features"]), encoding="utf-8")
+        check("GeoJSON списком, без FeatureCollection, читается так же",
+              len(cs.contours_from_geojson(work / "list.geojson")) == 2)
         result = cs.run(slide, 0.5, cs.ORIGINAL, fragments, log=lambda *_: None)
         check("разрешение оригинала: уменьшение в 4 раза", result["pixel_um"] == 2.0, f"({result['pixel_um']})")
         f1 = result["fragments"][0]

@@ -57,7 +57,11 @@ def _polygons(geometry: dict) -> list[list[list[list[float]]]]:
 def contours_from_geojson(path: Path) -> list[Fragment]:
     """Экспорт QuPath (File › Export objects › GeoJSON): ткань и артефакты по классам."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
-    features = data["features"] if data.get("type") == "FeatureCollection" else data
+    # QuPath выгружает либо FeatureCollection, либо просто список объектов
+    if isinstance(data, dict):
+        features = data.get("features", [data])
+    else:
+        features = data
     tissues, artifacts = [], []
     for feature in features:
         props = feature.get("properties") or {}
