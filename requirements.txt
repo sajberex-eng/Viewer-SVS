@@ -6,3 +6,7 @@ pillow>=11.0
 pyyaml>=6.0
 itsdangerous>=2.2
 bcrypt>=4.2
+# Оценка клеточности (этап 11): перенос MarrowQuant 2.0. numpy ниже 2 — ради ASlide (KFB).
+numpy>=1.26,<2
+opencv-python-headless>=4.10,<6
+numba>=0.60

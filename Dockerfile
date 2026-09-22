@@ -21,5 +21,9 @@ RUN useradd --create-home viewer && mkdir -p /app/data && chown viewer /app/data
 USER viewer
 
 ENV VIEWER_CONFIG=/app/config.yaml
+# Скомпилированный Numba код разделения клеток (server/ij_watershed.py) хранится
+# в томе данных: после пересборки образа первая оценка клеточности компилирует его
+# заново (~15 с), дальше берётся готовый.
+ENV NUMBA_CACHE_DIR=/app/data/cache/numba
 EXPOSE 8000
 CMD ["uvicorn", "server.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

@@ -1,4 +1,4 @@
-"""Учётные записи из командной строки: python -m server.manage <команда>.
+"""Учётные записи и служебные команды: python -m server.manage <команда>.
 
 Нужна для первого администратора: дальше пользователей заводит администратор
 в веб-интерфейсе. Самостоятельной регистрации нет.
@@ -51,6 +51,55 @@ def warm_all(db: Database, settings) -> None:
     print("Готово")
 
 
+def cellularity_cmd(db: Database, settings, args) -> None:
+    """Оценка клеточности по MarrowQuant 2.0 (этап 11): расчёт без интерфейса, для сверки.
+
+    Контуры — из GeoJSON, выгруженного из QuPath (классы «Tissue Boundaries» и
+    «Artifact»), либо найденные по миниатюре. Результат — по фрагментам и итог.
+    """
+    import json
+    from pathlib import Path
+
+    from . import cellularity, cellularity_slide as cs
+
+    row = db.query_one("SELECT * FROM slides WHERE id = ?", (args.slide_id,))
+    if row is None:
+        sys.exit("Скан не найден")
+    if not row["mpp"]:
+        sys.exit("В файле скана нет размера пикселя: площади в мкм² посчитать нельзя")
+    if row["stain"] != "HE":
+        print("Внимание: окраска скана не H&E — пороги метода подобраны под гематоксилин и эозин")
+    storage = create_storage(settings.storage)
+    slide = storage.open_slide(row["key"])
+    try:
+        fragments = cs.contours_from_geojson(Path(args.contours)) if args.contours             else cs.contours_auto(slide, float(row["mpp"]))
+        if not fragments:
+            sys.exit("Фрагменты ткани не найдены")
+        print(f"Скан {row['id']}: фрагментов {len(fragments)}, "
+              f"контуры {'из файла' if args.contours else 'найдены по миниатюре'}")
+        params = cellularity.Params()
+        if args.adip_max is not None:
+            params.adip_max_um2 = args.adip_max
+        resolution = args.resolution if args.resolution == cs.ORIGINAL else float(args.resolution)
+        result = cs.run(slide, float(row["mpp"]), resolution, fragments, params,
+                        masks_dir=Path(args.masks) if args.masks else None)
+    finally:
+        slide.close()
+    total = result["total"]
+    print(f"Итог по стеклу ({result['pixel_um']} мкм на точку): ткани {total['tissue_mm2']:.2f} мм², "
+          f"костномозгового пространства {total['marrow_mm2']:.2f} мм²")
+    print(f"  клеточность, формула 1 (Hm / (Hm + Ad)): {total['cellularity_eq1_pct']} %")
+    print(f"  клеточность, формула 2 (Hm / пространство): {total['cellularity_eq2_pct']} %")
+    print(f"  жир {total['adiposity_pct']} %, строма и сосуды {total['imv_pct']} %, прочее {total['other_pct']} %, "
+          f"жировых клеток {total['adipocytes']}")
+    for warning in total["warnings"]:
+        print(f"  ! {warning}")
+    print("Исследовательский показатель на стадии валидации, не диагноз.")
+    if args.json:
+        Path(args.json).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"Подробности: {args.json}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Учётные записи вьювера")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -74,12 +123,24 @@ def main() -> None:
         help="приготовить миниатюры и обзорные тайлы для сканов, загруженных до появления прогрева",
     )
 
+    cell = commands.add_parser("cellularity", help="клеточность костного мозга по скану H&E (MarrowQuant 2.0)")
+    cell.add_argument("slide_id")
+    cell.add_argument("--resolution", default="original",
+                      help="original (как MarrowQuant: уменьшение в 4 раза) или мкм на точку: 1, 2")
+    cell.add_argument("--contours", help="GeoJSON из QuPath: классы Tissue Boundaries и Artifact")
+    cell.add_argument("--adip-max", type=float, help="верхний предел площади жировой клетки, мкм² (в оригинале нет)")
+    cell.add_argument("--masks", help="папка для карт частей (PNG, цвета MarrowQuant)")
+    cell.add_argument("--json", help="файл для подробного результата")
+
     args = parser.parse_args()
     settings = load_settings()
     db = Database(settings.db_path)
 
     if args.command == "warm":
         warm_all(db, settings)
+        return
+    if args.command == "cellularity":
+        cellularity_cmd(db, settings, args)
         return
 
     try:
