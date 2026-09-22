@@ -5,7 +5,9 @@
      переносится автоматически);
   2  незавершённые загрузки;
   3  группы пользователей; обязательной смены выданного пароля больше нет;
-  4  аннотации на сканах (этап 9).
+  4  аннотации на сканах (этап 9);
+  5  цвет аннотации;
+  6  окраска кодом из списка и маркер ИГХ отдельно (этап 11, ОК-3).
 """
 from __future__ import annotations
 
@@ -14,7 +16,9 @@ import threading
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+from . import stains
+
+SCHEMA_VERSION = 6
 
 # Группы, которые заводятся при создании базы. Дальше администратор
 # сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
@@ -79,7 +83,8 @@ CREATE TABLE slides (
     has_label     INTEGER NOT NULL DEFAULT 0,
     case_code     TEXT,
     glass         TEXT,
-    stain         TEXT,
+    stain         TEXT,                      -- код из stains.CODES (версия 6)
+    ihc_marker    TEXT,                      -- маркер ИГХ, только при stain = 'IHC'
     missing       INTEGER NOT NULL DEFAULT 0,
     uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
     added_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -318,6 +323,18 @@ def _migrate_v0_to_v1(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_stains(conn: sqlite3.Connection) -> None:
+    """Версия 6: окраска была свободным текстом, стала кодом из списка (ОК-3).
+
+    «HE» становится H&E, любой другой текст — маркером ИГХ: так до версии 6
+    записывались только маркеры (Ki-67, CD3…).
+    """
+    conn.execute("ALTER TABLE slides ADD COLUMN ihc_marker TEXT")
+    for row in conn.execute("SELECT id, stain FROM slides WHERE stain IS NOT NULL").fetchall():
+        code, marker = stains.from_text(row[1])
+        conn.execute("UPDATE slides SET stain = ?, ihc_marker = ? WHERE id = ?", (code, marker, row[0]))
+
+
 class Database:
     """Подключение держится на поток (СК-3).
 
@@ -373,6 +390,9 @@ class Database:
                         # Цвет аннотации (решение заказчика 2026-09-20): прежние становятся зелёными
                         conn.execute("ALTER TABLE annotations ADD COLUMN color TEXT NOT NULL DEFAULT 'green'")
                         version = 5
+                    if version == 5:
+                        _migrate_stains(conn)
+                        version = 6
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

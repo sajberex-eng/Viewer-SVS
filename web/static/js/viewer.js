@@ -7,7 +7,7 @@ import { AnnotationLayer } from './annotations.js';
 import { api, logout } from './api.js';
 import { chooseDialog, confirmDialog, formDialog, infoDialog } from './dialog.js';
 import { applyIcons } from './icons.js';
-import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.js';
+import { applyI18n, formatDateTime, formatNumber, setLanguage, stainFull, t } from './i18n.js';
 // Пересчёт точек и углов между половинами: link.forward, link.backward,
 // link.rotationFor, link.fitBind — по имени модуля понятнее, чем сами по себе.
 import * as link from './link.js';
@@ -676,6 +676,7 @@ function showSlideInfo() {
   const rows = [
     [t('info.name'), slide.title],
     [t('info.folder'), (slide.path ?? []).map((folder) => folder.name).join(' › ') || t('info.unknown')],
+    [t('info.stain'), stainFull(slide)],
     [t('info.size'), t('info.sizePx', { w: formatNumber(slide.width), h: formatNumber(slide.height) })],
     [t('info.mpp'), slide.mpp ? t('info.mppValue', { mpp: formatNumber(slide.mpp, 4) }) : t('info.unknown')],
     [t('info.objective'), slide.objective ? `${formatNumber(slide.objective, 1)}×` : t('info.unknown')],

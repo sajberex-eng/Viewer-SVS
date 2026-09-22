@@ -307,7 +307,8 @@ def main() -> None:
         check("файл хранится со своим расширением", tif_key.endswith(".tif") and (storage_root / tif_key).is_file(),
               f"({tif_key})")
         tif_info = admin.get(f"/api/slides/{tif_id}").json()
-        check("поля карточки разобраны из имени и у TIFF", tif_info.get("stain") == "PAS", f"({tif_info.get('stain')})")
+        check("незнакомая окраска в имени файла не угадывается", tif_info.get("stain") is None
+              and tif_info.get("title", "").startswith("P7 · S2"), f"({tif_info.get('stain')}, {tif_info.get('title')})")
         tile = admin.get(f"{tif_info['tiles']['url']}10/0_0.jpg")
         check("тайл TIFF отдаётся", tile.status_code == 200 and tile.content[:2] == b"\xff\xd8")
         admin.delete(f"/api/slides/{tif_id}")

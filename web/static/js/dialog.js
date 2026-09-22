@@ -50,6 +50,7 @@ function show(dialog, focusTarget) {
 // onSubmit может бросить ошибку: она покажется в окне, окно останется открытым.
 export function formDialog({ title, fields, submitLabel, danger, onSubmit }) {
   const inputs = new Map();
+  const conditional = [];  // поля, которые видны только при значении другого поля (showIf)
   const nodes = fields.map((field) => {
     const label = document.createElement('label');
     label.className = 'modal-field';
@@ -78,10 +79,16 @@ export function formDialog({ title, fields, submitLabel, danger, onSubmit }) {
       hint.textContent = field.hint;
       label.append(hint);
     }
+    if (field.showIf) conditional.push({ label, ...field.showIf });
     return label;
   });
 
   const { dialog, form, submit, error } = build(title, nodes, { submitLabel, danger });
+  const updateVisibility = () => {
+    for (const { label, name, value } of conditional) label.hidden = inputs.get(name)?.value !== value;
+  };
+  updateVisibility();
+  form.addEventListener('change', updateVisibility);
   return new Promise((resolve) => {
     form.addEventListener('submit', async (event) => {
       event.preventDefault();

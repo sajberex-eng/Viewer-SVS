@@ -75,6 +75,21 @@ const STRINGS = {
     'slide.editTitle': 'Карточка скана',
     'slide.title': 'Название',
     'slide.stain': 'Окраска',
+    'slide.ihcMarker': 'Маркер ИГХ',
+    'slide.ihcMarkerHint': 'Например, Ki-67 или CD3. На миниатюре и в карточке будет только маркер.',
+
+    // Окраска (ОК-1): сокращение — на миниатюрах и в подписях, полное — в списке выбора
+    'stain.none': 'не указана',
+    'stain.HE': 'H&E',
+    'stain.HE.full': 'H&E (гематоксилин и эозин)',
+    'stain.AE': 'АЭ',
+    'stain.AE.full': 'АЭ (азур и эозин)',
+    'stain.GOMORI': 'Гомори',
+    'stain.GOMORI.full': 'Гомори (импрегнация серебром по Гомори)',
+    'stain.CONGO': 'Конго',
+    'stain.CONGO.full': 'Конго (конго красный)',
+    'stain.IHC': 'ИГХ',
+    'stain.IHC.full': 'ИГХ (иммуногистохимия)',
     'slide.note': 'Примечание',
     'slide.originalName': 'Исходное имя файла: {name}',
     'slide.deleteTitle': 'Удалить скан «{title}»?',
@@ -290,6 +305,7 @@ const STRINGS = {
     'info.title': 'Сведения о скане',
     'info.name': 'Название',
     'info.folder': 'Папка',
+    'info.stain': 'Окраска',
     'info.size': 'Размер',
     'info.sizePx': '{w} × {h} точек',
     'info.mpp': 'Размер пикселя',
@@ -415,6 +431,23 @@ export function setLanguage(lang) {
 export function t(key, params = {}) {
   const template = STRINGS[current][key] ?? STRINGS.ru[key] ?? key;
   return template.replace(/\{(\w+)\}/g, (_, name) => params[name] ?? '');
+}
+
+// Окраска скана (ОК-1, ОК-2). Коды те же, что в server/stains.py.
+export const STAIN_CODES = ['HE', 'AE', 'GOMORI', 'CONGO', 'IHC'];
+
+// На миниатюре, в карточке и в шапке: сокращение, у ИГХ — только маркер.
+export function stainShort(slide) {
+  if (!slide?.stain) return '';
+  if (slide.stain === 'IHC' && slide.ihc_marker) return slide.ihc_marker;
+  return t(`stain.${slide.stain}`);
+}
+
+// Полное название: в списке выбора, в подсказке и в сведениях о скане.
+export function stainFull(slide) {
+  if (!slide?.stain) return t('stain.none');
+  const full = t(`stain.${slide.stain}.full`);
+  return slide.stain === 'IHC' && slide.ihc_marker ? `${full}: ${slide.ihc_marker}` : full;
 }
 
 // data-i18n задаёт текст, data-i18n-tip задаёт всплывающую подсказку и aria-label.

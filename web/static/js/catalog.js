@@ -1,7 +1,7 @@
 // Каталог: дерево папок, карточки сканов, загрузка и права доступа.
 import { api, logout } from './api.js';
 import { chooseDialog, confirmDialog, formDialog, pickerDialog } from './dialog.js';
-import { applyI18n, formatDateTime, formatNumber, setLanguage, t } from './i18n.js';
+import { applyI18n, formatDateTime, formatNumber, setLanguage, STAIN_CODES, stainFull, stainShort, t } from './i18n.js';
 import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile, sha256hex } from './upload.js';
 import { canRemember, forget, keepOnly, recall } from './filestore.js';
 
@@ -372,7 +372,8 @@ function card(slide, showPath = false) {
   const scan = [slide.format, objective].filter(Boolean).join(' ');
   const added = slide.added_at ? t('catalog.addedAt', { date: formatDateTime(slide.added_at).split(',')[0] }) : '';
   const size = slide.size_bytes ? sizeText(slide.size_bytes) : '';
-  details.textContent = [slide.stain, scan, added, size].filter(Boolean).join(' · ');
+  details.textContent = [stainShort(slide), scan, added, size].filter(Boolean).join(' · ');
+  if (slide.stain) details.title = stainFull(slide);
 
   link.append(image, title);
   if (showPath) {
@@ -512,7 +513,15 @@ async function editSlide(slide) {
     title: t('slide.editTitle'),
     fields: [
       { name: 'title', label: t('slide.title'), value: slide.title, required: true, maxLength: 100 },
-      { name: 'stain', label: t('slide.stain'), value: slide.stain ?? '' },
+      {
+        name: 'stain', label: t('slide.stain'), type: 'select', value: slide.stain ?? '',
+        options: [{ value: '', label: t('stain.none') },
+          ...STAIN_CODES.map((code) => ({ value: code, label: t(`stain.${code}.full`) }))],
+      },
+      {
+        name: 'ihc_marker', label: t('slide.ihcMarker'), value: slide.ihc_marker ?? '', maxLength: 60,
+        hint: t('slide.ihcMarkerHint'), showIf: { name: 'stain', value: 'IHC' },
+      },
       {
         name: 'note', label: t('slide.note'), type: 'textarea', value: slide.note ?? '',
         hint: slide.original_name ? t('slide.originalName', { name: slide.original_name }) : '',

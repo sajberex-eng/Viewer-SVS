@@ -13,6 +13,7 @@ import sqlite3
 import threading
 import time
 
+from . import stains
 from .access import MODES, AccessIndex
 from .db import Database
 from .storage import Storage, StorageUnavailable, slide_extension
@@ -22,7 +23,6 @@ log = logging.getLogger(__name__)
 
 MAX_DEPTH = 5  # ТЗ Х-1: папки не глубже пяти уровней
 MAX_NAME_LENGTH = 100  # ТЗ Х-2
-STAIN_LABELS = {"HE": "H&E"}
 
 # <код случая>_<номер стекла>_<окраска>.<формат>, например P004512_S03_HE.svs:
 # если исходное имя такое, поля карточки заполняются сразу.
@@ -51,8 +51,8 @@ def slide_title(row) -> str:
     if row["title"]:
         return row["title"]
     if row["case_code"]:
-        stain = STAIN_LABELS.get((row["stain"] or "").upper(), row["stain"])
-        return f"{row['case_code']} · {row['glass']} · {stain}"
+        stain = stains.short(row["stain"], row["ihc_marker"])
+        return " · ".join(part for part in (row["case_code"], row["glass"], stain) if part)
     return f"Скан {row['id'][:6].upper()}"
 
 
@@ -196,18 +196,19 @@ class Catalog:
     # ---------- сканы ----------
 
     def add_slide(self, slide_id: str, key: str, folder_id: int, original_name: str, meta: dict, user) -> None:
-        case_code, glass, stain = parse_name(original_name)
+        case_code, glass, stain_text = parse_name(original_name)
+        stain, marker = stains.from_file_name(stain_text), None
         self._db.execute(
             """
             INSERT INTO slides (id, key, folder_id, title, original_name, size, mtime, width, height,
-                                objective, mpp, has_label, case_code, glass, stain, uploaded_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                objective, mpp, has_label, case_code, glass, stain, ihc_marker, uploaded_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slide_id, key, folder_id,
                 None if case_code else self._default_title(folder_id),
                 original_name, meta["size"], meta["mtime"], meta["width"], meta["height"],
-                meta["objective"], meta["mpp"], meta["has_label"], case_code, glass, stain, user["id"],
+                meta["objective"], meta["mpp"], meta["has_label"], case_code, glass, stain, marker, user["id"],
             ),
         )
 
@@ -215,12 +216,17 @@ class Catalog:
         used = self._db.query_one("SELECT count(*) AS n FROM slides WHERE folder_id = ?", (folder_id,))
         return f"Скан {used['n'] + 1:02d}"
 
-    def update_slide(self, slide_id: str, *, title: str | None, stain: str | None, note: str | None) -> None:
+    def update_slide(self, slide_id: str, *, title: str | None, stain: str | None,
+                     ihc_marker: str | None, note: str | None) -> None:
         if self.slide(slide_id) is None:
             raise CatalogError("Скан не найден")
+        try:
+            stain, ihc_marker = stains.checked(stain, ihc_marker)
+        except stains.StainError as error:
+            raise CatalogError(str(error)) from None
         self._db.execute(
-            "UPDATE slides SET title = ?, stain = ?, note = ? WHERE id = ?",
-            (normalized(title) if title else None, (stain or "").strip() or None, (note or "").strip(), slide_id),
+            "UPDATE slides SET title = ?, stain = ?, ihc_marker = ?, note = ? WHERE id = ?",
+            (normalized(title) if title else None, stain, ihc_marker, (note or "").strip(), slide_id),
         )
 
     def move_slide(self, slide_id: str, folder_id: int) -> None:

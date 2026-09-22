@@ -461,10 +461,66 @@ def main() -> None:
         same = admin.post("/api/folders", json={"name": "2026-09-19"})
         check("повтор названия в одной папке отклоняется", same.status_code == 400)
 
+        # ---------- окраска: код из списка, маркер у ИГХ (ОК-1…ОК-3) ----------
+        make_slide("ssssssssssss", top)
+
+        def set_stain(client, **fields):
+            body = {"title": "Скан окраски", "note": "", **fields}
+            return client.patch("/api/slides/ssssssssssss", json=body)
+
+        def stain_of():
+            info = admin.get("/api/slides/ssssssssssss").json()
+            return info["stain"], info["ihc_marker"]
+
+        check("H&E сохраняется кодом", set_stain(admin, stain="HE", ihc_marker="").status_code == 200
+              and stain_of() == ("HE", None), f"({stain_of()})")
+        set_stain(admin, stain="IHC", ihc_marker="  Ki-67 ")
+        check("у ИГХ сохраняется маркер", stain_of() == ("IHC", "Ki-67"), f"({stain_of()})")
+        set_stain(admin, stain="CONGO", ihc_marker="CD3")
+        check("у окраски не ИГХ маркер не хранится", stain_of() == ("CONGO", None), f"({stain_of()})")
+        check("неизвестная окраска отклоняется", set_stain(admin, stain="PAS").status_code == 400)
+        check("слишком длинный маркер отклоняется", set_stain(admin, stain="IHC", ihc_marker="x" * 61).status_code == 400)
+        set_stain(admin, stain="", ihc_marker="")
+        check("окраску можно снять", stain_of() == (None, None), f"({stain_of()})")
+        check("пользователь окраску не меняет", set_stain(alice, stain="HE").status_code == 403)
+        db.execute("UPDATE slides SET case_code = 'P1', glass = 'S1', title = NULL, stain = 'IHC', "
+                   "ihc_marker = 'CD3' WHERE id = 'ssssssssssss'")
+        check("в названии по умолчанию у ИГХ только маркер",
+              admin.get("/api/slides/ssssssssssss").json()["title"] == "P1 · S1 · CD3")
+
+
+def check_stain_migration() -> None:
+    """База версии 5 со свободным текстом окраски переносится на версию 6 (ОК-3)."""
+    import sqlite3
+    from server.db import Database
+
+    path = WORK_DIR / "v5.sqlite3"
+    Database(path).close_all()
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("ALTER TABLE slides DROP COLUMN ihc_marker")
+    conn.execute("INSERT INTO folders (id, name, access_mode) VALUES (1, 'Корень', 'admins')")
+    for slide_id, stain in (("m1", "HE"), ("m2", "Ki-67"), ("m3", None), ("m4", "  ALK (D5F3) ")):
+        conn.execute("INSERT INTO slides (id, key, folder_id, size, mtime, width, height, stain) "
+                     "VALUES (?, ?, 1, 1, 0, 1, 1, ?)", (slide_id, f"{slide_id}.svs", stain))
+    conn.execute("PRAGMA user_version = 5")
+    conn.commit()
+    conn.close()
+
+    migrated = Database(path)
+    rows = {r["id"]: (r["stain"], r["ihc_marker"]) for r in migrated.query("SELECT id, stain, ihc_marker FROM slides")}
+    version = migrated.query_one("PRAGMA user_version")[0]
+    migrated.close_all()
+    check("перенос базы 5 → 6: схема обновлена", version == 6, f"({version})")
+    check("перенос базы 5 → 6: окраски разложены",
+          rows == {"m1": ("HE", None), "m2": ("IHC", "Ki-67"), "m3": (None, None), "m4": ("IHC", "ALK (D5F3)")},
+          f"({rows})")
+
 
 if __name__ == "__main__":
     try:
         main()
+        check_stain_migration()
     finally:
         shutil.rmtree(WORK_DIR, ignore_errors=True)
     if failures:

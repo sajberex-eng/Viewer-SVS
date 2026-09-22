@@ -91,6 +91,7 @@ class FolderPatch(BaseModel):
 class SlidePatch(BaseModel):
     title: str | None = None
     stain: str | None = None
+    ihc_marker: str | None = None
     note: str | None = None
     folder_id: int | None = None
 
@@ -276,7 +277,8 @@ def create_app() -> FastAPI:
             "id": row["id"],
             "title": slide_title(row),
             "folder_id": row["folder_id"],
-            "stain": row["stain"],
+            "stain": row["stain"],           # код из stains.CODES
+            "ihc_marker": row["ihc_marker"],
             "note": row["note"],
             "width": row["width"],
             "height": row["height"],
@@ -611,7 +613,8 @@ def create_app() -> FastAPI:
             catalog.move_slide(slide_id, body.folder_id)
             audit.log(db, request, audit.SLIDE_MOVE, user=user, object_type="slide", object_id=slide_id)
         if body.title is not None or body.stain is not None or body.note is not None:
-            catalog.update_slide(slide_id, title=body.title, stain=body.stain, note=body.note)
+            catalog.update_slide(slide_id, title=body.title, stain=body.stain,
+                                 ihc_marker=body.ihc_marker, note=body.note)
             audit.log(db, request, audit.SLIDE_UPDATE, user=user, object_type="slide", object_id=slide_id)
         return {"ok": True}
 
