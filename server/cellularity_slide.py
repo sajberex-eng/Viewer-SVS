@@ -66,7 +66,9 @@ def contours_from_geojson(path: Path) -> list[Fragment]:
     for feature in features:
         props = feature.get("properties") or {}
         cls = props.get("classification") or {}
-        name = (cls.get("name") if isinstance(cls, dict) else str(cls or "")).strip().lower()
+        # класс может отсутствовать вовсе: в QuPath контур можно нарисовать без класса
+        name = (cls.get("name") if isinstance(cls, dict) else cls) or ""
+        name = str(name).strip().lower()
         for poly in _polygons(feature.get("geometry") or {}):
             (tissues if name in TISSUE_CLASSES else artifacts if name in ARTIFACT_CLASSES else []).append(poly)
     fragments = []

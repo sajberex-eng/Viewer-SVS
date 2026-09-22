@@ -146,6 +146,9 @@ def main() -> None:
              "properties": {"classification": {"name": "Tissue Boundaries"}}},
             {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": art_poly},
              "properties": {"classification": {"name": "Artifact"}}},
+            # контур без класса: в QuPath так можно, разбор не должен падать
+            {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": rect_poly},
+             "properties": {"objectType": "annotation"}},
         ]}
         (work / "c.geojson").write_text(json.dumps(geo), encoding="utf-8")
         fragments = cs.contours_from_geojson(work / "c.geojson")
