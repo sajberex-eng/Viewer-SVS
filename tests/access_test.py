@@ -508,6 +508,18 @@ def main() -> None:
         listed = alice.get("/api/slides/dddddddddddd/annotations").json()
         check("список аннотаций отдаёт контуры с их видами",
               {a["kind"] for a in listed} == {"tissue", "artifact"})
+        # все контуры разом: патолог убирает свои, чужие остаются; администратор — любые
+        carol.post("/api/slides/dddddddddddd/annotations", json={"kind": "tissue", "points": square})
+        check("удаление всех контуров без группы: 403",
+              bob.delete("/api/slides/dddddddddddd/cellularity/contours").status_code == 403)
+        cleared = alice.delete("/api/slides/dddddddddddd/cellularity/contours").json()
+        check("патолог удалил свои контуры (ткань и артефакт), чужой остался",
+              cleared == {"deleted": 2, "kept": 1}
+              and alice.get("/api/slides/dddddddddddd/cellularity").json()["contours"] == {"tissue": 1, "artifact": 0},
+              f"({cleared})")
+        check("администратор удаляет и чужие контуры",
+              admin.delete("/api/slides/dddddddddddd/cellularity/contours").json() == {"deleted": 1, "kept": 0}
+              and alice.get("/api/slides/dddddddddddd/cellularity").json()["contours"] == {"tissue": 0, "artifact": 0})
         check("удаление расчёта без группы: 403",
               bob.delete(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}").status_code == 403)
         check("удаление расчёта патологом: 200, запись и карты классов исчезли, состояние без расчёта",

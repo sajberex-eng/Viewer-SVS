@@ -47,6 +47,7 @@ export function initCellularity(host) {
   $('cellToolTissue').addEventListener('click', () => host.setTool(host.activeTool() === 'tissue' ? null : 'tissue'));
   $('cellToolArtifact').addEventListener('click', () => host.setTool(host.activeTool() === 'artifact' ? null : 'artifact'));
   $('cellPropose').addEventListener('click', propose);
+  $('cellClearContours').addEventListener('click', clearContours);
   $('cellRun').addEventListener('click', start);
   $('cellCancel').addEventListener('click', cancel);
   $('cellDelete').addEventListener('click', remove);
@@ -205,6 +206,7 @@ export function initCellularity(host) {
       return row;
     }));
     $('cellContoursEmpty').hidden = items.length > 0;
+    $('cellClearContours').hidden = !items.length;
     $('cellRun').disabled = !counts.tissue;
   }
 
@@ -352,6 +354,26 @@ export function initCellularity(host) {
     } catch (error) {
       return host.showNote(error.message);
     }
+    load(pane);
+  }
+
+  async function clearContours() {
+    const pane = host.getActive();
+    const items = contours(pane);
+    if (!pane || !items.length) return;
+    const ok = await confirmDialog({
+      title: t('cell.clear.title'), text: t('cell.clear.text', { n: items.length }), submitLabel: t('common.delete'),
+    });
+    if (!ok) return;
+    let result;
+    try {
+      result = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/contours`, { method: 'DELETE' });
+    } catch (error) {
+      return host.showNote(error.message);
+    }
+    host.showNote(t(result.kept ? 'cell.clear.kept' : 'cell.clear.done', { n: result.deleted, kept: result.kept }),
+      { error: false });
+    await host.reloadAnnotations(pane);
     load(pane);
   }
 

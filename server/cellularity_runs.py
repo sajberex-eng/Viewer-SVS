@@ -367,6 +367,18 @@ class CellularityService:
                   object_id=slide_row["id"], detail=f"tissue ×{len(created)}, контуры по миниатюре")
         return created
 
+    def delete_contours(self, slide_row, user, request=None) -> dict:
+        """Удалить все контуры скана, которые этому пользователю можно удалять:
+        администратор — любые, патолог — свои. Чужие остаются, и их число возвращается."""
+        rows = self.contours(slide_row["id"])
+        removable = [row for row in rows if annotationsvc.can_edit(row, user)]
+        for row in removable:
+            annotationsvc.delete(self.db, row["id"])
+        if removable:
+            audit.log(self.db, request, audit.ANNOTATION_DELETE, user=user, object_type="slide",
+                      object_id=slide_row["id"], detail=f"все контуры клеточности ×{len(removable)}")
+        return {"deleted": len(removable), "kept": len(rows) - len(removable)}
+
     # ---------- выгрузка (КЛ-12) ----------
 
     CSV_FIELDS = ("run", "slide", "started_by", "finished_at", "resolution", "pixel_um", "algorithm", "fragment",

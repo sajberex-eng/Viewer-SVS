@@ -636,6 +636,13 @@ def create_app() -> FastAPI:
         # Расчёт неизменяем и назван своим ID, поэтому тайлы масок можно кэшировать надолго
         return Response(data, media_type="image/png", headers={"Cache-Control": TILE_CACHE_CONTROL})
 
+    @app.delete("/api/slides/{slide_id}/cellularity/contours")
+    def cellularity_delete_contours(slide_id: str, request: Request, user=Depends(require_user)):
+        slide_row = require_slide(slide_id, user)
+        if not annotationsvc.can_annotate(db, user):
+            raise HTTPException(403, "Размечать сканы могут участники группы «Патологи» и администраторы")
+        return cellularity.delete_contours(slide_row, user, request)
+
     @app.post("/api/slides/{slide_id}/cellularity/propose")
     def cellularity_propose(slide_id: str, request: Request, user=Depends(require_user)):
         slide_row = require_slide(slide_id, user)
