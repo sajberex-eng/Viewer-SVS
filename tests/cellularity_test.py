@@ -227,7 +227,7 @@ def main() -> None:
         # ---------- отдельный процесс (КЛ-7) ----------
         est = cs.estimate_peak_mb(fragments, 0.5, 1.0)
         check("оценка памяти: библиотеки плюс байты на точку крупнейшего фрагмента",
-              abs(est - (150 + 400 * 400 * c.PEAK_BYTES_PER_PIXEL / 2 ** 20)) < 1e-6, f"({est:.1f} МБ)")
+              abs(est - (150 + c.TRANSIENT_MB + 400 * 400 * c.PEAK_BYTES_PER_PIXEL / 2 ** 20)) < 1e-6, f"({est:.1f} МБ)")
         storage = StorageConfig(root=str(work))
         spec = job.JobSpec(storage, "m.svs", 0.5, cs.ORIGINAL, fragments)
         seen = []
@@ -239,8 +239,11 @@ def main() -> None:
               len(seen) == 2 * len(c.STAGES) and seen[0].fraction == 0
               and all(a.fraction <= b.fraction for a, b in zip(seen, seen[1:])) and seen[-1].fraction < 1,
               f"({len(seen)} сообщений)")
-        check("пик памяти процесса измерен", out["peak_rss_mb"] > 20 and out["elapsed_s"] > 0,
+        check("пик памяти процесса измерен, память по стадиям приходит с ходом",
+              out["peak_rss_mb"] > 20 and out["elapsed_s"] > 0 and all(p.rss_mb > 20 for p in seen),
               f"({out['peak_rss_mb']} МБ, {out['elapsed_s']} с)")
+        check("высота полосы ограничена числом точек", c.strip_rows(1000) == 256 and c.strip_rows(8000) == 125
+              and c.strip_rows(10 ** 9) == 16)
         try:
             job.run_in_process(job.JobSpec(storage, "m.svs", 0.5, 1.0, fragments, memory_limit_mb=1))
             check("отказ по оценке памяти до запуска процесса", False)

@@ -311,11 +311,11 @@ def analysis_factor(base_mpp: float, resolution: str | float) -> float:
 
 def estimate_peak_mb(fragments: list[Fragment], base_mpp: float, resolution: str | float,
                      baseline_mb: float = 150.0) -> float:
-    """Оценка пика памяти процесса расчёта: библиотеки плюс байты на точку самого
-    крупного фрагмента (фрагменты считаются по очереди, память освобождается)."""
+    """Оценка пика памяти процесса расчёта: библиотеки, постоянная часть на чтение и полосы,
+    байты на точку самого крупного фрагмента (фрагменты считаются по очереди)."""
     factor = analysis_factor(base_mpp, resolution)
     largest = max((math.prod(analysis_size(f.bbox, factor)) for f in fragments), default=0)
-    return baseline_mb + largest * cellularity.PEAK_BYTES_PER_PIXEL / 2 ** 20
+    return baseline_mb + cellularity.TRANSIENT_MB + largest * cellularity.PEAK_BYTES_PER_PIXEL / 2 ** 20
 
 
 def run(slide, base_mpp: float, resolution: str | float, fragments: list[Fragment],

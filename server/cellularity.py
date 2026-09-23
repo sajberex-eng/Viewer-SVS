@@ -35,11 +35,19 @@ from . import ij_watershed
 
 FLOAT_MAX = np.float32(3.4028235e38)
 STRIP = 256  # строк в полосе: вычисления с плавающей точкой идут полосами ради памяти
+STRIP_PIXELS = 1_000_000  # но не больше точек в полосе: временные float64 растут с шириной области
 
 
-def _strips(h: int, halo: int = 0, rows: int | None = None):
+def strip_rows(w: int) -> int:
+    """Высота полосы для области шириной w: STRIP строк, но не больше STRIP_PIXELS точек.
+    Разложение окрасок держит на полосу около восьми массивов float64 — при ширине 8000
+    точек полоса в 256 строк стоила бы 130 МБ, с пределом по точкам — 64 МБ."""
+    return max(16, min(STRIP, STRIP_PIXELS // max(w, 1)))
+
+
+def _strips(h: int, halo: int = 0, rows: int | None = None, w: int | None = None):
     """Полосы строк [y0, y1) и их расширение на halo строк для фильтров 3×3."""
-    rows = rows or STRIP
+    rows = rows or (strip_rows(w) if w else STRIP)
     for y0 in range(0, h, rows):
         y1 = min(y0 + rows, h)
         yield y0, y1, max(y0 - halo, 0), min(y1 + halo, h)
@@ -233,7 +241,7 @@ def _iterate_bands(fg: np.ndarray, iterations: int, one_step) -> np.ndarray:
     fg = np.asarray(fg, np.uint8)
     out = np.empty_like(fg)
     # полоса не короче 10 полей, иначе поле съедает время: 50 итераций — полосы по 500 строк
-    for y0, y1, a0, a1 in _strips(fg.shape[0], halo=iterations, rows=max(STRIP, 10 * iterations)):
+    for y0, y1, a0, a1 in _strips(fg.shape[0], halo=iterations, rows=max(strip_rows(fg.shape[1]), 10 * iterations)):
         band = fg[a0:a1]
         for _ in range(iterations):
             band = one_step(band)
@@ -294,7 +302,7 @@ def display_range_after_variance(var: np.ndarray, saturated: float = 0.5) -> tup
     bins = 256
     scale = bins / (vmax - vmin)
     hist = np.zeros(bins, np.int64)
-    for y0, y1, _, _ in _strips(var.shape[0]):     # полосами: float64 и int64 на всю область — 16 байт на точку
+    for y0, y1, _, _ in _strips(var.shape[0], w=var.shape[1]):     # полосами: float64 и int64 на всю область — 16 байт на точку
         idx = np.minimum(((var[y0:y1].astype(np.float64) - vmin) * scale).astype(np.int64), bins - 1)
         hist += np.bincount(idx.ravel(), minlength=bins)
     threshold = int(var.size * saturated / 200.0)
@@ -480,6 +488,9 @@ def filter_particles(cand: np.ndarray, pixel_um: float, p: Params) -> tuple[np.n
 # Сколько байт на точку области держится в памяти на пике расчёта (замер 2026-09-23 на
 # синтетическом фрагменте 17 млн точек, см. раздел 13.8 ТЗ) — для оценки памяти до запуска.
 PEAK_BYTES_PER_PIXEL = 12
+# Постоянная часть сверх библиотек: буферы чтения со скана (OpenSlide, PIL, копии — до 4 × 16 МБ
+# при READ_BUDGET_PX), кэш OpenSlide (32 МБ), полосы float64 (до 64 МБ при STRIP_PIXELS)
+TRANSIENT_MB = 130
 
 
 STAGES = ("deconvolve", "variance", "bone", "imv", "hemato", "adip-watershed", "adip-shrink", "adip-particles")
@@ -519,7 +530,7 @@ def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
     bimv = np.empty((h, w), np.uint8)
     hem = np.empty((h, w), np.uint8)
     cand = np.empty((h, w), bool)
-    for y0, y1, a0, a1 in _strips(h, halo=1):
+    for y0, y1, a0, a1 in _strips(h, halo=1, w=w):
         block = np.asarray(rgb[a0:a1])
         c0, c1 = y0 - a0, y0 - a0 + (y1 - y0)
         d0, d1, d2 = deconvolve(block)
@@ -531,7 +542,7 @@ def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
         del block, d0, d1, d2, hd, adipv
     step("variance")
     var_raw = np.empty((h, w), np.float32)
-    for y0, y1, a0, a1 in _strips(h, halo=1):
+    for y0, y1, a0, a1 in _strips(h, halo=1, w=w):
         var_raw[y0:y1] = variance3(bimv[a0:a1])[y0 - a0:y0 - a0 + (y1 - y0)]
 
     one = np.float32(1.0)
@@ -542,16 +553,16 @@ def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
     step("bone")
     # boneIMVFinder: порог по отношению bimv / (дисперсия + 1)
     rmin, rmax = np.inf, -np.inf
-    for y0, y1, _, _ in _strips(h):
+    for y0, y1, _, _ in _strips(h, w=w):
         r = ratio_strip(y0, y1)
         rmin, rmax = min(rmin, float(r.min())), max(rmax, float(r.max()))
     hist = np.zeros(256, np.int64)
-    for y0, y1, _, _ in _strips(h):
+    for y0, y1, _, _ in _strips(h, w=w):
         hist += np.bincount(to_byte(ratio_strip(y0, y1)[tissue[y0:y1]], rmin, rmax), minlength=256)
     lower = _dark_lower(hist, rmin, rmax, "MaxEntropy")
     dbg.update(bone_min=rmin, bone_max=rmax, bone_lower=lower)
     bone = np.empty((h, w), np.uint8)
-    for y0, y1, _, _ in _strips(h):
+    for y0, y1, _, _ in _strips(h, w=w):
         bone[y0:y1] = ratio_strip(y0, y1) >= np.float32(lower)
     bone = dilate(bone, 5, 1)
     bone = erode(dilate(bone, 20, 2), 20, 2, pad_edges=True).view(bool)
@@ -563,7 +574,7 @@ def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
     vmin, vmax = display_range_after_variance(var_raw)
     dbg.update(var_min=vmin, var_max=vmax)
     hist = np.zeros(256, np.int64)
-    for y0, y1, _, _ in _strips(h):
+    for y0, y1, _, _ in _strips(h, w=w):
         t = tissue[y0:y1]
         b = bone[y0:y1]
         v = var_raw[y0:y1] + one
@@ -572,7 +583,7 @@ def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
     lower = _dark_lower(hist, vmin, vmax, "MaxEntropy")
     dbg["var_lower"] = lower
     imv = np.empty((h, w), bool)
-    for y0, y1, _, _ in _strips(h):
+    for y0, y1, _, _ in _strips(h, w=w):
         imv[y0:y1] = (var_raw[y0:y1] + one) >= np.float32(lower)
     imv &= tissue
     _clear_where(imv, bone, art)
@@ -581,7 +592,7 @@ def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
     step("hemato")
     # hematoFinder
     hist = np.zeros(256, np.int64)
-    for y0, y1, _, _ in _strips(h):
+    for y0, y1, _, _ in _strips(h, w=w):
         hist += np.bincount(hem[y0:y1][tissue[y0:y1]], minlength=256)
     t = auto_threshold(hist, "Default")
     dbg["hem_lower"] = float(t + 1)

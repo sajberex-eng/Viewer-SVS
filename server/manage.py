@@ -92,7 +92,8 @@ def cellularity_cmd(db: Database, settings, args) -> None:
                            masks_dir=masks_dir, memory_limit_mb=args.memory_limit, time_limit_s=args.time_limit)
 
         def show(p: job.Progress) -> None:
-            print(f"\r  фрагмент {p.fragment}/{p.of}: {p.stage:15s} {p.fraction * 100:3.0f} %", end="", flush=True)
+            print(f"\r  фрагмент {p.fragment}/{p.of}: {p.stage:15s} {p.fraction * 100:3.0f} %  {p.rss_mb:4.0f} МБ",
+                  end="", flush=True)
 
         try:
             print(f"Оценка памяти: {job.check_memory(spec):.0f} МБ при пределе {args.memory_limit:.0f} МБ")

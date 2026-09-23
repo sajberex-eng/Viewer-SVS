@@ -65,6 +65,7 @@ class Progress:
     of: int
     stage: str
     fraction: float                # 0…1 по всему расчёту
+    rss_mb: float = 0.0            # память процесса расчёта в начале стадии
 
 
 def waiting() -> int:
@@ -137,7 +138,8 @@ def _worker(conn, spec: JobSpec) -> None:
         try:
             result = cs.run(slide, spec.base_mpp, spec.resolution, spec.fragments, spec.params,
                             masks_dir=spec.masks_dir, log=lambda *_: None,
-                            progress=lambda fragment, of, stage: conn.send(("progress", (fragment, of, stage))))
+                            progress=lambda fragment, of, stage: conn.send(
+                                ("progress", (fragment, of, stage, rss_mb(os.getpid())[0]))))
         finally:
             slide.close()
         conn.send(("done", result))
@@ -237,9 +239,9 @@ def _run_locked(spec: JobSpec, on_progress, cancel) -> dict:
                 except EOFError:
                     break
                 if kind == "progress":
-                    fragment, of, stage = payload
+                    fragment, of, stage, rss = payload
                     if on_progress:
-                        on_progress(Progress(fragment, of, stage, stage_fraction(fragment, of, stage)))
+                        on_progress(Progress(fragment, of, stage, stage_fraction(fragment, of, stage), rss))
                 else:
                     outcome = (kind, payload)
                     break
