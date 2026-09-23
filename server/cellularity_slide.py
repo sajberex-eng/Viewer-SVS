@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from . import cellularity
 ORIGINAL = "original"
 MQ_DOWNSAMPLE = 4.0
 STRIP_ROWS = 512               # строк области за одно чтение из скана
+READ_BUDGET_PX = 4_000_000     # точек уровня скана за одно чтение, не больше (см. SlideRows)
 TISSUE_CLASSES = {"tissue boundaries", "tissue"}
 ARTIFACT_CLASSES = {"artifact"}
 MIN_FRAGMENT_MM2 = 0.5         # мельче — не фрагмент, а крошка или пыль
@@ -122,8 +124,10 @@ def _rgb(region) -> np.ndarray:
     """PIL RGBA → RGB; прозрачное (за краем скана) — белое."""
     arr = np.asarray(region)
     if arr.ndim == 3 and arr.shape[2] == 4:
-        rgb = arr[..., :3].copy()
-        rgb[arr[..., 3] == 0] = 255
+        rgb = cv2.cvtColor(arr, cv2.COLOR_RGBA2RGB)      # одна копия RGB, без промежуточной
+        transparent = arr[..., 3] == 0
+        if transparent.any():
+            rgb[transparent] = 255
         return rgb
     return np.ascontiguousarray(arr[..., :3])
 
@@ -133,30 +137,76 @@ def analysis_size(bbox, factor: float) -> tuple[int, int]:
     return max(1, int(round((x1 - x0) / factor))), max(1, int(round((y1 - y0) / factor)))
 
 
-def read_area(slide, bbox, factor: float) -> np.ndarray:
-    """Прямоугольник скана в разрешении расчёта (factor точек уровня 0 на точку).
+class SlideRows:
+    """Строки прямоугольника скана в разрешении расчёта, по требованию (КЛ-7).
+
+    rows[y0:y1] → массив (y1 − y0) × w × 3. Полосы строк читаются со скана и уменьшаются
+    так же, как это делал read_area, и держатся в памяти только последние несколько:
+    расчёт (cellularity.analyse) идёт сверху вниз полосами с полем в одну строку.
+    Результат тот же, что у области целиком, а сама область (3 байта на точку) в памяти
+    не лежит.
+
+    Высота полосы — STRIP_ROWS, пока одно чтение со скана укладывается в READ_BUDGET_PX
+    точек уровня; иначе полоса делится пополам, пока не уложится. Одно чтение стоит
+    примерно четыре буфера RGBA такого размера (OpenSlide, PIL, копии NumPy): у широкого
+    фрагмента при 1 мкм на скане 20× чтение идёт с полного разрешения, и полоса в 512
+    строк давала бы всплеск в сотни мегабайт. Там, где чтение мелкое (разрешение
+    оригинала, сверка с QuPath), раскладка полос прежняя и результат тот же до точки.
 
     Уровень пирамиды — самый грубый, который не грубее нужного, с запасом 2 %:
     у Aperio шаг уровней 4,0001, и строгое сравнение уводило бы на полное разрешение.
-    Читается полосами, чтобы не держать в памяти большую область полного разрешения.
     """
-    x0, y0, x1, y1 = bbox
-    w, h = analysis_size(bbox, factor)
-    level = max(i for i, d in enumerate(slide.level_downsamples) if d <= factor * 1.02)
-    lds = slide.level_downsamples[level]
-    sx = (x1 - x0) / w                        # точек уровня 0 на точку расчёта по x и y
-    sy = (y1 - y0) / h
-    out = np.empty((h, w, 3), np.uint8)
-    for r0 in range(0, h, STRIP_ROWS):
-        r1 = min(r0 + STRIP_ROWS, h)
-        ly0 = y0 + r0 * sy
-        lw = int(round((x1 - x0) / lds))
-        lh = max(1, int(round((r1 - r0) * sy / lds)))
-        strip = _rgb(slide.read_region((x0, int(round(ly0))), level, (lw, lh)))
-        if strip.shape[1] != w or strip.shape[0] != r1 - r0:
-            strip = cv2.resize(strip, (w, r1 - r0), interpolation=cv2.INTER_AREA)
-        out[r0:r1] = strip
-    return out
+
+    def __init__(self, slide, bbox, factor: float):
+        self.slide = slide
+        self.x0, self.y0, x1, y1 = bbox
+        self.w, self.h = analysis_size(bbox, factor)
+        self.shape = (self.h, self.w, 3)
+        self.level = max(i for i, d in enumerate(slide.level_downsamples) if d <= factor * 1.02)
+        self.lds = slide.level_downsamples[self.level]
+        self.sy = (y1 - self.y0) / self.h          # точек уровня 0 на точку расчёта
+        self.lw = int(round((x1 - self.x0) / self.lds))
+        self.rows = STRIP_ROWS
+        while self.rows > 16 and self.lw * self.rows * self.sy / self.lds > READ_BUDGET_PX:
+            self.rows //= 2
+        # полоса расчёта (cellularity.STRIP строк с полем) должна собираться из кэша целиком
+        self.keep = (cellularity.STRIP + 2) // self.rows + 2
+        self._strips: OrderedDict[int, np.ndarray] = OrderedDict()
+
+    def strip(self, k: int) -> np.ndarray:
+        """Полоса строк [k·rows, (k+1)·rows) области."""
+        cached = self._strips.get(k)
+        if cached is not None:
+            return cached
+        r0 = k * self.rows
+        r1 = min(r0 + self.rows, self.h)
+        ly0 = self.y0 + r0 * self.sy
+        lh = max(1, int(round((r1 - r0) * self.sy / self.lds)))
+        strip = _rgb(self.slide.read_region((self.x0, int(round(ly0))), self.level, (self.lw, lh)))
+        if strip.shape[1] != self.w or strip.shape[0] != r1 - r0:
+            strip = cv2.resize(strip, (self.w, r1 - r0), interpolation=cv2.INTER_AREA)
+        self._strips[k] = strip
+        while len(self._strips) > self.keep:
+            self._strips.popitem(last=False)
+        return strip
+
+    def __getitem__(self, rows: slice) -> np.ndarray:
+        y0, y1, _ = rows.indices(self.h)
+        n = self.rows
+        parts = [self.strip(k)[max(y0, k * n) - k * n:min(y1, (k + 1) * n) - k * n]
+                 for k in range(y0 // n, (y1 - 1) // n + 1)]
+        return parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        out = np.empty(self.shape, np.uint8)
+        for k in range((self.h + self.rows - 1) // self.rows):
+            out[k * self.rows:(k + 1) * self.rows] = self.strip(k)
+        return out if dtype is None else out.astype(dtype)
+
+
+def read_area(slide, bbox, factor: float) -> np.ndarray:
+    """Прямоугольник скана в разрешении расчёта целиком (для сверки и тестов)."""
+    return np.asarray(SlideRows(slide, bbox, factor))
 
 
 def rasterize(polygons: list, bbox, factor: float, shape) -> np.ndarray:
@@ -242,31 +292,49 @@ def summary(px: dict, pixel_um: float, n_adip: int) -> dict:
     return out
 
 
+def analysis_factor(base_mpp: float, resolution: str | float) -> float:
+    """Точек уровня 0 на точку расчёта."""
+    return MQ_DOWNSAMPLE if resolution == ORIGINAL else float(resolution) / base_mpp
+
+
+def estimate_peak_mb(fragments: list[Fragment], base_mpp: float, resolution: str | float,
+                     baseline_mb: float = 150.0) -> float:
+    """Оценка пика памяти процесса расчёта: библиотеки плюс байты на точку самого
+    крупного фрагмента (фрагменты считаются по очереди, память освобождается)."""
+    factor = analysis_factor(base_mpp, resolution)
+    largest = max((math.prod(analysis_size(f.bbox, factor)) for f in fragments), default=0)
+    return baseline_mb + largest * cellularity.PEAK_BYTES_PER_PIXEL / 2 ** 20
+
+
 def run(slide, base_mpp: float, resolution: str | float, fragments: list[Fragment],
-        params: cellularity.Params | None = None, masks_dir: Path | None = None, log=print) -> dict:
-    """Расчёт по фрагментам и итог по стеклу (сумма площадей, КЛ-3)."""
-    if resolution == ORIGINAL:
-        factor = MQ_DOWNSAMPLE
-    else:
-        factor = float(resolution) / base_mpp
+        params: cellularity.Params | None = None, masks_dir: Path | None = None, log=print,
+        progress=None) -> dict:
+    """Расчёт по фрагментам и итог по стеклу (сумма площадей, КЛ-3).
+
+    progress(fragment, of, stage) вызывается в начале каждой стадии каждого фрагмента.
+    Область фрагмента не читается целиком: строки идут со скана по мере расчёта (SlideRows).
+    """
+    factor = analysis_factor(base_mpp, resolution)
     pixel_um = base_mpp * factor
     total = dict.fromkeys(("tissue", "artifacts", "bone", "hemato", "adip", "imv", "other"), 0)
     total_adip = 0
     results = []
+    n_fragments = len(fragments)
     for index, fragment in enumerate(fragments, 1):
         t0 = time.perf_counter()
         w, h = analysis_size(fragment.bbox, factor)
-        rgb = read_area(slide, fragment.bbox, factor)
+        rows = SlideRows(slide, fragment.bbox, factor)
         tissue, art = fragment_masks(fragment, factor, (h, w))
         t_read = time.perf_counter() - t0
-        res = cellularity.analyse(rgb, tissue, art, pixel_um, params)
-        del rgb
+        res = cellularity.analyse(rows, tissue, art, pixel_um, params,
+                                  progress=(lambda stage: progress(index, n_fragments, stage)) if progress else None)
+        del rows
         px = areas(res, tissue, art)
         for k in total:
             total[k] += px[k]
         total_adip += res.n_adip
         item = summary(px, pixel_um, res.n_adip)
-        item.update(fragment=index, size_px=[w, h], read_s=round(t_read, 1),
+        item.update(fragment=index, size_px=[w, h], contours_s=round(t_read, 1),
                     total_s=round(time.perf_counter() - t0, 1))
         results.append(item)
         log(f"фрагмент {index}: {w}×{h}, ткани {item['tissue_mm2']:.2f} мм², "

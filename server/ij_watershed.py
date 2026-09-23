@@ -21,6 +21,34 @@ DX = np.array([0, 1, 1, 1, 0, -1, -1, -1], np.int64)
 DY = np.array([-1, -1, 0, 1, 1, 1, 0, -1], np.int64)
 
 
+def components(fg: np.ndarray):
+    """Связные (8-связность) части двоичной маски без карты меток.
+
+    Карта меток (int32) стоила бы 4 байта на точку области; вместо неё — внешние
+    контуры (findContours) и заливка части от точки её контура в своём прямоугольнике.
+    RETR_CCOMP, а не RETR_EXTERNAL: часть, лежащая в дыре другой части, тоже верхнего
+    уровня. Даёт (x, y, w, h, часть 0/1 в своём прямоугольнике).
+    """
+    fg = np.asarray(fg, np.uint8)
+    contours, hierarchy = cv2.findContours(fg, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return
+    for contour, (_, _, _, parent) in zip(contours, hierarchy[0]):
+        if parent != -1:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        window = fg[y:y + h, x:x + w].copy()
+        sx, sy = (int(v) for v in contour[0][0])
+        cv2.floodFill(window, None, (sx - x, sy - y), 2, flags=8)
+        yield x, y, w, h, (window == 2).view(np.uint8)
+
+
+def count_components(fg: np.ndarray) -> int:
+    """Число связных (8) частей маски — без карты меток."""
+    _, hierarchy = cv2.findContours(np.asarray(fg, np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    return 0 if hierarchy is None else int((hierarchy[0][:, 3] == -1).sum())
+
+
 def edm(mask: np.ndarray) -> np.ndarray:
     """EDM.makeFloatEDM(ip, 0, edgesAreBackground=false) — тот же алгоритм, что в ImageJ.
 
@@ -513,38 +541,44 @@ def watershed(mask: np.ndarray) -> np.ndarray:
     - минимум и максимум карты расстояний, от которых в ImageJ зависят сортировка вершин
       и перевод в 8 бит, берутся по всей картинке и передаются каждой части.
     Со стороны края картинки рамки нет: край, как и в ImageJ, фоном не считается.
+
+    Память (КЛ-7): части выделяются по контурам, без карты меток (4 байта на точку);
+    в каждом проходе в памяти одна часть с рамкой, её уровни во втором и третьем
+    проходах считаются заново, а не хранятся для всех частей сразу.
     """
-    fg = (mask > 0).astype(np.uint8)
+    fg = (mask > 0).view(np.uint8) if mask.dtype == np.bool_ else (mask > 0).astype(np.uint8)
     out = np.zeros_like(fg)
     if not fg.any():
         return out
     H, W = fg.shape
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(fg, connectivity=8)
-    boxes = []
-    for k in range(1, n):
-        x, y, w, h, _area = (int(v) for v in stats[k])
-        boxes.append((k, max(x - 1, 0), max(y - 1, 0), min(x + w + 1, W), min(y + h + 1, H)))
+
+    def framed():
+        """Каждая часть в прямоугольнике с рамкой фона в одну точку (кроме края картинки)."""
+        for x, y, w, h, part in components(fg):
+            x0, y0, x1, y1 = max(x - 1, 0), max(y - 1, 0), min(x + w + 1, W), min(y + h + 1, H)
+            box = np.zeros((y1 - y0, x1 - x0), np.uint8)
+            box[y - y0:y - y0 + h, x - x0:x - x0 + w] = part
+            yield x0, y0, x1, y1, box
+
+    def levels(box):
+        h, w = box.shape
+        return _prepare_levels(edm(box).ravel(), w, h, gmin, gmax)
+
     # первый проход — только максимум карты расстояний; сами карты не храним
     gmax = np.float32(0.0)
-    for k, x0, y0, x1, y1 in boxes:
-        gmax = max(gmax, np.float32(edm(labels[y0:y1, x0:x1] == k).max()))
+    for _, _, _, _, box in framed():
+        gmax = max(gmax, np.float32(edm(box).max()))
     gmin = np.float32(0.0)
     if not (fg == 0).any():               # фона нет вовсе: как ImageJ, по всей карте
         gmin = np.float32(edm(fg).min())
-    # второй проход: уровни каждой части и общий набор непустых уровней
-    prepared = []
+    # второй проход: общий набор непустых уровней всех частей
     nonempty = np.zeros(256, np.bool_)
-    for k, x0, y0, x1, y1 in boxes:
-        part = (labels[y0:y1, x0:x1] == k).astype(np.uint8)
-        h, w = part.shape
-        pixels = _prepare_levels(edm(part).ravel(), w, h, gmin, gmax)
-        nonempty[np.unique(pixels)] = True
-        prepared.append((x0, y0, x1, y1, part, pixels))
-    del labels
+    for _, _, _, _, box in framed():
+        nonempty[np.unique(levels(box))] = True
     # третий: заливка по уровням
-    for x0, y0, x1, y1, part, pixels in prepared:
-        h, w = part.shape
-        seg = _segment(pixels, w, h, nonempty).reshape(h, w)
-        out[y0:y1, x0:x1] |= ((seg == 255) & (part == 1)).astype(np.uint8)
+    for x0, y0, x1, y1, box in framed():
+        h, w = box.shape
+        seg = _segment(levels(box), w, h, nonempty).reshape(h, w)
+        out[y0:y1, x0:x1] |= (seg == 255).view(np.uint8) & box
     return out
 

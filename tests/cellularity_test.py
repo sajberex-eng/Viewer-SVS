@@ -25,8 +25,10 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
 from server import cellularity as c  # noqa: E402
+from server import cellularity_job as job  # noqa: E402
 from server import cellularity_slide as cs  # noqa: E402
 from server import ij_watershed  # noqa: E402
+from server.config import StorageConfig  # noqa: E402
 
 failures: list[str] = []
 
@@ -97,6 +99,37 @@ def main() -> None:
     check("край картинки фоном не считается (edgesAreBackground = false)",
           abs(float(ij_watershed.edm(edge)[0, 0]) - math.hypot(10, 10)) < 1e-4)
 
+    # ---------- память (КЛ-7): части без карты меток, морфология полосами ----------
+    ring = np.zeros((80, 80), np.uint8)
+    cv2.circle(ring, (40, 40), 30, 1, 6)          # кольцо…
+    cv2.circle(ring, (40, 40), 8, 1, -1)          # …и часть внутри его дыры
+    cv2.rectangle(ring, (0, 0), (5, 5), 1, -1)    # часть у самого края
+    n_ref, lab = cv2.connectedComponents(ring, connectivity=8)
+    parts = list(ij_watershed.components(ring))
+    rebuilt = np.zeros_like(ring)
+    for x, y, w, h, part in parts:
+        rebuilt[y:y + h, x:x + w] |= part
+    single = all(len(np.unique(lab[y:y + h, x:x + w][part == 1])) == 1 for x, y, w, h, part in parts)
+    check("части по контурам: те же, что по карте меток, включая часть внутри дыры",
+          len(parts) == n_ref - 1 and np.array_equal(rebuilt, ring) and single,
+          f"({len(parts)} и {n_ref - 1})")
+    check("число частей без карты меток", ij_watershed.count_components(ring) == n_ref - 1)
+    noise = (rng.random((300, 200)) < 0.4).astype(np.uint8)
+
+    def plain(fg, iterations, step):
+        for _ in range(iterations):
+            fg = step(fg)
+        return fg
+
+    ref_d = plain(noise, 20, lambda b: b | (c._neighbours(b, 0) >= 2).view(np.uint8))
+    ref_e = plain(noise, 20, lambda b: b & ((8 - c._neighbours(b, 1)) < 2).view(np.uint8))
+    saved = c.STRIP
+    c.STRIP = 16
+    band_d, band_e = c.dilate(noise, 20, 2), c.erode(noise, 20, 2, pad_edges=True)
+    c.STRIP = saved
+    check("морфология полосами с полем равна расчёту целиком (dilate и erode по 20 итераций)",
+          np.array_equal(band_d, ref_d) and np.array_equal(band_e, ref_e))
+
     # ---------- весь расчёт на синтетике ----------
     img, tissue = synthetic_marrow()
     art = np.zeros_like(tissue)
@@ -157,6 +190,23 @@ def main() -> None:
         (work / "list.geojson").write_text(json.dumps(geo["features"]), encoding="utf-8")
         check("GeoJSON списком, без FeatureCollection, читается так же",
               len(cs.contours_from_geojson(work / "list.geojson")) == 2)
+        rows = cs.SlideRows(slide, fragments[0].bbox, 4.0)
+        whole = np.asarray(rows)
+        check("строки области со скана по требованию совпадают с областью целиком (через край полосы)",
+              whole.shape == (200, 200, 3) and np.array_equal(rows[0:7], whole[0:7])
+              and np.array_equal(rows[190:200], whole[190:200]),
+              f"({whole.shape})")
+        big = cs.SlideRows(slide, (0, 0, 2048, 2048), 1.0)
+        check("полоса на границе двух чтений склеивается верно",
+              np.array_equal(big[big.rows - 3:big.rows + 3], np.asarray(big)[big.rows - 3:big.rows + 3]))
+        saved_budget = cs.READ_BUDGET_PX
+        cs.READ_BUDGET_PX = 2048 * 64                  # чтение не больше 64 строк уровня 0
+        small = cs.SlideRows(slide, (0, 0, 2048, 2048), 1.0)
+        cs.READ_BUDGET_PX = saved_budget
+        check("широкая область читается меньшими полосами, результат тот же",
+              small.rows == 64 and small.keep >= (c.STRIP + 2) // 64 + 1
+              and np.array_equal(np.asarray(small), np.asarray(big)) and np.array_equal(small[250:270], np.asarray(big)[250:270]),
+              f"(полоса {small.rows} строк, в кэше {small.keep})")
         result = cs.run(slide, 0.5, cs.ORIGINAL, fragments, log=lambda *_: None)
         check("разрешение оригинала: уменьшение в 4 раза", result["pixel_um"] == 2.0, f"({result['pixel_um']})")
         f1 = result["fragments"][0]
@@ -173,6 +223,46 @@ def main() -> None:
         auto = cs.contours_auto(slide, 0.5)
         check("поиск фрагментов по миниатюре не падает", isinstance(auto, list), f"({len(auto)})")
         slide.close()
+
+        # ---------- отдельный процесс (КЛ-7) ----------
+        est = cs.estimate_peak_mb(fragments, 0.5, 1.0)
+        check("оценка памяти: библиотеки плюс байты на точку крупнейшего фрагмента",
+              abs(est - (150 + 400 * 400 * c.PEAK_BYTES_PER_PIXEL / 2 ** 20)) < 1e-6, f"({est:.1f} МБ)")
+        storage = StorageConfig(root=str(work))
+        spec = job.JobSpec(storage, "m.svs", 0.5, cs.ORIGINAL, fragments)
+        seen = []
+        out = job.run_in_process(spec, on_progress=seen.append)
+        same = all(out["fragments"][i][k] == result["fragments"][i][k]
+                   for i in range(2) for k in ("tissue_mm2", "cellularity_eq1_pct", "adipocytes"))
+        check("расчёт в отдельном процессе даёт тот же результат", same)
+        check("ход расчёта приходит по стадиям, доля растёт до конца",
+              len(seen) == 2 * len(c.STAGES) and seen[0].fraction == 0
+              and all(a.fraction <= b.fraction for a, b in zip(seen, seen[1:])) and seen[-1].fraction < 1,
+              f"({len(seen)} сообщений)")
+        check("пик памяти процесса измерен", out["peak_rss_mb"] > 20 and out["elapsed_s"] > 0,
+              f"({out['peak_rss_mb']} МБ, {out['elapsed_s']} с)")
+        try:
+            job.run_in_process(job.JobSpec(storage, "m.svs", 0.5, 1.0, fragments, memory_limit_mb=1))
+            check("отказ по оценке памяти до запуска процесса", False)
+        except job.JobError as exc:
+            check("отказ по оценке памяти до запуска процесса", "разрешение" in str(exc), f"({exc})")
+        cancel = __import__("threading").Event()
+        cancel.set()
+        try:
+            job.run_in_process(spec, cancel=cancel)
+            check("отмена убивает процесс", False)
+        except job.JobCancelled:
+            check("отмена убивает процесс", True)
+        try:
+            job.run_in_process(job.JobSpec(storage, "m.svs", 0.5, cs.ORIGINAL, fragments, time_limit_s=0.01))
+            check("предел времени останавливает расчёт", False)
+        except job.JobError as exc:
+            check("предел времени останавливает расчёт", "времени" in str(exc), f"({exc})")
+        try:
+            job.run_in_process(job.JobSpec(storage, "нет.svs", 0.5, cs.ORIGINAL, fragments))
+            check("ошибка в процессе доходит текстом", False)
+        except job.JobError as exc:
+            check("ошибка в процессе доходит текстом", "ошибка расчёта" in str(exc))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

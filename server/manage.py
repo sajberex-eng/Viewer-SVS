@@ -60,7 +60,7 @@ def cellularity_cmd(db: Database, settings, args) -> None:
     import json
     from pathlib import Path
 
-    from . import cellularity, cellularity_slide as cs
+    from . import cellularity, cellularity_job as job, cellularity_slide as cs
 
     row = db.query_one("SELECT * FROM slides WHERE id = ?", (args.slide_id,))
     if row is None:
@@ -81,10 +81,29 @@ def cellularity_cmd(db: Database, settings, args) -> None:
         if args.adip_max is not None:
             params.adip_max_um2 = args.adip_max
         resolution = args.resolution if args.resolution == cs.ORIGINAL else float(args.resolution)
-        result = cs.run(slide, float(row["mpp"]), resolution, fragments, params,
-                        masks_dir=Path(args.masks) if args.masks else None)
+        masks_dir = Path(args.masks) if args.masks else None
+        if args.in_process:
+            result = cs.run(slide, float(row["mpp"]), resolution, fragments, params, masks_dir=masks_dir)
     finally:
         slide.close()
+    if not args.in_process:
+        # как в сервисе (КЛ-7): отдельный процесс с пониженным приоритетом, пределы памяти и времени
+        spec = job.JobSpec(settings.storage, row["key"], float(row["mpp"]), resolution, fragments, params,
+                           masks_dir=masks_dir, memory_limit_mb=args.memory_limit, time_limit_s=args.time_limit)
+
+        def show(p: job.Progress) -> None:
+            print(f"\r  фрагмент {p.fragment}/{p.of}: {p.stage:15s} {p.fraction * 100:3.0f} %", end="", flush=True)
+
+        try:
+            print(f"Оценка памяти: {job.check_memory(spec):.0f} МБ при пределе {args.memory_limit:.0f} МБ")
+            result = job.run_in_process(spec, on_progress=show)
+        except job.JobError as exc:
+            print()
+            sys.exit(f"Ошибка: {exc}")
+        print(f"\r  готово: {result['elapsed_s']} с, пик памяти процесса {result['peak_rss_mb']} МБ".ljust(60))
+        for item in result["fragments"]:
+            print(f"фрагмент {item['fragment']}: {item['size_px'][0]}×{item['size_px'][1]}, ткани {item['tissue_mm2']:.2f} мм², "
+                  f"клеточность {item['cellularity_eq1_pct']} % / {item['cellularity_eq2_pct']} %, {item['total_s']} с")
     total = result["total"]
     print(f"Итог по стеклу ({result['pixel_um']} мкм на точку): ткани {total['tissue_mm2']:.2f} мм², "
           f"костномозгового пространства {total['marrow_mm2']:.2f} мм²")
@@ -131,6 +150,10 @@ def main() -> None:
     cell.add_argument("--adip-max", type=float, help="верхний предел площади жировой клетки, мкм² (в оригинале нет)")
     cell.add_argument("--masks", help="папка для карт частей (PNG, цвета MarrowQuant)")
     cell.add_argument("--json", help="файл для подробного результата")
+    cell.add_argument("--memory-limit", type=float, default=500, help="предел памяти процесса расчёта, МБ (КЛ-7)")
+    cell.add_argument("--time-limit", type=float, default=1800, help="предел времени расчёта, с")
+    cell.add_argument("--in-process", action="store_true",
+                      help="считать в этом процессе, без приоритета и пределов (для отладки)")
 
     args = parser.parse_args()
     settings = load_settings()

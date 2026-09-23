@@ -18,7 +18,10 @@ MarrowQuant2.0, лицензия BSD-3) с ImageJ на NumPy и OpenCV. Кажд
 - размер частиц задаётся в мкм² и переводится в точки, а округлость (circularity)
   считается по периметру в точках — у ImageJ контур частицы без калибровки.
 
-Область подаётся целиком; разбиение на куски ради памяти — отдельным слоем.
+Память (КЛ-7): область целиком в памяти не держится. RGB приходит строками по требованию
+(см. SlideRows в cellularity_slide), всё с плавающей точкой и гистограммы считаются полосами
+строк, двоичная морфология — полосами с полем в число итераций, разделение слипшихся частиц —
+по связным частям. Целиком лежат только однобайтовые слои области (см. PEAK_BYTES_PER_PIXEL).
 """
 from __future__ import annotations
 
@@ -31,6 +34,15 @@ import numpy as np
 from . import ij_watershed
 
 FLOAT_MAX = np.float32(3.4028235e38)
+STRIP = 256  # строк в полосе: вычисления с плавающей точкой идут полосами ради памяти
+
+
+def _strips(h: int, halo: int = 0, rows: int | None = None):
+    """Полосы строк [y0, y1) и их расширение на halo строк для фильтров 3×3."""
+    rows = rows or STRIP
+    for y0 in range(0, h, rows):
+        y1 = min(y0 + rows, h)
+        yield y0, y1, max(y0 - halo, 0), min(y1 + halo, h)
 
 
 @dataclass
@@ -209,21 +221,35 @@ def _neighbours(mask: np.ndarray, outside: int) -> np.ndarray:
     return cv2.filter2D(padded, cv2.CV_8U, _K8, borderType=cv2.BORDER_CONSTANT)[1:-1, 1:-1]
 
 
+def _iterate_bands(fg: np.ndarray, iterations: int, one_step) -> np.ndarray:
+    """Итерации фильтра 3×3 полосами строк с полем в iterations строк.
+
+    Каждая итерация смотрит на одну точку вокруг, поэтому за iterations итераций край
+    полосы влияет не дальше чем на iterations строк, и с таким полем результат тот же,
+    что у расчёта целиком; временные массивы при этом размером с полосу, а не с область.
+    Левый и правый края полосы — настоящие края картинки; верх и низ — тоже, если полоса
+    первая или последняя, иначе поле их скрывает.
+    """
+    fg = np.asarray(fg, np.uint8)
+    out = np.empty_like(fg)
+    # полоса не короче 10 полей, иначе поле съедает время: 50 итераций — полосы по 500 строк
+    for y0, y1, a0, a1 in _strips(fg.shape[0], halo=iterations, rows=max(STRIP, 10 * iterations)):
+        band = fg[a0:a1]
+        for _ in range(iterations):
+            band = one_step(band)
+        out[y0:y1] = band[y0 - a0:y0 - a0 + (y1 - y0)]
+    return out
+
+
 def dilate(fg: np.ndarray, iterations: int, count: int) -> np.ndarray:
     """Точка фона становится объектом, если объектов вокруг не меньше count. За краем — фон."""
-    fg = fg.astype(np.uint8)
-    for _ in range(iterations):
-        fg = fg | (_neighbours(fg, 0) >= count).astype(np.uint8)
-    return fg
+    return _iterate_bands(fg, iterations, lambda b: b | (_neighbours(b, 0) >= count).view(np.uint8))
 
 
 def erode(fg: np.ndarray, iterations: int, count: int, pad_edges: bool = True) -> np.ndarray:
     """Точка объекта становится фоном, если фона вокруг не меньше count. «pad» — за краем объект."""
-    fg = fg.astype(np.uint8)
-    for _ in range(iterations):
-        background_around = 8 - _neighbours(fg, 1 if pad_edges else 0)
-        fg = fg & (background_around < count).astype(np.uint8)
-    return fg
+    outside = 1 if pad_edges else 0
+    return _iterate_bands(fg, iterations, lambda b: b & ((8 - _neighbours(b, outside)) < count).view(np.uint8))
 
 
 # ---------- фильтры ----------
@@ -267,8 +293,10 @@ def display_range_after_variance(var: np.ndarray, saturated: float = 0.5) -> tup
         return vmin, vmax
     bins = 256
     scale = bins / (vmax - vmin)
-    idx = np.minimum(((var.astype(np.float64) - vmin) * scale).astype(np.int64), bins - 1)
-    hist = np.bincount(idx.ravel(), minlength=bins)
+    hist = np.zeros(bins, np.int64)
+    for y0, y1, _, _ in _strips(var.shape[0]):     # полосами: float64 и int64 на всю область — 16 байт на точку
+        idx = np.minimum(((var[y0:y1].astype(np.float64) - vmin) * scale).astype(np.int64), bins - 1)
+        hist += np.bincount(idx.ravel(), minlength=bins)
     threshold = int(var.size * saturated / 200.0)
     cum = np.cumsum(hist)
     hmin = int(np.argmax(cum > threshold))
@@ -424,14 +452,12 @@ def filter_particles(cand: np.ndarray, pixel_um: float, p: Params) -> tuple[np.n
     unit2 = pixel_um * pixel_um
     min_px = p.adip_min_um2 / unit2
     max_px = p.adip_max_um2 / unit2
-    n, lab, stats, _ = cv2.connectedComponentsWithStats(cand.astype(np.uint8), connectivity=8)
     out = np.zeros(cand.shape, np.uint8)
     kept_size_circ = kept = 0
-    for k in range(1, n):
-        x, y, w, h, area = (int(v) for v in stats[k])
+    for x, y, w, h, obj in ij_watershed.components(cand):
+        area = int(obj.sum())
         if area < min_px or area > max_px:
             continue
-        obj = (lab[y:y + h, x:x + w] == k).astype(np.uint8)
         if p.min_circularity > 0:
             per = traced_perimeter(obj)
             circ = 0.0 if per == 0 else 4.0 * math.pi * (area / (per * per))
@@ -451,54 +477,69 @@ def filter_particles(cand: np.ndarray, pixel_um: float, p: Params) -> tuple[np.n
 
 # ---------- весь расчёт по области ----------
 
-STRIP = 256  # строк в полосе: вычисления с плавающей точкой идут полосами ради памяти
+# Сколько байт на точку области держится в памяти на пике расчёта (замер 2026-09-23 на
+# синтетическом фрагменте 17 млн точек, см. раздел 13.8 ТЗ) — для оценки памяти до запуска.
+PEAK_BYTES_PER_PIXEL = 12
 
 
-def _strips(h: int, halo: int = 0):
-    """Полосы строк [y0, y1) и их расширение на halo строк для фильтров 3×3."""
-    for y0 in range(0, h, STRIP):
-        y1 = min(y0 + STRIP, h)
-        yield y0, y1, max(y0 - halo, 0), min(y1 + halo, h)
+STAGES = ("deconvolve", "variance", "bone", "imv", "hemato", "adip-watershed", "adip-shrink", "adip-particles")
+# Доля времени каждой стадии (замер 2026-09-23, синтетический фрагмент 17 млн точек) — для показа хода
+STAGE_WEIGHTS = {"deconvolve": 0.25, "variance": 0.04, "bone": 0.30, "imv": 0.04, "hemato": 0.03,
+                 "adip-watershed": 0.05, "adip-shrink": 0.22, "adip-particles": 0.07}
 
 
-def analyse(rgb: np.ndarray, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
-            p: Params | None = None, keep_debug: bool = False) -> Result:
-    """rgb — область в разрешении расчёта; tissue, art — маски той же формы.
+def _clear_where(mask: np.ndarray, *conditions: np.ndarray) -> None:
+    """mask &= ~condition для каждого условия, без временных массивов размером с область."""
+    for cond in conditions:
+        np.copyto(mask, False, where=cond)
 
-    Целиком в памяти держатся только 8-битные слои и дисперсия (float32); разложение
+
+def analyse(rgb, tissue: np.ndarray, art: np.ndarray | None, pixel_um: float,
+            p: Params | None = None, keep_debug: bool = False, progress=None) -> Result:
+    """rgb — область в разрешении расчёта: массив h×w×3 либо источник строк, у которого
+    rgb[y0:y1] возвращает такой массив для полосы строк (SlideRows в cellularity_slide
+    читает полосы со скана по мере надобности, и вся область в памяти не лежит).
+    tissue, art — маски формы h×w. progress(стадия) вызывается в начале каждой из STAGES.
+
+    Целиком в памяти держатся только однобайтовые слои и дисперсия (float32); разложение
     окрасок, отношение для кости и прочее с плавающей точкой считается полосами строк.
     Фильтры 3×3 получают строку соседней полосы, поэтому результат тот же, что целиком.
+    Маски сочетаются на месте (_clear_where): «a & ~b» создавало бы две копии области.
     """
     p = p or Params()
-    tissue = tissue.astype(bool)
-    art = np.zeros_like(tissue) if art is None else art.astype(bool)
+    step = progress or (lambda stage: None)
+    tissue = np.asarray(tissue, bool)
+    art = np.zeros_like(tissue) if art is None else np.asarray(art, bool)
     h, w = tissue.shape
     dbg: dict = {}
 
-    # проход 1: окраски → bimv (d0 − d1), hd (d2 − d0), кандидаты в жир; дисперсия bimv
+    # проход 1: окраски → bimv (d0 − d1), hem (сглаженное d2 − d0), кандидаты в жир.
+    # Полоса берётся с полем в одну строку ради сглаживания 3×3, поэтому само hd не хранится
+    step("deconvolve")
     bimv = np.empty((h, w), np.uint8)
-    hd = np.empty((h, w), np.uint8)
+    hem = np.empty((h, w), np.uint8)
     cand = np.empty((h, w), bool)
-    for y0, y1, _, _ in _strips(h):
-        d0, d1, d2 = deconvolve(rgb[y0:y1])
-        bimv[y0:y1] = sub8(d0, d1)
-        hd[y0:y1] = sub8(d2, d0)
-        adipv = cv2.add(hd[y0:y1], multiply8(hsb_saturation(rgb[y0:y1]), 8))
+    for y0, y1, a0, a1 in _strips(h, halo=1):
+        block = np.asarray(rgb[a0:a1])
+        c0, c1 = y0 - a0, y0 - a0 + (y1 - y0)
+        d0, d1, d2 = deconvolve(block)
+        hd = sub8(d2, d0)
+        hem[y0:y1] = smooth8(hd)[c0:c1]
+        bimv[y0:y1] = sub8(d0, d1)[c0:c1]
+        adipv = cv2.add(hd[c0:c1], multiply8(hsb_saturation(block[c0:c1]), 8))
         cand[y0:y1] = adipv <= 200
-        del d0, d1, d2, adipv
+        del block, d0, d1, d2, hd, adipv
+    step("variance")
     var_raw = np.empty((h, w), np.float32)
     for y0, y1, a0, a1 in _strips(h, halo=1):
         var_raw[y0:y1] = variance3(bimv[a0:a1])[y0 - a0:y0 - a0 + (y1 - y0)]
-    hem = np.empty((h, w), np.uint8)
-    for y0, y1, a0, a1 in _strips(h, halo=1):
-        hem[y0:y1] = smooth8(hd[a0:a1])[y0 - a0:y0 - a0 + (y1 - y0)]
-    del hd
 
     one = np.float32(1.0)
 
     def ratio_strip(y0, y1):
         return (bimv[y0:y1].astype(np.float32) / (var_raw[y0:y1] + one)).astype(np.float32)
 
+    step("bone")
     # boneIMVFinder: порог по отношению bimv / (дисперсия + 1)
     rmin, rmax = np.inf, -np.inf
     for y0, y1, _, _ in _strips(h):
@@ -513,9 +554,11 @@ def analyse(rgb: np.ndarray, tissue: np.ndarray, art: np.ndarray | None, pixel_u
     for y0, y1, _, _ in _strips(h):
         bone[y0:y1] = ratio_strip(y0, y1) >= np.float32(lower)
     bone = dilate(bone, 5, 1)
-    bone = erode(dilate(bone, 20, 2), 20, 2, pad_edges=True)
-    bone = bone.astype(bool) & ~art & tissue
+    bone = erode(dilate(bone, 20, 2), 20, 2, pad_edges=True).view(bool)
+    bone &= tissue
+    _clear_where(bone, art)
 
+    step("imv")
     # строма и сосуды: порог по дисперсии + 1; кость и всё вне ткани — Float.MAX_VALUE
     vmin, vmax = display_range_after_variance(var_raw)
     dbg.update(var_min=vmin, var_max=vmax)
@@ -531,35 +574,48 @@ def analyse(rgb: np.ndarray, tissue: np.ndarray, art: np.ndarray | None, pixel_u
     imv = np.empty((h, w), bool)
     for y0, y1, _, _ in _strips(h):
         imv[y0:y1] = (var_raw[y0:y1] + one) >= np.float32(lower)
-    imv &= tissue & ~bone & ~art
+    imv &= tissue
+    _clear_where(imv, bone, art)
     del var_raw, bimv
 
+    step("hemato")
     # hematoFinder
-    t = auto_threshold(np.bincount(hem[tissue], minlength=256), "Default")
+    hist = np.zeros(256, np.int64)
+    for y0, y1, _, _ in _strips(h):
+        hist += np.bincount(hem[y0:y1][tissue[y0:y1]], minlength=256)
+    t = auto_threshold(hist, "Default")
     dbg["hem_lower"] = float(t + 1)
-    hemato = dilate((hem >= t + 1).astype(np.uint8), 5, 2).astype(bool) & tissue & ~bone & ~art
+    hemato = dilate((hem >= t + 1).view(np.uint8), 5, 2).view(bool)
+    hemato &= tissue
+    _clear_where(hemato, bone, art)
     del hem
-    imv &= ~hemato
+    _clear_where(imv, hemato)
 
+    step("adip-watershed")
     # adipFinder
-    cand &= tissue & ~bone & ~art
+    cand &= tissue
+    _clear_where(cand, bone, art)
     if keep_debug:
         dbg["adip_raw"] = cand.copy()
     cand = watershed(cand)
     if keep_debug:
         dbg["adip_ws"] = cand.copy()
+    step("adip-shrink")
     # «Dilate» при сброшенном «чёрном фоне»: объект — точки 0, то есть сужение кандидатов
     # со счётом 5; за краем картинки для dilate — фон, то есть кандидат (255)
-    cand = (1 - dilate(1 - cand, 50, 5)).astype(np.uint8)
+    cand ^= 1
+    cand = dilate(cand, 50, 5)
+    cand ^= 1
     if keep_debug:
         dbg["candidates"] = cand.copy()
+    step("adip-particles")
     adip, stats = filter_particles(cand, pixel_um, p)
     del cand
     dbg.update(stats)
-    adip = adip.astype(bool)
-    imv &= ~adip
-    hemato &= ~adip
-    n_adip = cv2.connectedComponents(adip.astype(np.uint8), connectivity=8)[0] - 1
+    adip = adip.view(bool)
+    _clear_where(imv, adip)
+    _clear_where(hemato, adip)
+    n_adip = ij_watershed.count_components(adip.view(np.uint8))
     return Result(bone=bone, imv=imv, hemato=hemato, adip=adip, n_adip=n_adip, debug=dbg)
 
 
