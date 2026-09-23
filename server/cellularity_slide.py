@@ -13,8 +13,10 @@
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import math
+import sys
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -292,6 +294,16 @@ def summary(px: dict, pixel_um: float, n_adip: int) -> dict:
     return out
 
 
+def release_memory() -> None:
+    """Вернуть системе память, освобождённую после фрагмента (glibc держит её у себя,
+    и у следующего фрагмента виртуальная память данных растёт; на Windows не нужно)."""
+    if sys.platform.startswith("linux"):
+        try:
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception:
+            pass
+
+
 def analysis_factor(base_mpp: float, resolution: str | float) -> float:
     """Точек уровня 0 на точку расчёта."""
     return MQ_DOWNSAMPLE if resolution == ORIGINAL else float(resolution) / base_mpp
@@ -342,6 +354,8 @@ def run(slide, base_mpp: float, resolution: str | float, fragments: list[Fragmen
             f"{item['total_s']} с")
         if masks_dir is not None:
             save_class_map(masks_dir / f"fragment_{index}.png", res, tissue, art)
+        del res, tissue, art
+        release_memory()
     return {
         "resolution": resolution, "pixel_um": round(pixel_um, 4),
         "algorithm": "MarrowQuant 2.0 (перенос, ImageJ 1.54f)",
