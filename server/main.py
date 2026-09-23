@@ -618,6 +618,14 @@ def create_app() -> FastAPI:
             raise HTTPException(403, "Отменять расчёт могут участники группы «Патологи» и администраторы")
         return cellularity.cancel(run_row, user, request)
 
+    @app.delete("/api/slides/{slide_id}/cellularity/runs/{run_id}")
+    def cellularity_delete(slide_id: str, run_id: str, request: Request, user=Depends(require_user)):
+        _, run_row = require_run(slide_id, run_id, user)
+        if not annotationsvc.can_annotate(db, user):
+            raise HTTPException(403, "Удалять расчёт могут участники группы «Патологи» и администраторы")
+        cellularity.delete_run(run_row, user, request)
+        return {"ok": True}
+
     @app.get("/api/slides/{slide_id}/cellularity/runs/{run_id}/masks/{level:int}/{col:int}_{row:int}.png")
     def cellularity_mask_tile(slide_id: str, run_id: str, level: int, col: int, row: int,
                               user=Depends(require_user)):

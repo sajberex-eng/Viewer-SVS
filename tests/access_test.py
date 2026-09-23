@@ -508,6 +508,15 @@ def main() -> None:
         listed = alice.get("/api/slides/dddddddddddd/annotations").json()
         check("список аннотаций отдаёт контуры с их видами",
               {a["kind"] for a in listed} == {"tissue", "artifact"})
+        check("удаление расчёта без группы: 403",
+              bob.delete(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}").status_code == 403)
+        check("удаление расчёта патологом: 200, запись и карты классов исчезли, состояние без расчёта",
+              alice.delete(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}").status_code == 200
+              and db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE id = ?", (started["id"],))["n"] == 0
+              and not (WORK_DIR / "data" / "cellularity" / "dddddddddddd" / started["id"]).exists()
+              and alice.get("/api/slides/dddddddddddd/cellularity").json()["run"] is None)
+        check("журнал: удаление расчёта",
+              any(row["action"] == "cellularity.delete" for row in admin.get("/api/journal").json()))
         admin.delete("/api/slides/dddddddddddd")
         check("удаление скана уносит расчёты и карты классов",
               db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"] == 0

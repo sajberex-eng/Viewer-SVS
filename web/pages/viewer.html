@@ -182,13 +182,15 @@
         <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
 
         <div id="cellResult" hidden>
-          <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
-          <table class="cell-table" id="cellTable"></table>
-          <ul class="cell-warnings" id="cellWarnings" hidden></ul>
-          <label class="check"><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
+          <!-- Выключатель масок — первым делом: его ищут раньше таблицы (замечание заказчика 2026-09-23) -->
+          <label class="check cell-masks-toggle"><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
           <label class="cell-opacity"><span data-i18n="cell.opacity"></span>
             <input type="range" id="cellOpacity" min="10" max="100" step="5"></label>
           <div class="cell-legend" id="cellLegend"></div>
+          <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
+          <table class="cell-table" id="cellTable"></table>
+          <ul class="cell-warnings" id="cellWarnings" hidden></ul>
+          <button class="btn cell-edit" id="cellDelete" data-i18n="cell.delete" data-i18n-tip="cell.delete.tip"></button>
         </div>
         <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
       </div>

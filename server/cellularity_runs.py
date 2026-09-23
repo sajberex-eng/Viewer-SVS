@@ -210,6 +210,17 @@ class CellularityService:
                   object_id=row["slide_id"], detail=f"расчёт {row['id']}")
         return self.run_dict(self.run_row(row["id"]))
 
+    def delete_run(self, row, user, request=None) -> None:
+        """Удалить расчёт вместе с картами классов; идущий расчёт сначала отменяют."""
+        if row["status"] in ACTIVE:
+            raise CellularityError("Расчёт ещё идёт: сначала отмените его")
+        shutil.rmtree(self.root / row["slide_id"] / row["id"], ignore_errors=True)
+        with self._lock:
+            self._maps.pop(row["id"], None)
+        self.db.execute("DELETE FROM cellularity_runs WHERE id = ?", (row["id"],))
+        audit.log(self.db, request, audit.CELLULARITY_DELETE, user=user, object_type="slide",
+                  object_id=row["slide_id"], detail=f"расчёт {row['id']}")
+
     # ---------- диспетчер ----------
 
     def _loop(self) -> None:

@@ -44,6 +44,7 @@ CELLULARITY_START = "cellularity.start"
 CELLULARITY_DONE = "cellularity.done"
 CELLULARITY_FAILED = "cellularity.failed"
 CELLULARITY_CANCEL = "cellularity.cancel"
+CELLULARITY_DELETE = "cellularity.delete"
 
 
 def client_ip(request: Request) -> str:

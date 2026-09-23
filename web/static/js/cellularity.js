@@ -49,6 +49,7 @@ export function initCellularity(host) {
   $('cellPropose').addEventListener('click', propose);
   $('cellRun').addEventListener('click', start);
   $('cellCancel').addEventListener('click', cancel);
+  $('cellDelete').addEventListener('click', remove);
   $('cellMasks').addEventListener('change', () => {
     masksShown = $('cellMasks').checked;
     localStorage.setItem('viewer.cellMasks', masksShown ? 'on' : 'off');
@@ -246,6 +247,9 @@ export function initCellularity(host) {
     }
     const done = run?.status === 'done' && run.result;
     $('cellResult').hidden = !done;
+    $('cellDelete').hidden = !canEdit;
+    // после готового результата запуск — это пересчёт: новый расчёт заменяет прежний
+    $('cellRun').textContent = t(done ? 'cell.rerun' : 'cell.run');
     if (done) renderResult(run);
   }
 
@@ -332,6 +336,23 @@ export function initCellularity(host) {
     }
     render();
     schedulePoll(pane);
+  }
+
+  async function remove() {
+    const pane = host.getActive();
+    const run = pane?.cell?.status?.run;
+    if (!run) return;
+    const ok = await confirmDialog({
+      title: t('cell.delete.title'), text: t('cell.delete.text'), submitLabel: t('common.delete'),
+    });
+    if (!ok) return;
+    try {
+      await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/runs/${encodeURIComponent(run.id)}`,
+        { method: 'DELETE' });
+    } catch (error) {
+      return host.showNote(error.message);
+    }
+    load(pane);
   }
 
   async function propose() {
