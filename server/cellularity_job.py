@@ -129,8 +129,28 @@ def _limit_data_segment(limit_mb: float) -> None:
         pass
 
 
+def _tune_malloc() -> None:
+    """glibc: выделения от 1 МБ идут через mmap и при освобождении сразу возвращаются системе.
+
+    Без этого порог mmap после первого же освобождения большого блока растёт до 32 МБ,
+    полосы по 16 МБ ложатся в кучу, куча дробится и не отдаётся: на сервере 2026-09-23
+    RSS доходил до 433 МБ при 230 МБ живых массивов, а второй фрагмент упирался в предел.
+    Арен не больше двух: у потоков OpenCV свои кучи, и каждая дробится отдельно."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6")
+        m_trim_threshold, m_mmap_threshold, m_arena_max = -1, -3, -8
+        libc.mallopt(m_mmap_threshold, 1 << 20)
+        libc.mallopt(m_trim_threshold, 4 << 20)
+        libc.mallopt(m_arena_max, 2)
+    except Exception:
+        pass
+
+
 def _worker(conn, spec: JobSpec) -> None:
     _lower_priority()
+    _tune_malloc()
     _limit_data_segment(spec.memory_limit_mb)
     try:
         from .storage import create_storage
