@@ -17,6 +17,11 @@ const ARROW_SHAFT = 'M-5.5 -5.5 L-17 -17';
 const NUMBER_AT = { x: -19, y: -20 };
 const HANDLE_SIZE = 9;   // ручка вершины при правке (А-14)
 const MIN_POLYGON = 3;
+// Контуры для клеточности (КЛ-2) рисуются как многоугольники, но не нумеруются
+// вместе с пометками для обучения: у них своя подпись «Т1», «А1»
+const POLYGON_KINDS = ['polygon', 'tissue', 'artifact'];
+const CONTOUR_KINDS = ['tissue', 'artifact'];
+const CONTOUR_LETTER = { tissue: 'Т', artifact: 'А' };
 
 export class AnnotationLayer {
   constructor({ view, onSelect, onSave, onFinishDraft, onDraftChange }) {
@@ -24,7 +29,7 @@ export class AnnotationLayer {
     this.viewer = view.viewer;
     this.items = [];
     this.visible = true;
-    this.tool = null;      // null | 'point' | 'polygon'
+    this.tool = null;      // null | 'point' | 'polygon' | 'tissue' | 'artifact'
     this.draft = [];       // вершины начатого контура, в координатах скана
     this.selectedId = null;
     this.onSelect = onSelect;
@@ -90,7 +95,7 @@ export class AnnotationLayer {
   // Первая вершина приходит из меню по правой кнопке: контур начинается там,
   // где меню открыли (Т-5)
   startDraft(point) {
-    if (this.tool !== 'polygon') return;
+    if (!POLYGON_KINDS.includes(this.tool)) return;
     this.draft = [point];
     this.render();
     this.onDraftChange?.();
@@ -105,11 +110,11 @@ export class AnnotationLayer {
 
   // Замкнуть начатый контур по Enter или двойному щелчку (А-2)
   closeDraft() {
-    if (this.tool !== 'polygon' || this.draft.length < MIN_POLYGON) return false;
+    if (!POLYGON_KINDS.includes(this.tool) || this.draft.length < MIN_POLYGON) return false;
     const points = this.draft;
     this.draft = [];
     this.render();
-    this.onFinishDraft?.('polygon', points);
+    this.onFinishDraft?.(this.tool, points);
     return true;
   }
 
@@ -120,11 +125,18 @@ export class AnnotationLayer {
     this.screen.replaceChildren();
     this.marks.clear();
 
-    // Номер аннотации — её место в списке скана: тот же стоит в списке сбоку
-    this.items.forEach((item, index) => {
-      if (item.kind === 'polygon') this.#drawPolygon(item, index + 1);
-      else this.#drawPoint(item, index + 1);
-    });
+    // Номер аннотации — её место в списке скана: тот же стоит в списке сбоку.
+    // Контуры для клеточности считаются отдельно, буквами (КЛ-2)
+    const counters = { learning: 0, tissue: 0, artifact: 0 };
+    for (const item of this.items) {
+      if (CONTOUR_KINDS.includes(item.kind)) {
+        this.#drawPolygon(item, `${CONTOUR_LETTER[item.kind]}${++counters[item.kind]}`);
+      } else if (item.kind === 'polygon') {
+        this.#drawPolygon(item, ++counters.learning);
+      } else {
+        this.#drawPoint(item, ++counters.learning);
+      }
+    }
     if (this.draft.length) this.#drawDraft();
     this.place();
   }
@@ -244,8 +256,12 @@ export class AnnotationLayer {
   showTip(item, event) {
     if (!this.visible) return;
     const text = item.comment || t('annot.noComment');
-    const number = this.items.indexOf(item) + 1;
-    this.tip.textContent = `${t('annot.number', { n: number })} ${text} — ${item.author}`;
+    if (CONTOUR_KINDS.includes(item.kind)) {
+      this.tip.textContent = `${t(`annot.kind.${item.kind}`)}: ${text} — ${item.author}`;
+    } else {
+      const number = this.items.filter((row) => !CONTOUR_KINDS.includes(row.kind)).indexOf(item) + 1;
+      this.tip.textContent = `${t('annot.number', { n: number })} ${text} — ${item.author}`;
+    }
     this.tip.hidden = false;
     // Подсказка не должна вылезать за край половины: у края она перескакивает
     // влево и вверх от указателя, иначе текст сжимается в столбец
@@ -310,7 +326,7 @@ export class AnnotationLayer {
     event.preventDefaultAction = true;
     // Положение щелчка библиотека зеркалит сама, когда половина отражена,
     // поэтому здесь идёт прямой пересчёт, без view.imageFromPixel (Т-3)
-    const at = this.viewer.viewport.viewportToImageCoordinates(
+    const at = this.view.image.viewportToImageCoordinates(
       this.viewer.viewport.pointFromPixel(event.position, true),
     );
     const point = [at.x, at.y];
@@ -324,7 +340,7 @@ export class AnnotationLayer {
   }
 
   #onDoubleClick(event) {
-    if (this.tool !== 'polygon') return;
+    if (!POLYGON_KINDS.includes(this.tool)) return;
     event.preventDefaultAction = true;  // иначе двойной щелчок ещё и приблизит
     // Двойной щелчок приходит после двух обычных: лишняя вершина убирается
     if (this.draft.length > MIN_POLYGON) this.draft.pop();
@@ -333,6 +349,7 @@ export class AnnotationLayer {
 }
 
 function colorClass(item) {
+  if (CONTOUR_KINDS.includes(item.kind)) return ` is-${item.kind}`;
   return item.color === 'red' ? ' is-red' : '';
 }
 

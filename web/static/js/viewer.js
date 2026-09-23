@@ -5,6 +5,7 @@ import { isDefault } from './adjust.js';
 import { AdjustPanel } from './adjust-panel.js';
 import { AnnotationLayer } from './annotations.js';
 import { api, logout } from './api.js';
+import { initCellularity, isContour } from './cellularity.js';
 import { chooseDialog, confirmDialog, formDialog, infoDialog } from './dialog.js';
 import { applyIcons } from './icons.js';
 import { applyI18n, formatDateTime, formatNumber, setLanguage, stainFull, t } from './i18n.js';
@@ -37,6 +38,7 @@ let split = 50;
 // Показ аннотаций — выбор пользователя, общий для всех сканов (А-11)
 let annotationsShown = localStorage.getItem('viewer.annotations') !== 'off';
 let activeTool = null;
+let cellularity = null;  // панель клеточности (этап 11), см. cellularity.js
 
 setLanguage('ru');
 applyIcons();  // значки вставляются до подписей: подпись в кнопке остаётся своя (В-1)
@@ -70,6 +72,18 @@ async function main() {
   initSlidesPanel(slide);
   initTopbar();
   initAnnotations();
+  cellularity = initCellularity({
+    getActive: () => active,
+    getPanes: () => panes,
+    canDraw,
+    setTool,
+    activeTool: () => activeTool,
+    isAdmin: () => user.role === 'admin',
+    reloadAnnotations: loadAnnotations,
+    focusAnnotation,
+    removeAnnotation,
+    showNote,
+  });
   initZoomPanel();
   initRotatePanel();
   initRuler();
@@ -143,6 +157,12 @@ async function loadAnnotations(pane) {
     renderAnnotationList();
     updateAnnotationCount();
   }
+  cellularity?.onAnnotationsChanged(pane);
+}
+
+// Пометки для обучения — без контуров клеточности: те живут в своей панели
+function learningItems(pane) {
+  return (pane?.annotationItems ?? []).filter((item) => !isContour(item));
 }
 
 function addPane(slide) {
@@ -162,6 +182,7 @@ function addPane(slide) {
   });
   panes.push(view);
   attachAnnotations(view);
+  cellularity?.onPaneAdded(view);
   view.overlay = new OverlayLayer({ view, onLandmark: updateBindBar });
   // Общий курсор: перекрестие в соседней половине идёт за мышью (С-8)
   element.addEventListener('pointermove', (event) => showCrosshairFrom(view, event));
@@ -192,6 +213,7 @@ function updateCrosshair(target, point = null) {
 function closePane(view) {
   if (panes.length < 2) return; // последнюю половину не закрыть
   panes = panes.filter((pane) => pane !== view);
+  cellularity?.onPaneRemoved(view);
   view.annotations?.destroy();
   view.destroy();
   setLinked(false);
@@ -215,6 +237,7 @@ function setActive(view) {
   setTool(null);  // инструмент принадлежит половине, в которой его включили
   renderAnnotationList();
   updateAnnotationCount();
+  cellularity?.onActiveChanged();
 }
 
 // ---------- связанная навигация (С-6, С-7) ----------
@@ -1015,6 +1038,7 @@ function setTool(tool) {
   }
   $('toolPoint').classList.toggle('is-active', activeTool === 'point');
   $('toolPolygon').classList.toggle('is-active', activeTool === 'polygon');
+  cellularity?.onToolChanged();
   updateRulerButton();
   updateAnnotationHint();
   if (activeTool === 'ruler') showNote(t('ruler.hint'), { error: false });
@@ -1029,6 +1053,8 @@ function updateAnnotationHint() {
   hint.textContent = activeTool === 'point'
     ? t('annot.hint.point')
     : t('annot.hint.polygon', { n: active?.annotations.draft.length ?? 0 });
+  // подсказка о контуре клеточности — в строке состояния: панель аннотаций может быть закрыта
+  if (isContour({ kind: activeTool })) showNote(hint.textContent, { error: false });
 }
 
 function setAnnotationsShown(shown) {
@@ -1044,25 +1070,30 @@ function setAnnotationsShown(shown) {
 // При выключенном показе на кнопке видно число аннотаций скана (А-11)
 function updateAnnotationCount() {
   const badge = $('annotCount');
-  const count = active?.annotationItems?.length ?? 0;
+  const count = learningItems(active).length;
   badge.hidden = annotationsShown || !count;
   badge.textContent = String(count);
   $('annotTools').hidden = !canDraw();
 }
 
 async function createAnnotation(pane, kind, points) {
-  const values = await formDialog({
-    title: t('annot.commentTitle'),
-    submitLabel: t('annot.save'),
-    fields: [{
-      name: 'comment', label: t('annot.commentLabel'), type: 'textarea',
-      hint: t('annot.commentHint'), maxLength: 1000,
-    }],
-  });
-  if (values === null) return;  // окно закрыли — аннотация не создаётся
+  let comment = '';
+  // Контур для клеточности (КЛ-2) сохраняется без окна: подпись ему не нужна
+  if (!isContour({ kind })) {
+    const values = await formDialog({
+      title: t('annot.commentTitle'),
+      submitLabel: t('annot.save'),
+      fields: [{
+        name: 'comment', label: t('annot.commentLabel'), type: 'textarea',
+        hint: t('annot.commentHint'), maxLength: 1000,
+      }],
+    });
+    if (values === null) return;  // окно закрыли — аннотация не создаётся
+    comment = values.comment;
+  }
   try {
     const created = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/annotations`, {
-      method: 'POST', body: { kind, points, comment: values.comment },
+      method: 'POST', body: { kind, points, comment },
     });
     pane.annotationItems = [...(pane.annotationItems ?? []), created];
     pane.annotations.setItems(pane.annotationItems);
@@ -1071,6 +1102,7 @@ async function createAnnotation(pane, kind, points) {
       renderAnnotationList();
       updateAnnotationCount();
     }
+    cellularity?.onAnnotationsChanged(pane);
   } catch (error) {
     showNote(error.message);
   }
@@ -1117,10 +1149,12 @@ async function editComment(item) {
 async function removeAnnotation(item) {
   const ok = await confirmDialog({
     title: t('annot.deleteTitle'),
-    text: t('annot.deleteText', {
-      n: (active?.annotationItems ?? []).indexOf(item) + 1,
-      name: item.comment || t('annot.noComment'),
-    }),
+    text: isContour(item)
+      ? t('annot.deleteContour', { kind: t(`annot.kind.${item.kind}`) })
+      : t('annot.deleteText', {
+        n: learningItems(active).indexOf(item) + 1,
+        name: item.comment || t('annot.noComment'),
+      }),
     submitLabel: t('common.delete'),
   });
   if (!ok) return;
@@ -1136,7 +1170,7 @@ async function removeAnnotation(item) {
 function renderAnnotationList() {
   const list = $('annotList');
   if (!list) return;
-  const items = active?.annotationItems ?? [];
+  const items = learningItems(active);
   const empty = $('annotEmpty');
   empty.hidden = Boolean(items.length);
   empty.textContent = annotationsShown ? t('annot.empty') : t('annot.emptyHidden');
@@ -1207,7 +1241,7 @@ function focusAnnotation(item) {
   const ys = item.points.map((point) => point[1]);
   const centre = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
   const { viewport } = pane.viewer;
-  viewport.panTo(viewport.imageToViewportCoordinates(centre[0], centre[1]));
+  viewport.panTo(pane.image.imageToViewportCoordinates(centre[0], centre[1]));
   viewport.applyConstraints();
 }
 
@@ -1221,6 +1255,7 @@ async function goToAnnotation(id) {
   setActive(pane);
   pane.annotations.select(id);
   focusAnnotation(item);
+  if (isContour(item)) return cellularity?.open();  // контур клеточности живёт в своей панели
   $('annotPanel').hidden = false;
   $('btnAnnotations').setAttribute('aria-expanded', 'true');
   renderAnnotationList();
@@ -1273,7 +1308,7 @@ function buildLink(withAdjust) {
   const query = new URLSearchParams();
   panes.forEach((pane, index) => {
     const suffix = index ? '2' : '';
-    const center = pane.viewer.viewport.viewportToImageCoordinates(pane.viewer.viewport.getCenter(true));
+    const center = pane.image.viewportToImageCoordinates(pane.viewer.viewport.getCenter(true));
     query.set(`slide${suffix}`, pane.slide.id);
     query.set(`x${suffix}`, Math.round(center.x));
     query.set(`y${suffix}`, Math.round(center.y));
@@ -1298,8 +1333,8 @@ function restoreView(pane, query, suffix) {
   if (query.get(`f${suffix}`) === '1') pane.setFlip(true);
   if (Number.isFinite(r)) viewport.setRotation(r, true);
   const zoom = Number.isFinite(m) && pane.slide.objective ? m / pane.slide.objective : z;
-  if (zoom > 0) viewport.zoomTo(viewport.imageToViewportZoom(zoom), null, true);
-  if (Number.isFinite(x) && Number.isFinite(y)) viewport.panTo(viewport.imageToViewportCoordinates(x, y), true);
+  if (zoom > 0) viewport.zoomTo(pane.image.imageToViewportZoom(zoom), null, true);
+  if (Number.isFinite(x) && Number.isFinite(y)) viewport.panTo(pane.image.imageToViewportCoordinates(x, y), true);
   viewport.applyConstraints(true);
   // Настройки из ссылки показываются, но не заменяют сохранённые у получателя
   const shared = query.get(`adj${suffix}`) && AdjustPanel.deserialize(query.get(`adj${suffix}`));
@@ -1360,6 +1395,7 @@ async function replaceActive(slideId) {
   if (!slide) return showNote(t('compare.noAccess'));
   const index = panes.indexOf(active);
   const others = panes.filter((pane) => pane !== active); // при сравнении — соседняя половина
+  cellularity?.onPaneRemoved(active);
   active.annotations?.destroy();
   active.destroy();
   const pane = addPane(slide);

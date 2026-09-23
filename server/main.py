@@ -36,6 +36,7 @@ from .auth import (
     verify_password,
 )
 from .catalog import Catalog, CatalogError, slide_title
+from .cellularity_runs import CellularityError, CellularityService
 from .config import BASE_DIR, load_secret_key, load_settings
 from .db import Database, utc_iso
 from .perms import PermissionCache
@@ -157,6 +158,10 @@ class AnnotationPatch(BaseModel):
     color: str | None = None
 
 
+class CellularityRunRequest(BaseModel):
+    resolution: str = "original"
+
+
 def create_app() -> FastAPI:
     # Uvicorn настраивает только свои журналы, поэтому сообщения сервиса (прогрев,
     # проверка хранилища, уборка загрузок) до сих пор никуда не попадали: у корневого
@@ -174,6 +179,7 @@ def create_app() -> FastAPI:
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
     perms = PermissionCache(db)
     warmer = Warmer(pool, tile_cache, settings.tiles, settings.thumbs_dir)
+    cellularity = CellularityService(db, settings.storage, settings.data_dir, pool, settings.tiles)
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,10 +194,12 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         tile_cache.start()
         warmer.start()
+        cellularity.start()
         threading.Thread(target=initial_check, name="storage-check", daemon=True).start()
         yield
         tile_cache.stop()
         warmer.stop()
+        cellularity.stop()
         pool.close_all()
         db.close_all()
 
@@ -244,6 +252,10 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(UploadError)
     async def upload_error(request: Request, exc: UploadError):
+        return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
+
+    @app.exception_handler(CellularityError)
+    async def cellularity_error(request: Request, exc: CellularityError):
         return JSONResponse(status_code=exc.status, content={"detail": str(exc)})
 
     @app.exception_handler(annotationsvc.AnnotationError)
@@ -573,6 +585,64 @@ def create_app() -> FastAPI:
         )
         return {"ok": True}
 
+    # ---------- клеточность (этап 11, шаг 3) ----------
+
+    def require_run(slide_id: str, run_id: str, user):
+        """Расчёт доступного скана; чужой скан — 404, как тайлы (КЛ-9)."""
+        slide_row = require_slide(slide_id, user)
+        run_row = cellularity.run_row(run_id)
+        if run_row is None or run_row["slide_id"] != slide_id:
+            raise HTTPException(404, "Расчёт не найден")
+        return slide_row, run_row
+
+    @app.get("/api/slides/{slide_id}/cellularity")
+    def cellularity_status(slide_id: str, user=Depends(require_user)):
+        return cellularity.status(require_slide(slide_id, user), user)
+
+    @app.post("/api/slides/{slide_id}/cellularity/runs")
+    def cellularity_run(slide_id: str, body: CellularityRunRequest, request: Request, user=Depends(require_user)):
+        slide_row = require_slide(slide_id, user)
+        if not annotationsvc.can_annotate(db, user):
+            raise HTTPException(403, "Запускать расчёт могут участники группы «Патологи» и администраторы")
+        return cellularity.start_run(slide_row, user, body.resolution, request)
+
+    @app.get("/api/slides/{slide_id}/cellularity/runs/{run_id}")
+    def cellularity_run_status(slide_id: str, run_id: str, user=Depends(require_user)):
+        _, run_row = require_run(slide_id, run_id, user)
+        return cellularity.run_dict(run_row)
+
+    @app.post("/api/slides/{slide_id}/cellularity/runs/{run_id}/cancel")
+    def cellularity_cancel(slide_id: str, run_id: str, request: Request, user=Depends(require_user)):
+        _, run_row = require_run(slide_id, run_id, user)
+        if not annotationsvc.can_annotate(db, user):
+            raise HTTPException(403, "Отменять расчёт могут участники группы «Патологи» и администраторы")
+        return cellularity.cancel(run_row, user, request)
+
+    @app.get("/api/slides/{slide_id}/cellularity/runs/{run_id}/masks/{level:int}/{col:int}_{row:int}.png")
+    def cellularity_mask_tile(slide_id: str, run_id: str, level: int, col: int, row: int,
+                              user=Depends(require_user)):
+        slide_row, run_row = require_run(slide_id, run_id, user)
+        if run_row["status"] != "done":
+            raise HTTPException(404, "Маски ещё не готовы")
+        data = cellularity.mask_tile(slide_row, run_row, level, col, row)
+        # Расчёт неизменяем и назван своим ID, поэтому тайлы масок можно кэшировать надолго
+        return Response(data, media_type="image/png", headers={"Cache-Control": TILE_CACHE_CONTROL})
+
+    @app.post("/api/slides/{slide_id}/cellularity/propose")
+    def cellularity_propose(slide_id: str, request: Request, user=Depends(require_user)):
+        slide_row = require_slide(slide_id, user)
+        if not annotationsvc.can_annotate(db, user):
+            raise HTTPException(403, "Размечать сканы могут участники группы «Патологи» и администраторы")
+        return cellularity.propose(slide_row, user, request)
+
+    @app.get("/api/cellularity/export.csv")
+    def cellularity_export(user=Depends(require_admin)):
+        """Все расчёты для валидации (КЛ-12): сканы только по ID, имён файлов нет."""
+        return Response(
+            cellularity.export_csv(), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="cellularity.csv"', "Cache-Control": "no-store"},
+        )
+
     # ---------- папки: только администратор ----------
 
     @app.post("/api/folders")
@@ -621,6 +691,7 @@ def create_app() -> FastAPI:
     @app.delete("/api/slides/{slide_id}")
     def delete_slide(slide_id: str, request: Request, user=Depends(require_admin)):
         catalog.delete_slide(slide_id)
+        cellularity.delete_slide_data(slide_id)  # карты классов лежат вне базы (КЛ-8)
         audit.log(db, request, audit.SLIDE_DELETE, user=user, object_type="slide", object_id=slide_id)
         return {"ok": True}
 

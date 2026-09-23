@@ -120,10 +120,17 @@ export class SlideView {
     return viewer;
   }
 
+  // Изображение скана в мире OpenSeadragon. Пересчёт координат и увеличения идёт
+  // через него, а не через viewport: с масками клеточности (второй слой) viewport
+  // считает «неточно» и пишет об этом в консоль на каждый кадр.
+  get image() {
+    return this.viewer.world.getItemAt(0) ?? this.viewer.viewport;  // до открытия скана мира ещё нет
+  }
+
   // ---------- увеличение ----------
 
   get imageZoom() {
-    return this.viewer.viewport.viewportToImageZoom(this.viewer.viewport.getZoom(true));
+    return this.image.viewportToImageZoom(this.viewer.viewport.getZoom(true));
   }
 
   get magnification() {
@@ -141,7 +148,7 @@ export class SlideView {
   // чётких тайлов OpenSeadragon показывает растянутые с предыдущего уровня (Н-6).
   zoomToMagnification(magnification, immediately = true) {
     const { viewport } = this.viewer;
-    viewport.zoomTo(viewport.imageToViewportZoom(magnification / this.slide.objective), null, immediately);
+    viewport.zoomTo(this.image.imageToViewportZoom(magnification / this.slide.objective), null, immediately);
     viewport.applyConstraints(immediately);
   }
 
@@ -296,7 +303,7 @@ export class SlideView {
 
   #centerMicrons(current) {
     const { viewport } = this.viewer;
-    const center = viewport.viewportToImageCoordinates(viewport.getCenter(current));
+    const center = this.image.viewportToImageCoordinates(viewport.getCenter(current));
     const scale = this.slide.mpp || 1;
     return { x: center.x * scale, y: center.y * scale };
   }
@@ -304,14 +311,14 @@ export class SlideView {
   panToMicrons({ x, y }, immediately = false) {
     const scale = this.slide.mpp || 1;
     const { viewport } = this.viewer;
-    viewport.panTo(viewport.imageToViewportCoordinates(x / scale, y / scale), immediately);
+    viewport.panTo(this.image.imageToViewportCoordinates(x / scale, y / scale), immediately);
     viewport.applyConstraints(immediately);
   }
 
   setMagnification(magnification, immediately = false) {
     if (!this.slide.objective) return;
     const { viewport } = this.viewer;
-    const zoom = viewport.imageToViewportZoom(magnification / this.slide.objective);
+    const zoom = this.image.imageToViewportZoom(magnification / this.slide.objective);
     const limited = Math.min(Math.max(zoom, viewport.getMinZoom()), viewport.getMaxZoom());
     viewport.zoomTo(limited, null, immediately);
   }
@@ -361,13 +368,13 @@ export class SlideView {
   // Точка скана → точка внутри половины экрана
   pixelFromImage(x, y) {
     const { viewport } = this.viewer;
-    return this.#mirror(viewport.pixelFromPoint(viewport.imageToViewportCoordinates(x, y), true));
+    return this.#mirror(viewport.pixelFromPoint(this.image.imageToViewportCoordinates(x, y), true));
   }
 
   // Точка внутри половины экрана → точка скана
   imageFromPixel(point) {
     const { viewport } = this.viewer;
-    return viewport.viewportToImageCoordinates(viewport.pointFromPixel(this.#mirror(point), true));
+    return this.image.viewportToImageCoordinates(viewport.pointFromPixel(this.#mirror(point), true));
   }
 
   // То же, но от координат события мыши на странице

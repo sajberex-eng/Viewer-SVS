@@ -22,8 +22,9 @@ TAG_TILE_W, TAG_TILE_L, TAG_TILE_OFFSETS, TAG_TILE_COUNTS, TAG_YCC_SUBSAMPLING =
 SHORT, LONG, ASCII = 3, 4, 2
 
 
-def _tile_jpeg(size: int, shade: int) -> bytes:
-    image = Image.new("RGB", (size, size), (shade, 90 + shade // 3, 170))
+def _tile_jpeg(size: int, shade: int, crop: Image.Image | None = None) -> bytes:
+    """Тайл одного оттенка либо, если задано изображение (crop), его кусок."""
+    image = crop if crop is not None else Image.new("RGB", (size, size), (shade, 90 + shade // 3, 170))
     buffer = io.BytesIO()
     image.save(buffer, "JPEG", quality=70, subsampling=0)
     return buffer.getvalue()
@@ -48,13 +49,29 @@ def build_svs(
     mpp: float = 0.5,
     with_label: bool = False,
     aperio: bool = True,
+    image=None,
 ) -> Path:
     """aperio=False даёт обычный пирамидальный TIFF без метаданных Aperio:
-    OpenSlide открывает его как generic-tiff, увеличения и этикетки у него нет."""
+    OpenSlide открывает его как generic-tiff, увеличения и этикетки у него нет.
+    image — массив RGB size × size (NumPy или PIL): тогда тайлы режутся из него,
+    а не заливаются оттенками (стенд для проверки клеточности в браузере)."""
     if not aperio and with_label:
         raise ValueError("этикетка бывает только у синтетического Aperio")
+    picture = None if image is None else (image if isinstance(image, Image.Image) else Image.fromarray(image))
+    if picture is not None and picture.size != (size, size):
+        raise ValueError(f"изображение должно быть {size}×{size}")
+
+    def crops(source: Image.Image | None, level_tile: int, per_side: int):
+        for i in range(per_side * per_side):
+            if source is None:
+                yield _tile_jpeg(level_tile, 40 + 30 * i)
+            else:
+                col, row = i % per_side, i // per_side
+                yield _tile_jpeg(level_tile, 0, source.crop((col * level_tile, row * level_tile,
+                                                             (col + 1) * level_tile, (row + 1) * level_tile)))
+
     tiles_per_side = size // tile
-    jpegs = [_tile_jpeg(tile, 40 + 30 * i) for i in range(tiles_per_side * tiles_per_side)]
+    jpegs = list(crops(picture, tile, tiles_per_side))
     description = (
         f"Aperio Image Library v11.2.1\r\n{size}x{size} [0,0 {size}x{size}] ({tile}x{tile}) JPEG/RGB Q=70"
         f"|AppMag = {objective}|MPP = {mpp}"
@@ -88,7 +105,8 @@ def build_svs(
     def tiled_entries(level_size: int, level_tile: int, text: bytes) -> list:
         """Каталог с тайлами: основное изображение и уменьшенные уровни пирамиды."""
         per_side = max(1, level_size // level_tile)
-        parts = [_tile_jpeg(level_tile, 40 + 30 * i) for i in range(per_side * per_side)]
+        level_picture = None if picture is None else picture.resize((level_size, level_size), Image.Resampling.BOX)
+        parts = list(crops(level_picture, level_tile, per_side))
         starts = [put(part) for part in parts]
         sizes = [len(part) for part in parts]
         return [

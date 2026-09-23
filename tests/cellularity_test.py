@@ -224,6 +224,29 @@ def main() -> None:
         check("поиск фрагментов по миниатюре не падает", isinstance(auto, list), f"({len(auto)})")
         slide.close()
 
+        # ---------- шаг 3: контуры из аннотаций, полигон по миниатюре, карты классов, сетка тайлов ----------
+        from server.tiles import DeepZoomGrid
+        frags = cs.fragments_from_polygons([[square_poly[0]], [rect_poly[0]]], [[art_poly[0]]])
+        check("фрагменты из контуров вьювера: артефакт попал в свой фрагмент",
+              len(frags) == 2 and len(frags[0].artifacts) == 1 and not frags[1].artifacts
+              and frags[0].bbox == (100, 100, 900, 900))
+        thumb = np.zeros((40, 60), np.uint8)
+        cv2.circle(thumb, (30, 20), 15, 1, -1)
+        found = cs.Fragment(bbox=(1000, 2000, 1000 + 60 * 16, 2000 + 40 * 16), thumb_mask=thumb, thumb_ds=16.0)
+        poly = cs.fragment_polygon(found)
+        xs, ys = [p[0] for p in poly], [p[1] for p in poly]
+        check("контур по миниатюре: замкнутый многоугольник в точках уровня 0 вокруг круга",
+              8 <= len(poly) <= 80 and abs(min(xs) - (1000 + 15 * 16)) < 32 and abs(max(xs) - (1000 + 45 * 16)) < 32
+              and abs(min(ys) - (2000 + 5 * 16)) < 32, f"({len(poly)} вершин, x {min(xs):.0f}…{max(xs):.0f})")
+        cmap = cs.class_map(res, tissue, art)
+        cs.save_class_map(work / "map.png", res, tissue, art)
+        back = cs.load_class_map(work / "map.png")
+        check("карта классов: PNG с палитрой читается обратно теми же индексами",
+              np.array_equal(cmap, back) and set(np.unique(cmap)) <= set(range(7)) and (cmap == 6).sum() == int((art & tissue).sum()))
+        grid = DeepZoomGrid(2048, 2048, 510, 1)
+        check("сетка DeepZoom: 12 уровней, тайл с полями",
+              grid.level_count == 12 and grid.tile_box(11, 1, 0) == (509, 0, 1021, 511) and grid.tile_box(11, 0, 0) == (0, 0, 511, 511))
+
         # ---------- отдельный процесс (КЛ-7) ----------
         est = cs.estimate_peak_mb(fragments, 0.5, 1.0)
         check("оценка памяти: библиотеки плюс байты на точку крупнейшего фрагмента",

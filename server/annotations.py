@@ -19,11 +19,16 @@ import secrets
 from .db import Database, utc_iso
 
 PATHOLOGISTS = "Патологи"  # группа, участники которой размечают сканы
-KINDS = ("point", "polygon")
+# tissue и artifact — контуры фрагментов ткани и артефактов для оценки клеточности
+# (этап 11, КЛ-2): рисуются тем же инструментом, правятся так же, в списке
+# аннотаций для обучения не показываются и не нумеруются.
+KINDS = ("point", "polygon", "tissue", "artifact")
+CONTOUR_KINDS = ("tissue", "artifact")
 # Неоново-зелёный почти не встречается в окрашенных препаратах, поэтому он по
 # умолчанию; ярко-красный — на случай зелёной окраски (решение заказчика 2026-09-20)
 COLORS = ("green", "red")
 MAX_POINTS = 500  # разумный предел на контур: дальше это уже не разметка
+MAX_CONTOUR_POINTS = 4000  # контур фрагмента ткани по миниатюре бывает длинным
 MAX_COMMENT = 1000
 MIN_POLYGON_POINTS = 3
 
@@ -61,8 +66,9 @@ def _clean_points(kind: str, points) -> str:
         raise AnnotationError(
             "Укажите точку на скане" if kind == "point" else f"В контуре не меньше {MIN_POLYGON_POINTS} вершин"
         )
-    if len(points) > MAX_POINTS:
-        raise AnnotationError(f"В контуре не больше {MAX_POINTS} вершин")
+    limit = MAX_CONTOUR_POINTS if kind in CONTOUR_KINDS else MAX_POINTS
+    if len(points) > limit:
+        raise AnnotationError(f"В контуре не больше {limit} вершин")
     cleaned = []
     for pair in points:
         if not isinstance(pair, (list, tuple)) or len(pair) != 2:
@@ -119,6 +125,14 @@ def for_slide(db: Database, slide_id: str, user) -> list[dict]:
         "SELECT * FROM annotations WHERE slide_id = ? ORDER BY created_at, rowid", (slide_id,)
     )
     return [as_dict(row, user) for row in rows]
+
+
+def contours(db: Database, slide_id: str):
+    """Контуры для клеточности в порядке создания: ткань и артефакты (КЛ-2)."""
+    return db.query(
+        "SELECT * FROM annotations WHERE slide_id = ? AND kind IN ('tissue', 'artifact') ORDER BY created_at, rowid",
+        (slide_id,),
+    )
 
 
 def get(db: Database, annotation_id: str):

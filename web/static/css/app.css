@@ -387,6 +387,10 @@ input[type="range"] { accent-color: var(--accent); }
   opacity: 0.95;
 }
 .annot-layer .is-red { --annot-color: #ff1744; }
+/* Контуры для клеточности (КЛ-2): ткань — голубой, артефакт — белый пунктир */
+.annot-layer .is-tissue { --annot-color: #00d4ff; }
+.annot-layer .is-artifact { --annot-color: #ffffff; }
+.annot-layer .is-artifact .annot-line { stroke-dasharray: 6 4; }
 .annot-layer .annot-line.is-draft { stroke-dasharray: 5 4; }
 .annot-layer .annot-hit {
   fill: none;
@@ -552,6 +556,31 @@ input[type="range"] { accent-color: var(--accent); }
 .annot-row-number.is-red { background: #2b0008; color: #ff5470; }
 .annot-row-meta { color: var(--muted); }
 .annot-row-actions { display: flex; gap: 8px; margin-top: 2px; }
+
+/* Панель клеточности (этап 11) */
+.cell-panel { width: 320px; }
+.cell-h { margin: 6px 0 0; font-size: 13px; font-weight: 600; }
+.cell-note { font-size: 12px; }
+.cell-contour.is-tissue .annot-row-text { color: #0083a3; }
+.cell-run-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.cell-run-row select { flex: 1; min-width: 0; }
+.cell-state { margin: 0; font-size: 12px; min-height: 16px; }
+.cell-state.is-error { color: var(--danger, #b3261e); }
+.cell-progress { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; }
+.cell-progress-bar { height: 100%; width: 0; background: var(--brand); transition: width 0.4s; }
+.cell-stale { margin: 0; padding: 6px 8px; font-size: 12px; background: #fff4d6; border: 1px solid #f0c36d; border-radius: var(--radius); }
+.cell-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.cell-table th, .cell-table td { padding: 2px 4px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+.cell-table th:first-child { text-align: left; font-weight: 400; white-space: normal; }
+.cell-table thead th { font-weight: 600; }
+.cell-table tr.is-main { font-weight: 600; background: var(--brand-tint); }
+.cell-warnings { margin: 0; padding-left: 18px; font-size: 12px; color: #8a5a00; }
+.cell-opacity { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.cell-opacity input { flex: 1; }
+.cell-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; }
+.cell-legend-item { display: inline-flex; align-items: center; gap: 4px; }
+.cell-legend-item i { width: 12px; height: 12px; border: 1px solid #999; border-radius: 2px; }
+.cell-panel:not(.can-edit) .cell-edit { display: none; }
 
 .adjust-panel {
   width: 300px;
@@ -938,6 +967,8 @@ input[type="range"] { accent-color: var(--accent); }
   /* Пальцем по отдельной клетке не попасть: на телефоне аннотации только
      видны, инструментов рисования и правки нет (А-16) */
   .annot-tools, .annot-row-actions { display: none !important; }
+  /* Клеточность на телефоне: результат и маски видны, контуров и запуска нет (КЛ-14) */
+  .cell-edit { display: none !important; }
 
   /* Два столбца на узком экране не помещаются: название встаёт над пояснением */
   .info-list { grid-template-columns: 1fr; gap: 0; }

@@ -47,6 +47,9 @@ const SHAPES = {
   // Привязка по ориентирам (С-10): две отмеченные точки, соединённые линией
   bind: '<circle cx="6" cy="17.5" r="2.6"/><circle cx="18" cy="6.5" r="2.6"/><path d="M8 15.6l8-7.2"/>'
     + '<path d="M3 8.5V3.5h5M21 15.5v5h-5"/>',
+  // Клеточность (КЛ-1, значок выбран заказчиком 2026-09-22): знак процента,
+  // верхний кружок пустой (жир), нижний закрашен (клетка)
+  cellularity: '<circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3" fill="currentColor" stroke="none"/><path d="M19 5L5 19"/>',
   // Ещё: кнопки, которые не поместились (В-4)
   more: '<circle cx="5.5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/>'
     + '<circle cx="18.5" cy="12" r="1.7" fill="currentColor" stroke="none"/>',

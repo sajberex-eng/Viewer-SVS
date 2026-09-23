@@ -140,7 +140,7 @@ export class OverlayLayer {
     if (!this.tool || !event.quick) return;
     event.preventDefaultAction = true;
     // Положение щелчка библиотека уже вернула в незеркальные координаты
-    const at = this.viewer.viewport.viewportToImageCoordinates(
+    const at = this.view.image.viewportToImageCoordinates(
       this.viewer.viewport.pointFromPixel(event.position, true),
     );
     if (this.tool === 'landmarks') {

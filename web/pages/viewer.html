@@ -86,6 +86,9 @@
           <!-- Привязка по ориентирам нужна только при сравнении (С-10) -->
           <button class="icon-btn" id="btnBind" hidden data-icon="bind"
                   data-i18n-label="bind.title" data-i18n-tip="bind.tip"></button>
+          <!-- Клеточность костного мозга (КЛ-1): только у сканов H&E (ОК-4) -->
+          <button class="icon-btn" id="btnCellularity" hidden aria-expanded="false" aria-controls="cellPanel"
+                  data-icon="cellularity" data-i18n-label="cell.title" data-i18n-tip="cell.tip"></button>
           <div class="popover-anchor" id="rotateAnchor">
             <button class="icon-btn" id="btnRotate" aria-expanded="false" aria-controls="rotatePopover"
                     data-icon="rotate" data-i18n-label="rotate.title" data-i18n-tip="rotate.tip"></button>
@@ -141,6 +144,54 @@
       <p class="annot-hint muted" id="annotHint" aria-live="polite"></p>
       <ul class="annot-list" id="annotList"></ul>
       <p class="muted" id="annotEmpty" data-i18n="annot.empty"></p>
+    </aside>
+
+    <!-- Клеточность (этап 11): контуры, запуск, ход, результат, маски -->
+    <aside class="annot-panel cell-panel" id="cellPanel" hidden>
+      <div class="adjust-head">
+        <h2 data-i18n="cell.title"></h2>
+        <button class="icon-btn" id="cellClose" data-i18n-tip="adjust.close.tip">×</button>
+      </div>
+      <p class="muted cell-note" data-i18n="cell.note"></p>
+
+      <h3 class="cell-h" data-i18n="cell.contours"></h3>
+      <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
+      <div class="annot-tools cell-edit">
+        <button class="btn" id="cellToolTissue" data-i18n="cell.contour.tissue" data-i18n-tip="cell.tool.tissue.tip"></button>
+        <button class="btn" id="cellToolArtifact" data-i18n="cell.contour.artifact" data-i18n-tip="cell.tool.artifact.tip"></button>
+      </div>
+      <button class="btn cell-edit" id="cellPropose" data-i18n="cell.propose" data-i18n-tip="cell.propose.tip"></button>
+      <ul class="annot-list" id="cellContours"></ul>
+      <p class="muted" id="cellContoursEmpty" data-i18n="cell.contours.empty"></p>
+
+      <div id="cellRunBlock" hidden>
+        <h3 class="cell-h" data-i18n="cell.run.heading"></h3>
+        <div class="cell-run-row cell-edit">
+          <label for="cellResolution" data-i18n="cell.resolution"></label>
+          <select id="cellResolution">
+            <option value="original" data-i18n="cell.resolution.original"></option>
+            <option value="2" data-i18n="cell.resolution.2"></option>
+            <option value="1" data-i18n="cell.resolution.1"></option>
+          </select>
+        </div>
+        <div class="annot-tools cell-edit">
+          <button class="btn btn-primary" id="cellRun" data-i18n="cell.run" data-i18n-tip="cell.run.tip"></button>
+          <button class="btn" id="cellCancel" hidden data-i18n="common.cancel"></button>
+        </div>
+        <p class="cell-state" id="cellState" aria-live="polite"></p>
+        <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
+
+        <div id="cellResult" hidden>
+          <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
+          <table class="cell-table" id="cellTable"></table>
+          <ul class="cell-warnings" id="cellWarnings" hidden></ul>
+          <label class="check"><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
+          <label class="cell-opacity"><span data-i18n="cell.opacity"></span>
+            <input type="range" id="cellOpacity" min="10" max="100" step="5"></label>
+          <div class="cell-legend" id="cellLegend"></div>
+        </div>
+        <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
+      </div>
     </aside>
 
     <aside class="adjust-panel" id="adjustPanel" hidden>

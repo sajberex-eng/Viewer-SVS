@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import stains
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Группы, которые заводятся при создании базы. Дальше администратор
 # сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
@@ -176,7 +176,8 @@ ANNOTATIONS_SCHEMA = """
 CREATE TABLE annotations (
     id         TEXT PRIMARY KEY,
     slide_id   TEXT NOT NULL REFERENCES slides(id) ON DELETE CASCADE,
-    kind       TEXT NOT NULL CHECK (kind IN ('point', 'polygon')),
+    -- версия 7: 'tissue' и 'artifact' — контуры для оценки клеточности (КЛ-2)
+    kind       TEXT NOT NULL CHECK (kind IN ('point', 'polygon', 'tissue', 'artifact')),
     points     TEXT NOT NULL,            -- JSON: [[x, y], ...] в пикселях скана
     comment    TEXT NOT NULL DEFAULT '',
     color      TEXT NOT NULL DEFAULT 'green',  -- версия 5: 'green' или 'red', проверяет annotations.py
@@ -189,12 +190,65 @@ CREATE TABLE annotations (
 CREATE INDEX annotations_slide ON annotations(slide_id);
 """
 
+# Версия 7: расчёты клеточности (этап 11, КЛ-8). Контуры на момент запуска и их
+# хэш снимаются в запись: по хэшу видно, что контуры после расчёта меняли.
+# Результат — JSON по фрагментам и итог; карты классов лежат в data/cellularity.
+CELLULARITY_SCHEMA = """
+CREATE TABLE cellularity_runs (
+    id              TEXT PRIMARY KEY,
+    slide_id        TEXT NOT NULL REFERENCES slides(id) ON DELETE CASCADE,
+    status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed', 'cancelled')),
+    resolution      TEXT NOT NULL,          -- 'original', '1', '2' (мкм на точку)
+    pixel_um        REAL,
+    algorithm       TEXT,
+    contours        TEXT NOT NULL,          -- JSON: [{kind, points}] на момент запуска
+    contours_hash   TEXT NOT NULL,
+    result          TEXT,                   -- JSON: cellularity_slide.run
+    error           TEXT,
+    started_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    started_by_name TEXT NOT NULL DEFAULT '',
+    peak_rss_mb     REAL,
+    elapsed_s       REAL,
+    created_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    started_at      TEXT,
+    finished_at     TEXT
+);
+
+CREATE INDEX cellularity_runs_slide ON cellularity_runs(slide_id, created_at);
+"""
+
 # Схема для чистой установки: всегда последняя версия
-SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA + ANNOTATIONS_SCHEMA
+SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA + ANNOTATIONS_SCHEMA + CELLULARITY_SCHEMA
 
 
 def _seed_groups(conn: sqlite3.Connection) -> None:
     conn.executemany("INSERT INTO user_groups (name) VALUES (?)", [(name,) for name in DEFAULT_GROUPS])
+
+
+def _run_statements(conn: sqlite3.Connection, script: str) -> None:
+    """Выполнить сценарий по одному запросу внутри текущей транзакции.
+
+    executescript() сначала фиксирует транзакцию, и упавшая на середине миграция
+    оставляла базу наполовину перенесённой (2026-09-23: переименованная таблица
+    без индекса при прежней версии схемы). Здесь всё откатывается целиком.
+    """
+    for statement in script.split(";"):
+        if statement.strip():
+            conn.execute(statement)
+
+
+def _migrate_contours(conn: sqlite3.Connection) -> None:
+    """Версия 7: у аннотаций появились виды 'tissue' и 'artifact' (контуры для
+    клеточности). Ограничение CHECK в SQLite не меняется — таблица пересобирается.
+    Индекс переезжает вместе с переименованной таблицей, поэтому удаляется первым."""
+    _run_statements(conn, "DROP INDEX IF EXISTS annotations_slide; ALTER TABLE annotations RENAME TO annotations_v6")
+    _run_statements(conn, ANNOTATIONS_SCHEMA)
+    _run_statements(conn, """
+        INSERT INTO annotations (id, slide_id, kind, points, comment, color, author_id, author, created_at, updated_at)
+        SELECT id, slide_id, kind, points, comment, color, author_id, author, created_at, updated_at
+          FROM annotations_v6 ORDER BY rowid;
+        DROP TABLE annotations_v6
+    """)
 
 
 class SchemaTooNew(RuntimeError):
@@ -393,6 +447,10 @@ class Database:
                     if version == 5:
                         _migrate_stains(conn)
                         version = 6
+                    if version == 6:
+                        _migrate_contours(conn)
+                        _run_statements(conn, CELLULARITY_SCHEMA)
+                        version = 7
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

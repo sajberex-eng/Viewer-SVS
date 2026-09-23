@@ -31,6 +31,8 @@ os.environ["VIEWER_SECRET_KEY"] = "test-secret-key"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # synthetic_svs
+
 from server.auth import hash_password  # noqa: E402
 from server.main import app  # noqa: E402
 
@@ -412,6 +414,105 @@ def main() -> None:
         check("удаление папки уносит аннотации её сканов",
               db.query_one("SELECT count(*) AS n FROM annotations WHERE slide_id = 'eeeeeeeeeeee'")["n"] == 0)
 
+        # ---------- клеточность (этап 11, шаг 3): права, запуск, маски, выгрузка ----------
+        square = [[100, 100], [900, 100], [900, 900], [100, 900]]
+        check("состояние клеточности доступного скана: инструмента нет, окраска не H&E",
+              alice.get("/api/slides/aaaaaaaaaaaa/cellularity").json()["available"] is False)
+        check("клеточность чужого скана: 404 на состояние, запуск и маски",
+              bob.get("/api/slides/cccccccccccc/cellularity").status_code == 404
+              and bob.post("/api/slides/cccccccccccc/cellularity/runs", json={}).status_code == 404
+              and bob.get("/api/slides/cccccccccccc/cellularity/runs/xxxx/masks/0/0_0.png").status_code == 404)
+        check("запуск без группы «Патологи»: 403",
+              bob.post("/api/slides/aaaaaaaaaaaa/cellularity/runs", json={}).status_code == 403)
+        check("предложить контуры без группы: 403",
+              bob.post("/api/slides/aaaaaaaaaaaa/cellularity/propose").status_code == 403)
+        not_he = alice.post("/api/slides/aaaaaaaaaaaa/cellularity/runs", json={})
+        check("запуск на скане без окраски H&E: 400", not_he.status_code == 400, f"({not_he.json().get('detail')})")
+
+        # настоящий синтетический SVS с окраской H&E
+        from synthetic_svs import build_svs
+        (WORK_DIR / "slides" / "dd").mkdir(parents=True, exist_ok=True)
+        build_svs(WORK_DIR / "slides" / "dd" / "dddddddddddd.svs", size=2048, objective=20, mpp=0.5)
+        make_slide("dddddddddddd", top)
+        db.execute("UPDATE slides SET stain = 'HE', mpp = 0.5, objective = 20, width = 2048, height = 2048 "
+                   "WHERE id = 'dddddddddddd'")
+        status = alice.get("/api/slides/dddddddddddd/cellularity").json()
+        check("скан H&E с размером пикселя: инструмент есть, патолог может запускать",
+              status["available"] is True and status["can_run"] is True and status["run"] is None)
+        check("у пользователя без группы инструмент виден, запуск нет",
+              bob.get("/api/slides/dddddddddddd/cellularity").json()["can_run"] is False)
+        no_contours = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={})
+        check("запуск без контуров ткани: 400", no_contours.status_code == 400, f"({no_contours.json().get('detail')})")
+        too_long = alice.post("/api/slides/dddddddddddd/annotations",
+                              json={"kind": "tissue", "points": [[i, i] for i in range(4001)]})
+        check("контур ткани не длиннее 4000 вершин", too_long.status_code == 400)
+        check("контур ткани у пользователя без группы: 403",
+              bob.post("/api/slides/dddddddddddd/annotations", json={"kind": "tissue", "points": square}).status_code == 403)
+        tissue = alice.post("/api/slides/dddddddddddd/annotations", json={"kind": "tissue", "points": square}).json()
+        artifact = alice.post("/api/slides/dddddddddddd/annotations",
+                              json={"kind": "artifact", "points": [[300, 300], [400, 300], [400, 400], [300, 400]]}).json()
+        check("контуры ткани и артефакта созданы как аннотации своих видов",
+              tissue.get("kind") == "tissue" and artifact.get("kind") == "artifact")
+        counts = alice.get("/api/slides/dddddddddddd/cellularity").json()["contours"]
+        check("состояние считает контуры по видам", counts == {"tissue": 1, "artifact": 1}, f"({counts})")
+        bad_res = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"resolution": "5"})
+        check("неизвестное разрешение: 400", bad_res.status_code == 400)
+        started = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"resolution": "original"}).json()
+        check("расчёт поставлен в очередь", started.get("status") in ("queued", "running"), f"({started})")
+        check("второй запуск, пока идёт первый: 409",
+              carol.post("/api/slides/dddddddddddd/cellularity/runs", json={}).status_code == 409)
+        check("маски до окончания расчёта: 404",
+              alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}/masks/0/0_0.png").status_code == 404)
+        deadline = time.time() + 180
+        run = started
+        while run["status"] in ("queued", "running") and time.time() < deadline:
+            time.sleep(0.5)
+            run = alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}").json()
+        check("расчёт завершился", run["status"] == "done", f"({run['status']}: {run.get('error')})")
+        result = run.get("result") or {}
+        fragment = (result.get("fragments") or [{}])[0]
+        check("результат: площадь ткани по контуру 0,16 мм², артефакт 0,0025 мм², итог есть",
+              abs(fragment.get("tissue_mm2", 0) - 0.16) < 1e-6 and abs(fragment.get("artifacts_mm2", 0) - 0.0025) < 1e-6
+              and result.get("total") is not None and run["pixel_um"] == 2.0 and run["stale"] is False,
+              f"({fragment.get('tissue_mm2')}, {fragment.get('artifacts_mm2')})")
+        check("пик памяти и время процесса записаны", (run.get("peak_rss_mb") or 0) > 20 and (run.get("elapsed_s") or 0) > 0)
+        seen_by_bob = bob.get(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}").json()
+        check("результат видит пользователь без группы (доступ к скану есть)", seen_by_bob.get("status") == "done")
+        tile = bob.get(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}/masks/10/0_0.png")
+        check("тайл масок отдаётся как PNG с кэшем", tile.status_code == 200 and tile.headers["content-type"] == "image/png"
+              and "immutable" in tile.headers.get("cache-control", ""))
+        import io as _io
+        from PIL import Image as _Image
+        image = _Image.open(_io.BytesIO(tile.content))
+        pixels = image.convert("RGBA")
+        # уровень 10 — 1024 точки на 2048: контур 100…900 уровня 0 = 50…450 тайла
+        inside = pixels.getpixel((200, 200))
+        outside = pixels.getpixel((20, 20))
+        check("внутри контура маска непрозрачна, вне контура прозрачна",
+              image.mode == "RGBA" and inside[3] == 255 and outside[3] == 0, f"({inside}, {outside}, {image.size})")
+        check("тайл масок за краем: 404",
+              alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}/masks/10/9_9.png").status_code == 404)
+        alice.patch(f"/api/annotations/{tissue['id']}", json={"points": [[100, 100], [950, 100], [950, 950], [100, 950]]})
+        check("после правки контура результат помечен как устаревший",
+              alice.get("/api/slides/dddddddddddd/cellularity").json()["run"]["stale"] is True)
+        check("отмена завершённого расчёта: 400",
+              alice.post(f"/api/slides/dddddddddddd/cellularity/runs/{started['id']}/cancel").status_code == 400)
+        csv_text = admin.get("/api/cellularity/export.csv")
+        check("выгрузка CSV администратору: расчёт есть, имени файла нет",
+              csv_text.status_code == 200 and started["id"] in csv_text.text and "dddddddddddd" in csv_text.text
+              and ".svs" not in csv_text.text and "итог" in csv_text.text)
+        check("выгрузка CSV пользователю: 403", alice.get("/api/cellularity/export.csv").status_code == 403)
+        journal = admin.get("/api/journal").json()
+        cell_actions = {row["action"] for row in journal if row["action"].startswith("cellularity.")}
+        check("журнал: запуск и итог расчёта", cell_actions == {"cellularity.start", "cellularity.done"}, f"({cell_actions})")
+        listed = alice.get("/api/slides/dddddddddddd/annotations").json()
+        check("список аннотаций отдаёт контуры с их видами",
+              {a["kind"] for a in listed} == {"tissue", "artifact"})
+        admin.delete("/api/slides/dddddddddddd")
+        check("удаление скана уносит расчёты и карты классов",
+              db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"] == 0
+              and not (WORK_DIR / "data" / "cellularity" / "dddddddddddd").exists())
+
         # ---------- перемещение папки (КД-4) ----------
         moved = admin.post("/api/folders", json={"name": "Перенос", "parent_id": top}).json()["id"]
         other = admin.post("/api/folders", json={"name": "2026-09-20"}).json()["id"]
@@ -490,19 +591,34 @@ def main() -> None:
 
 
 def check_stain_migration() -> None:
-    """База версии 5 со свободным текстом окраски переносится на версию 6 (ОК-3)."""
+    """База версии 5 (окраска свободным текстом, аннотации только двух видов, без
+    расчётов клеточности) переносится на текущую версию (ОК-3, КЛ-2, КЛ-8)."""
     import sqlite3
-    from server.db import Database
+    from server.db import SCHEMA_VERSION, Database
 
     path = WORK_DIR / "v5.sqlite3"
     Database(path).close_all()
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("ALTER TABLE slides DROP COLUMN ihc_marker")
+    # как было до версии 7: виды аннотаций только point и polygon, таблицы расчётов нет
+    conn.executescript("""
+        DROP TABLE cellularity_runs;
+        DROP TABLE annotations;
+        CREATE TABLE annotations (
+            id TEXT PRIMARY KEY, slide_id TEXT NOT NULL REFERENCES slides(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL CHECK (kind IN ('point', 'polygon')), points TEXT NOT NULL,
+            comment TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT 'green',
+            author_id INTEGER REFERENCES users(id) ON DELETE SET NULL, author TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+        CREATE INDEX annotations_slide ON annotations(slide_id);
+    """)
     conn.execute("INSERT INTO folders (id, name, access_mode) VALUES (1, 'Корень', 'admins')")
     for slide_id, stain in (("m1", "HE"), ("m2", "Ki-67"), ("m3", None), ("m4", "  ALK (D5F3) ")):
         conn.execute("INSERT INTO slides (id, key, folder_id, size, mtime, width, height, stain) "
                      "VALUES (?, ?, 1, 1, 0, 1, 1, ?)", (slide_id, f"{slide_id}.svs", stain))
+    conn.execute("INSERT INTO annotations (id, slide_id, kind, points, comment, author) "
+                 "VALUES ('a1', 'm1', 'polygon', '[[1,1],[2,1],[2,2]]', 'старая', 'кто-то')")
     conn.execute("PRAGMA user_version = 5")
     conn.commit()
     conn.close()
@@ -510,11 +626,17 @@ def check_stain_migration() -> None:
     migrated = Database(path)
     rows = {r["id"]: (r["stain"], r["ihc_marker"]) for r in migrated.query("SELECT id, stain, ihc_marker FROM slides")}
     version = migrated.query_one("PRAGMA user_version")[0]
+    kept = migrated.query_one("SELECT kind, comment, author FROM annotations WHERE id = 'a1'")
+    migrated.execute("INSERT INTO annotations (id, slide_id, kind, points, author) VALUES ('a2', 'm1', 'tissue', '[[0,0],[9,0],[9,9]]', 'x')")
+    contour = migrated.query_one("SELECT kind FROM annotations WHERE id = 'a2'")["kind"]
+    runs_table = migrated.query_one("SELECT count(*) AS n FROM cellularity_runs")["n"]
     migrated.close_all()
-    check("перенос базы 5 → 6: схема обновлена", version == 6, f"({version})")
+    check(f"перенос базы 5 → {SCHEMA_VERSION}: схема обновлена", version == SCHEMA_VERSION, f"({version})")
     check("перенос базы 5 → 6: окраски разложены",
           rows == {"m1": ("HE", None), "m2": ("IHC", "Ki-67"), "m3": (None, None), "m4": ("IHC", "ALK (D5F3)")},
           f"({rows})")
+    check("перенос базы 6 → 7: аннотация сохранена, контур «ткань» принимается, таблица расчётов есть",
+          kept is not None and tuple(kept) == ("polygon", "старая", "кто-то") and contour == "tissue" and runs_table == 0)
 
 
 if __name__ == "__main__":

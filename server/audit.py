@@ -39,6 +39,11 @@ UPLOAD_RESUME = "upload.resume"  # прерванную загрузку про�
 ANNOTATION_CREATE = "annotation.create"
 ANNOTATION_UPDATE = "annotation.update"
 ANNOTATION_DELETE = "annotation.delete"
+# Клеточность (этап 11, КЛ-14): запуск и итог расчёта
+CELLULARITY_START = "cellularity.start"
+CELLULARITY_DONE = "cellularity.done"
+CELLULARITY_FAILED = "cellularity.failed"
+CELLULARITY_CANCEL = "cellularity.cancel"
 
 
 def client_ip(request: Request) -> str:

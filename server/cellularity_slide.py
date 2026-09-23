@@ -75,6 +75,13 @@ def contours_from_geojson(path: Path) -> list[Fragment]:
         name = str(name).strip().lower()
         for poly in _polygons(feature.get("geometry") or {}):
             (tissues if name in TISSUE_CLASSES else artifacts if name in ARTIFACT_CLASSES else []).append(poly)
+    return fragments_from_polygons(tissues, artifacts)
+
+
+def fragments_from_polygons(tissues: list, artifacts: list) -> list[Fragment]:
+    """Фрагменты из многоугольников (кольца координат уровня 0): ткань — по одному
+    фрагменту на многоугольник, артефакт относится к фрагменту, в прямоугольник
+    которого попадает его центр. Так и из GeoJSON QuPath, и из контуров вьювера."""
     fragments = []
     for poly in tissues:
         xs = [x for ring in poly for x, _ in ring]
@@ -209,6 +216,22 @@ class SlideRows:
 def read_area(slide, bbox, factor: float) -> np.ndarray:
     """Прямоугольник скана в разрешении расчёта целиком (для сверки и тестов)."""
     return np.asarray(SlideRows(slide, bbox, factor))
+
+
+def fragment_polygon(fragment: Fragment, epsilon_px: float = 1.5) -> list[list[float]]:
+    """Контур фрагмента, найденного по миниатюре, в точках уровня 0 — чтобы предложить
+    его пользователю как контур «Ткань» (КЛ-2). Внешний контур маски, упрощённый
+    (approxPolyDP с допуском в точках миниатюры), с запасом в полточки наружу."""
+    if fragment.thumb_mask is None:
+        return [list(map(float, pair)) for pair in fragment.tissue[0]]
+    contours, _ = cv2.findContours(fragment.thumb_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return []
+    contour = max(contours, key=cv2.contourArea)
+    approx = cv2.approxPolyDP(contour, epsilon_px, True).reshape(-1, 2).astype(np.float64)
+    ds = fragment.thumb_ds
+    x0, y0 = fragment.bbox[0], fragment.bbox[1]
+    return [[round(x0 + (x + 0.5) * ds, 1), round(y0 + (y + 0.5) * ds, 1)] for x, y in approx]
 
 
 def rasterize(polygons: list, bbox, factor: float, shape) -> np.ndarray:
@@ -346,7 +369,7 @@ def run(slide, base_mpp: float, resolution: str | float, fragments: list[Fragmen
             total[k] += px[k]
         total_adip += res.n_adip
         item = summary(px, pixel_um, res.n_adip)
-        item.update(fragment=index, size_px=[w, h], contours_s=round(t_read, 1),
+        item.update(fragment=index, size_px=[w, h], bbox=list(fragment.bbox), contours_s=round(t_read, 1),
                     total_s=round(time.perf_counter() - t0, 1))
         results.append(item)
         log(f"фрагмент {index}: {w}×{h}, ткани {item['tissue_mm2']:.2f} мм², "
@@ -367,13 +390,36 @@ def run(slide, base_mpp: float, resolution: str | float, fragments: list[Fragmen
 # Цвета MarrowQuant (sendResultsToQuPath), прочее — серое (КЛ-6)
 CLASS_COLORS = {"imv": (255, 58, 163), "adip": (255, 240, 60), "bone": (158, 237, 208),
                 "hemato": (25, 14, 145), "art": (0, 0, 0), "other": (200, 200, 200)}
+# Карта классов: индекс точки — часть; 0 — вне ткани. PNG с палитрой: файл и
+# смотрится как раскрашенная маска, и читается обратно как индексы (тайлы масок)
+CLASS_INDEX = {"imv": 1, "adip": 2, "bone": 3, "hemato": 4, "other": 5, "art": 6}
+
+
+def class_map(res: cellularity.Result, tissue: np.ndarray, art: np.ndarray) -> np.ndarray:
+    out = np.zeros(tissue.shape, np.uint8)
+    out[tissue] = CLASS_INDEX["other"]
+    for name, mask in (("imv", res.imv), ("hemato", res.hemato), ("adip", res.adip), ("bone", res.bone)):
+        out[mask] = CLASS_INDEX[name]
+    out[art & tissue] = CLASS_INDEX["art"]
+    return out
 
 
 def save_class_map(path: Path, res: cellularity.Result, tissue: np.ndarray, art: np.ndarray) -> None:
-    img = np.full(tissue.shape + (3,), 255, np.uint8)
-    img[tissue] = CLASS_COLORS["other"]
-    for name, mask in (("imv", res.imv), ("hemato", res.hemato), ("adip", res.adip), ("bone", res.bone)):
-        img[mask] = CLASS_COLORS[name]
-    img[art & tissue] = CLASS_COLORS["art"]
+    from PIL import Image
+
+    image = Image.fromarray(class_map(res, tissue, art), "P")
+    palette = [255, 255, 255] * 256
+    for name, index in CLASS_INDEX.items():
+        palette[index * 3:index * 3 + 3] = CLASS_COLORS[name]
+    image.putpalette(palette)
     path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path), cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+    image.save(path, "PNG", optimize=True)
+
+
+def load_class_map(path: Path) -> np.ndarray:
+    from PIL import Image
+
+    with Image.open(path) as image:
+        if image.mode != "P":
+            raise ValueError(f"карта классов не с палитрой: {path}")
+        return np.asarray(image, dtype=np.uint8).copy()

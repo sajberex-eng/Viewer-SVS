@@ -15,34 +15,52 @@ from PIL import Image
 LEVEL_TOLERANCE = 1.02  # уровень считается подходящим, если он грубее нужного не более чем на 2 %
 
 
-class DeepZoomTiler:
-    def __init__(self, slide: openslide.OpenSlide, tile_size: int, overlap: int):
-        self._slide = slide
-        self._tile_size = tile_size
-        self._overlap = overlap
-        self._background = "#" + slide.properties.get(openslide.PROPERTY_NAME_BACKGROUND_COLOR, "ffffff")
-        width, height = slide.dimensions
+class DeepZoomGrid:
+    """Сетка тайлов DeepZoom по размеру изображения: та же, что у скана, поэтому
+    маски клеточности (КЛ-6) режутся по ней без открытия файла."""
+
+    def __init__(self, width: int, height: int, tile_size: int, overlap: int):
+        self.tile_size = tile_size
+        self.overlap = overlap
         self.level_count = math.ceil(math.log2(max(width, height))) + 1
         # Уровень DeepZoom l уменьшен относительно полного разрешения в 2^(level_count - 1 - l) раз.
         self.level_dimensions = [
-            (math.ceil(width / self._scale(level)), math.ceil(height / self._scale(level)))
+            (math.ceil(width / self.scale(level)), math.ceil(height / self.scale(level)))
             for level in range(self.level_count)
         ]
 
-    def _scale(self, level: int) -> int:
+    def scale(self, level: int) -> int:
         return 2 ** (self.level_count - 1 - level)
 
     def tile_count(self, level: int) -> tuple[int, int]:
         width, height = self.level_dimensions[level]
-        return math.ceil(width / self._tile_size), math.ceil(height / self._tile_size)
+        return math.ceil(width / self.tile_size), math.ceil(height / self.tile_size)
+
+    def tile_box(self, level: int, col: int, row: int) -> tuple[int, int, int, int]:
+        """(left, top, right, bottom) тайла с полями в координатах уровня."""
+        level_width, level_height = self.level_dimensions[level]
+        left = max(col * self.tile_size - self.overlap, 0)
+        top = max(row * self.tile_size - self.overlap, 0)
+        right = min((col + 1) * self.tile_size + self.overlap, level_width)
+        bottom = min((row + 1) * self.tile_size + self.overlap, level_height)
+        return left, top, right, bottom
+
+
+class DeepZoomTiler(DeepZoomGrid):
+    def __init__(self, slide: openslide.OpenSlide, tile_size: int, overlap: int):
+        width, height = slide.dimensions
+        super().__init__(width, height, tile_size, overlap)
+        self._slide = slide
+        self._tile_size = tile_size
+        self._overlap = overlap
+        self._background = "#" + slide.properties.get(openslide.PROPERTY_NAME_BACKGROUND_COLOR, "ffffff")
+
+    def _scale(self, level: int) -> int:
+        return self.scale(level)
 
     def get_tile(self, level: int, col: int, row: int) -> Image.Image:
         """Тайл в формате RGB. Границы level/col/row проверяет вызывающий код."""
-        level_width, level_height = self.level_dimensions[level]
-        left = max(col * self._tile_size - self._overlap, 0)
-        top = max(row * self._tile_size - self._overlap, 0)
-        right = min((col + 1) * self._tile_size + self._overlap, level_width)
-        bottom = min((row + 1) * self._tile_size + self._overlap, level_height)
+        left, top, right, bottom = self.tile_box(level, col, row)
         tile_size = (right - left, bottom - top)
 
         scale = self._scale(level)
