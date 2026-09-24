@@ -10,6 +10,7 @@ const TABS = {
   users: { button: 'tabUsers', section: 'usersSection', load: () => loadUsers() },
   groups: { button: 'tabGroups', section: 'groupsSection', load: () => loadGroups() },
   journal: { button: 'tabJournal', section: 'journalSection', load: () => loadJournal(true) },
+  settings: { button: 'tabSettings', section: 'settingsSection', load: () => loadSettings() },
 };
 
 let me = null;
@@ -35,6 +36,8 @@ async function main() {
   $('btnMore').addEventListener('click', () => loadJournal(false));
   $('btnExport').addEventListener('click', exportJournal);
   $('journalAction').addEventListener('change', () => loadJournal(true));
+  $('aiSave').addEventListener('click', () => saveAiKey($('aiKey').value));
+  $('aiRemove').addEventListener('click', () => saveAiKey(''));
   for (const [name, tab] of Object.entries(TABS)) {
     $(tab.button).addEventListener('click', () => openTab(name));
   }
@@ -48,6 +51,32 @@ function openTab(name) {
   }
   setNote('');
   TABS[name].load();
+}
+
+// Ключ ИИ вводится здесь, а не пересылается разработчику: хранится только на сервере
+async function loadSettings() {
+  try {
+    showAiStatus(await api('/api/settings/ai'));
+  } catch (error) {
+    setNote(error.message, true);
+  }
+}
+
+function showAiStatus(state) {
+  $('aiStatus').textContent = state.from_env ? t('settings.ai.fromEnv')
+    : state.configured ? t('settings.ai.configured', { model: state.model }) : t('settings.ai.missing');
+  $('aiRemove').hidden = !state.configured || state.from_env;
+}
+
+async function saveAiKey(key) {
+  try {
+    const state = await api('/api/settings/ai', { method: 'PUT', body: { key } });
+    $('aiKey').value = '';
+    showAiStatus(state);
+    setNote(t(key.trim() ? 'settings.ai.saved' : 'settings.ai.removed'));
+  } catch (error) {
+    setNote(error.message, true);
+  }
 }
 
 function setNote(text, isError = false) {

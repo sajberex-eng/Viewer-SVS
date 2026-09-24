@@ -28,13 +28,14 @@ import numpy as np
 from PIL import Image
 
 from . import annotations as annotationsvc
-from . import audit, cellularity_job as job, cellularity_slide as cs
+from . import audit, cellularity_ai as ai, cellularity_job as job, cellularity_slide as cs
 from .db import Database, utc_iso
 from .tiles import DeepZoomGrid
 
 log = logging.getLogger(__name__)
 
 RESOLUTIONS = {"original": cs.ORIGINAL, "2": 2.0, "1": 1.0}
+METHODS = ("marrowquant", "ai")
 ACTIVE = ("queued", "running")
 STAIN_FOR_TOOL = "HE"          # ОК-4: инструмент только у H&E
 RESEARCH_NOTE = "Исследовательский показатель на стадии валидации, не диагноз"   # КЛ-13
@@ -78,6 +79,8 @@ class CellularityService:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self.data_dir = Path(data_dir)
+        self.ai_ask = ai.ask_model          # подменяется в тестах, чтобы не ходить в сеть
 
     # ---------- жизненный цикл ----------
 
@@ -105,15 +108,23 @@ class CellularityService:
     def run_row(self, run_id: str):
         return self.db.query_one("SELECT * FROM cellularity_runs WHERE id = ?", (run_id,))
 
-    def latest(self, slide_id: str):
+    def latest(self, slide_id: str, method: str = "marrowquant"):
         return self.db.query_one(
-            "SELECT * FROM cellularity_runs WHERE slide_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
-            (slide_id,),
+            "SELECT * FROM cellularity_runs WHERE slide_id = ? AND method = ? ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (slide_id, method),
         )
+
+    def ai_available(self) -> bool:
+        return ai.api_key(self.data_dir) is not None
+
+    @property
+    def ai_model(self) -> str:
+        return self.config.ai_model if self.config else "claude-opus-5"
 
     def status(self, slide_row, user) -> dict:
         rows = self.contours(slide_row["id"])
         latest = self.latest(slide_row["id"])
+        ai_latest = self.latest(slide_row["id"], "ai")
         return {
             "available": slide_row["stain"] == STAIN_FOR_TOOL and bool(slide_row["mpp"]),
             "can_run": annotationsvc.can_annotate(self.db, user),
@@ -125,6 +136,9 @@ class CellularityService:
             "resolution": self.default_resolution,
             "auto": bool(self.config and self.config.auto),
             "run": self.run_dict(latest, contours_hash(rows)) if latest else None,
+            "ai_run": self.run_dict(ai_latest, contours_hash(rows)) if ai_latest else None,
+            "ai_available": self.ai_available(),
+            "ai_model": self.ai_model,
             "note": RESEARCH_NOTE,
         }
 
@@ -134,6 +148,7 @@ class CellularityService:
         out = {
             "id": row["id"],
             "slide_id": row["slide_id"],
+            "method": row["method"],
             "status": row["status"],
             "resolution": row["resolution"],
             "pixel_um": row["pixel_um"],
@@ -150,7 +165,7 @@ class CellularityService:
             "progress": self._progress.get(row["id"]) if row["status"] in ACTIVE else None,
             "queue_ahead": self._queue_ahead(row) if row["status"] == "queued" else 0,
             "masks_url": f"/api/slides/{row['slide_id']}/cellularity/runs/{row['id']}/masks/"
-            if row["status"] == "done" else None,
+            if row["status"] == "done" and row["method"] == "marrowquant" else None,
         }
         return out
 
@@ -171,16 +186,24 @@ class CellularityService:
         return slide_row["stain"] == STAIN_FOR_TOOL and bool(slide_row["mpp"])
 
     def start_run(self, slide_row, user, resolution: str | None = None, request=None,
-                  propose: bool = False, auto: bool = False) -> dict:
+                  propose: bool = False, auto: bool = False, method: str = "marrowquant") -> dict:
         """Запуск расчёта. propose — если контуров нет, найти их по миниатюре (одна кнопка
-        для патолога); auto — фоновый запуск после загрузки, помечается в журнале."""
+        для патолога); auto — фоновый запуск после загрузки, помечается в журнале;
+        method — 'marrowquant' (алгоритм) или 'ai' (оценка по полям зрения)."""
         if slide_row["stain"] != STAIN_FOR_TOOL:
             raise CellularityError("Оценка клеточности есть только у сканов с окраской H&E")
         if not slide_row["mpp"]:
             raise CellularityError("В файле скана нет размера пикселя: площади посчитать нельзя")
-        resolution = resolution or self.default_resolution
-        if resolution not in RESOLUTIONS:
-            raise CellularityError("Неизвестное разрешение расчёта")
+        if method not in METHODS:
+            raise CellularityError("Неизвестный способ расчёта")
+        if method == "ai":
+            if not self.ai_available():
+                raise CellularityError("Оценка ИИ не настроена: администратор вводит ключ доступа в разделе «Настройки»")
+            resolution = "fields"
+        else:
+            resolution = resolution or self.default_resolution
+            if resolution not in RESOLUTIONS:
+                raise CellularityError("Неизвестное разрешение расчёта")
         rows = self.contours(slide_row["id"])
         if not rows and propose:
             self.propose(slide_row, user, request)
@@ -189,32 +212,33 @@ class CellularityService:
         if not fragments:
             raise CellularityError("Фрагменты ткани не найдены: обведите их контуром «Ткань»")
         active = self.db.query_one(
-            "SELECT id FROM cellularity_runs WHERE slide_id = ? AND status IN ('queued', 'running')",
-            (slide_row["id"],),
+            "SELECT id FROM cellularity_runs WHERE slide_id = ? AND method = ? AND status IN ('queued', 'running')",
+            (slide_row["id"], method),
         )
         if active:
             raise CellularityError("Расчёт по этому скану уже идёт", 409)
-        spec = job.JobSpec(self.storage_config, slide_row["key"], float(slide_row["mpp"]),
-                           RESOLUTIONS[resolution], fragments)
-        try:
-            job.check_memory(spec)
-        except job.JobError as exc:
-            raise CellularityError(str(exc)) from exc
+        if method == "marrowquant":
+            spec = job.JobSpec(self.storage_config, slide_row["key"], float(slide_row["mpp"]),
+                               RESOLUTIONS[resolution], fragments)
+            try:
+                job.check_memory(spec)
+            except job.JobError as exc:
+                raise CellularityError(str(exc)) from exc
         run_id = secrets.token_hex(6)   # случайный: два запуска подряд по одному скану не должны совпасть
         snapshot = json.dumps([{"kind": row["kind"], "points": json.loads(row["points"])} for row in rows],
                               ensure_ascii=False)
         self.db.execute(
             """
-            INSERT INTO cellularity_runs (id, slide_id, status, resolution, contours, contours_hash,
+            INSERT INTO cellularity_runs (id, slide_id, method, status, resolution, contours, contours_hash,
                                           started_by, started_by_name)
-            VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?)
             """,
-            (run_id, slide_row["id"], resolution, snapshot, contours_hash(rows), user["id"], user["login"]),
+            (run_id, slide_row["id"], method, resolution, snapshot, contours_hash(rows), user["id"], user["login"]),
         )
         audit.log(self.db, request, audit.CELLULARITY_START, user=user, object_type="slide",
                   object_id=slide_row["id"],
-                  detail=f"расчёт {run_id}, разрешение {resolution}, фрагментов {len(fragments)}"
-                  + (", автоматически после загрузки" if auto else ""))
+                  detail=f"расчёт {run_id}, {'ИИ по полям зрения' if method == 'ai' else 'разрешение ' + resolution}, "
+                         f"фрагментов {len(fragments)}" + (", автоматически после загрузки" if auto else ""))
         self._cancels[run_id] = threading.Event()
         self._queue.put(run_id)
         return self.run_dict(self.run_row(run_id), contours_hash(rows))
@@ -294,11 +318,14 @@ class CellularityService:
             [[c["points"]] for c in contours if c["kind"] == "tissue"],
             [[c["points"]] for c in contours if c["kind"] == "artifact"],
         )
+        self.db.execute("UPDATE cellularity_runs SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE id = ?",
+                        (run_id,))
+        if row["method"] == "ai":
+            self._execute_ai(row, slide, fragments)
+            return
         masks_dir = self.root / slide["id"] / run_id
         spec = job.JobSpec(self.storage_config, slide["key"], float(slide["mpp"]),
                            RESOLUTIONS[row["resolution"]], fragments, masks_dir=masks_dir)
-        self.db.execute("UPDATE cellularity_runs SET status = 'running', started_at = CURRENT_TIMESTAMP WHERE id = ?",
-                        (run_id,))
 
         def on_progress(p: job.Progress) -> None:
             self._progress[run_id] = {"fragment": p.fragment, "of": p.of, "stage": p.stage,
@@ -316,6 +343,43 @@ class CellularityService:
             self._finish(run_id, "failed", error=str(exc))
             self._log_end(row, audit.CELLULARITY_FAILED, str(exc))
             return
+        self._store_result(row, result)
+
+    def _execute_ai(self, row, slide_row, fragments) -> None:
+        """Оценка по полям зрения: сеть, а не процессор, поэтому идёт в потоке диспетчера."""
+        run_id = row["id"]
+        cancel = self._cancels.get(run_id)
+        key = ai.api_key(self.data_dir)
+        if not key:
+            self._finish(run_id, "failed", error="ключ доступа к ИИ не задан")
+            return
+        fields = int(self.config.ai_fields) if self.config else 6
+
+        def on_progress(done: int, total: int) -> None:
+            self._progress[run_id] = {"fragment": 0, "of": 0, "stage": "ai", "fields_done": done,
+                                      "fields_total": total, "fraction": round(done / max(total, 1), 3)}
+
+        try:
+            with self.pool.acquire(slide_row["key"]) as handle:
+                result = ai.estimate(handle.slide, float(slide_row["mpp"]), fragments, ai.make_client(key),
+                                     self.ai_model, fields, progress=on_progress,
+                                     should_stop=lambda: cancel is not None and cancel.is_set(), ask=self.ai_ask)
+        except InterruptedError:
+            self._finish(run_id, "cancelled", error="отменён")
+            self._log_end(row, audit.CELLULARITY_CANCEL, "отменён")
+            return
+        except ai.AiUnavailable as exc:
+            self._finish(run_id, "failed", error=str(exc))
+            self._log_end(row, audit.CELLULARITY_FAILED, str(exc))
+            return
+        except Exception as exc:  # чужая библиотека может бросить что угодно
+            log.exception("Оценка ИИ %s: ошибка", run_id)
+            self._finish(run_id, "failed", error=f"ошибка оценки: {type(exc).__name__}")
+            self._log_end(row, audit.CELLULARITY_FAILED, str(exc))
+            return
+        self._store_result(row, result)
+
+    def _store_result(self, row, result: dict) -> None:
         total = result.get("total") or {}
         self.db.execute(
             """
@@ -325,7 +389,7 @@ class CellularityService:
              WHERE id = ?
             """,
             (json.dumps(result, ensure_ascii=False), result["pixel_um"], result["algorithm"],
-             result.get("peak_rss_mb"), result.get("elapsed_s"), run_id),
+             result.get("peak_rss_mb"), result.get("elapsed_s"), row["id"]),
         )
         self._log_end(row, audit.CELLULARITY_DONE,
                       f"клеточность {total.get('cellularity_eq1_pct')} % / {total.get('cellularity_eq2_pct')} %, "
@@ -428,7 +492,7 @@ class CellularityService:
     CSV_FIELDS = ("run", "slide", "started_by", "finished_at", "resolution", "pixel_um", "algorithm", "fragment",
                   "tissue_mm2", "marrow_mm2", "bone_mm2", "hemato_mm2", "adip_mm2", "imv_mm2", "other_mm2",
                   "artifacts_mm2", "cellularity_eq1_pct", "cellularity_eq2_pct", "adiposity_pct", "imv_pct",
-                  "other_pct", "adipocytes", "warnings")
+                  "other_pct", "adipocytes", "warnings", "method", "fields_used")
 
     def export_csv(self) -> str:
         """Все выполненные расчёты: по фрагментам и итог по стеклу. Сканы — только по ID."""
@@ -445,6 +509,7 @@ class CellularityService:
                     row["resolution"], row["pixel_um"], row["algorithm"], item["fragment"],
                     *[item.get(key) for key in self.CSV_FIELDS[8:22]],
                     "; ".join(item.get("warnings") or []),
+                    row["method"], item.get("fields_used"),
                 ])
         writer.writerow([])
         writer.writerow([RESEARCH_NOTE])

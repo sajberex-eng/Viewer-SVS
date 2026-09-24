@@ -562,6 +562,37 @@ def main() -> None:
         while alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{one_click['id']}").json()["status"] in ("queued", "running"):
             time.sleep(0.5)
         service.config = replace(service.config, auto=False)
+
+        # ---------- оценка ИИ по полям зрения (шаг 6): ключ на сервере, второй способ рядом ----------
+        check("настройки ИИ только администратору",
+              alice.get("/api/settings/ai").status_code == 403 and alice.put("/api/settings/ai", json={"key": "x"}).status_code == 403)
+        no_key = admin.get("/api/settings/ai").json()
+        check("без ключа оценка ИИ не настроена и не запускается",
+              no_key["configured"] is False
+              and alice.get("/api/slides/dddddddddddd/cellularity").json()["ai_available"] is False
+              and alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"method": "ai"}).status_code == 400)
+        saved = admin.put("/api/settings/ai", json={"key": "sk-test-not-real"}).json()
+        check("ключ сохранён на сервере, наружу не отдаётся, в журнале без значения",
+              saved["configured"] is True and "sk-test" not in admin.get("/api/settings/ai").text
+              and (WORK_DIR / "data" / "ai.key").read_text(encoding="utf-8") == "sk-test-not-real"
+              and not any("sk-test" in (row["detail"] or "") for row in admin.get("/api/journal").json()))
+        answers = iter([{"applicable": True, "cellularity_pct": 45, "confidence": "high", "note": "поле"}] * 20)
+        service.ai_ask = lambda client, model, jpeg: next(answers)
+        ai_run = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"method": "ai"}).json()
+        check("оценка ИИ поставлена в очередь отдельно от алгоритма", ai_run.get("status") in ("queued", "running") and ai_run.get("method") == "ai")
+        deadline = time.time() + 120
+        while ai_run["status"] in ("queued", "running") and time.time() < deadline:
+            time.sleep(0.5)
+            ai_run = alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{ai_run['id']}").json()
+        check("оценка ИИ завершилась: итог 45 %, поля с координатами, масок нет",
+              ai_run["status"] == "done" and ai_run["result"]["total"]["cellularity_eq1_pct"] == 45.0
+              and ai_run["masks_url"] is None and all("x" in f for f in ai_run["result"]["fragments"][0]["fields"]),
+              f"({ai_run['status']}: {ai_run.get('error')})")
+        both = alice.get("/api/slides/dddddddddddd/cellularity").json()
+        check("состояние отдаёт оба способа рядом", both["run"]["method"] == "marrowquant" and both["ai_run"]["id"] == ai_run["id"])
+        check("выгрузка CSV содержит способ расчёта", "ai" in admin.get("/api/cellularity/export.csv").text.split("\r\n")[-4])
+        admin.put("/api/settings/ai", json={"key": ""})
+        check("ключ удалён", admin.get("/api/settings/ai").json()["configured"] is False and not (WORK_DIR / "data" / "ai.key").exists())
         admin.delete("/api/slides/dddddddddddd")
         check("удаление скана уносит расчёты и карты классов",
               db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"] == 0

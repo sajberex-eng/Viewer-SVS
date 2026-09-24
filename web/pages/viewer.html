@@ -160,6 +160,7 @@
         <button class="icon-btn" id="cellClose" data-i18n-tip="adjust.close.tip">×</button>
       </div>
       <div class="cell-headline">
+        <div class="cell-method-label" data-i18n="cell.method.algorithm"></div>
         <div class="cell-big" id="cellBig">—</div>
         <div class="cell-sub" id="cellSub"></div>
         <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
@@ -172,6 +173,19 @@
         </div>
         <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
         <label class="check cell-masks-toggle" id="cellMasksRow" hidden><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
+        <!-- Второй способ: оценка по полям зрения моделью с картинкой (решение заказчика 2026-09-24) -->
+        <div class="cell-ai" id="cellAi" hidden>
+          <div class="cell-method-label" data-i18n="cell.method.ai"></div>
+          <div class="cell-big cell-big-ai" id="cellAiBig">—</div>
+          <div class="cell-sub" id="cellAiSub"></div>
+          <div class="cell-progress" id="cellAiProgress" hidden><div class="cell-progress-bar" id="cellAiProgressBar"></div></div>
+          <p class="cell-state" id="cellAiState" aria-live="polite"></p>
+          <p class="cell-stale" id="cellAiStale" hidden data-i18n="cell.stale"></p>
+          <div class="annot-tools cell-edit">
+            <button class="btn" id="cellAiRun" data-i18n="cell.ai.run" data-i18n-tip="cell.ai.run.tip"></button>
+            <button class="btn" id="cellAiCancel" hidden data-i18n="common.cancel"></button>
+          </div>
+        </div>
         <p class="muted cell-note" data-i18n="cell.note"></p>
       </div>
 
@@ -200,6 +214,13 @@
             <button class="btn cell-edit" id="cellDelete" data-i18n="cell.delete" data-i18n-tip="cell.delete.tip"></button>
           </div>
           <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
+        </div>
+
+        <div id="cellAiBlock" hidden>
+          <h3 class="cell-h" data-i18n="cell.ai.heading"></h3>
+          <p class="muted" id="cellAiMeta"></p>
+          <ul class="annot-list" id="cellAiFields"></ul>
+          <button class="btn cell-edit" id="cellAiDelete" data-i18n="cell.ai.delete" data-i18n-tip="cell.delete.tip"></button>
         </div>
       </details>
     </aside>

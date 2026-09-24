@@ -45,6 +45,7 @@ CELLULARITY_DONE = "cellularity.done"
 CELLULARITY_FAILED = "cellularity.failed"
 CELLULARITY_CANCEL = "cellularity.cancel"
 CELLULARITY_DELETE = "cellularity.delete"
+SETTINGS_AI = "settings.ai"      # ключ ИИ задан или удалён (значение в журнал не пишется)
 
 
 def client_ip(request: Request) -> str:

@@ -10,3 +10,5 @@ bcrypt>=4.2
 numpy>=1.26,<2
 opencv-python-headless>=4.10,<6
 numba>=0.60
+# Оценка клеточности ИИ по полям зрения (этап 11, шаг 6): SDK Anthropic
+anthropic>=1.8,<2

@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import stains
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Группы, которые заводятся при создании базы. Дальше администратор
 # сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
@@ -198,7 +198,8 @@ CREATE TABLE cellularity_runs (
     id              TEXT PRIMARY KEY,
     slide_id        TEXT NOT NULL REFERENCES slides(id) ON DELETE CASCADE,
     status          TEXT NOT NULL CHECK (status IN ('queued', 'running', 'done', 'failed', 'cancelled')),
-    resolution      TEXT NOT NULL,          -- 'original', '1', '2' (мкм на точку)
+    method          TEXT NOT NULL DEFAULT 'marrowquant',  -- версия 8: 'marrowquant' или 'ai' (по полям зрения)
+    resolution      TEXT NOT NULL,          -- 'original', '1', '2' (мкм на точку), у 'ai' — 'fields'
     pixel_um        REAL,
     algorithm       TEXT,
     contours        TEXT NOT NULL,          -- JSON: [{kind, points}] на момент запуска
@@ -451,6 +452,13 @@ class Database:
                         _migrate_contours(conn)
                         _run_statements(conn, CELLULARITY_SCHEMA)
                         version = 7
+                    if version == 7:
+                        # Версия 8: способ расчёта (алгоритм или ИИ по полям зрения). Колонка уже есть,
+                        # если таблицу только что создали по текущей схеме
+                        columns = {row[1] for row in conn.execute("PRAGMA table_info(cellularity_runs)")}
+                        if "method" not in columns:
+                            conn.execute("ALTER TABLE cellularity_runs ADD COLUMN method TEXT NOT NULL DEFAULT 'marrowquant'")
+                        version = 8
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

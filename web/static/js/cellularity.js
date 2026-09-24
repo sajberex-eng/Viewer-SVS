@@ -51,6 +51,9 @@ export function initCellularity(host) {
   $('cellRun').addEventListener('click', start);
   $('cellCancel').addEventListener('click', cancel);
   $('cellDelete').addEventListener('click', remove);
+  $('cellAiRun').addEventListener('click', () => start('ai'));
+  $('cellAiCancel').addEventListener('click', () => cancel('ai'));
+  $('cellAiDelete').addEventListener('click', () => remove('ai'));
   $('cellMasks').addEventListener('change', () => {
     masksShown = $('cellMasks').checked;
     localStorage.setItem('viewer.cellMasks', masksShown ? 'on' : 'off');
@@ -101,10 +104,14 @@ export function initCellularity(host) {
     schedulePoll(pane);
   }
 
+  function isActive(run) {
+    return Boolean(run && ['queued', 'running'].includes(run.status));
+  }
+
   function schedulePoll(pane) {
     clearTimeout(pane.cell.timer);
-    const run = pane.cell.status?.run;
-    if (!run || !['queued', 'running'].includes(run.status)) return;
+    const status = pane.cell.status;
+    if (!isActive(status?.run) && !isActive(status?.ai_run)) return;
     pane.cell.timer = setTimeout(() => {
       if (host.getPanes().includes(pane)) load(pane);
     }, POLL_MS);
@@ -167,7 +174,84 @@ export function initCellularity(host) {
     $('cellToolArtifact').classList.toggle('is-active', host.activeTool() === 'artifact');
     renderContours(pane, canEdit);
     renderRun(status, canEdit);
+    renderAi(status, canEdit);
     $('cellExport').hidden = !(status && host.isAdmin());
+  }
+
+  // Оценка ИИ по полям зрения: второй способ рядом с алгоритмом
+  function renderAi(status, canEdit) {
+    const run = status?.ai_run ?? null;
+    const show = Boolean(status) && (Boolean(run) || (status.ai_available && canEdit));
+    $('cellAi').hidden = !show;
+    $('cellAiBlock').hidden = !run || run.status !== 'done';
+    if (!show) return;
+    const active = isActive(run);
+    const done = run?.status === 'done' && run.result;
+    $('cellAiProgress').hidden = !active;
+    $('cellAiRun').hidden = Boolean(active) || !status.ai_available;
+    $('cellAiRun').textContent = t(done ? 'cell.ai.rerun' : 'cell.ai.run');
+    $('cellAiRun').disabled = false;
+    $('cellAiCancel').hidden = !active || !canEdit;
+    $('cellAiStale').hidden = !(done && run.stale);
+    $('cellAiDelete').hidden = !canEdit;
+    const big = $('cellAiBig');
+    const sub = $('cellAiSub');
+    const state = $('cellAiState');
+    state.className = 'cell-state';
+    big.textContent = '—';
+    sub.textContent = '';
+    state.textContent = '';
+    if (!run) {
+      state.textContent = t('cell.ai.state.none');
+    } else if (active) {
+      big.textContent = '…';
+      const p = run.progress;
+      state.textContent = p?.fields_total
+        ? t('cell.ai.state.running', { i: p.fields_done, of: p.fields_total })
+        : t('cell.state.starting');
+      $('cellAiProgressBar').style.width = `${Math.round((p?.fraction ?? 0) * 100)}%`;
+    } else if (run.status === 'failed') {
+      state.classList.add('is-error');
+      state.textContent = t('cell.state.failed', { error: run.error ?? '' });
+    } else if (run.status === 'cancelled') {
+      state.textContent = t('cell.state.cancelled');
+    } else if (done) {
+      const total = run.result.total?.cellularity_eq1_pct;
+      big.textContent = total == null ? '—' : `${formatNumber(total, 0)} %`;
+      const parts = run.result.fragments.map((f) => `T${f.fragment} ${f.cellularity_eq1_pct == null ? '—' : formatNumber(f.cellularity_eq1_pct, 0)} %`);
+      sub.textContent = parts.length > 1 ? t('cell.byFragments', { list: parts.join(', ') }) : '';
+      state.textContent = t('cell.ai.headline.note', { n: run.result.total?.fields_used ?? 0 });
+      renderAiFields(run);
+    }
+  }
+
+  function renderAiFields(run) {
+    const pane = host.getActive();
+    $('cellAiMeta').textContent = t('cell.ai.meta', {
+      who: run.started_by, date: formatDateTime(run.finished_at ?? run.created_at), model: run.result.algorithm,
+    });
+    const list = $('cellAiFields');
+    list.replaceChildren(...run.result.fragments.flatMap((fragment) => fragment.fields.map((field, index) => {
+      const row = document.createElement('li');
+      row.className = 'annot-row cell-field';
+      const text = document.createElement('span');
+      text.className = 'annot-row-text';
+      text.textContent = field.applicable
+        ? t('cell.ai.field', { fragment: fragment.fragment, n: index + 1, pct: formatNumber(field.cellularity_pct, 0), conf: t(`cell.ai.conf.${field.confidence}`) || field.confidence })
+        : t('cell.ai.field.skipped', { fragment: fragment.fragment, n: index + 1 });
+      const meta = document.createElement('span');
+      meta.className = 'annot-row-meta';
+      meta.textContent = field.note || '';
+      row.append(text, meta);
+      // щелчок — к этому полю зрения на препарате, чтобы сверить оценку глазом
+      row.addEventListener('click', () => {
+        if (!pane) return;
+        const { viewport } = pane.viewer;
+        viewport.panTo(pane.image.imageToViewportCoordinates(field.x + field.size / 2, field.y + field.size / 2));
+        viewport.applyConstraints();
+      });
+      return row;
+    })));
   }
 
   function renderContours(pane, canEdit) {
@@ -314,18 +398,20 @@ export function initCellularity(host) {
 
   // ---------- действия ----------
 
-  async function start() {
+  async function start(method = 'marrowquant') {
     const pane = host.getActive();
     if (!pane) return;
     // Одна кнопка: контуры, если их нет, сервер найдёт сам; разрешение задано в настройках
-    $('cellRun').disabled = true;
+    const button = $(method === 'ai' ? 'cellAiRun' : 'cellRun');
+    button.disabled = true;
     try {
-      pane.cell.status.run = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/runs`, {
-        method: 'POST', body: { propose: true },
+      const run = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/runs`, {
+        method: 'POST', body: { propose: true, method },
       });
+      pane.cell.status[method === 'ai' ? 'ai_run' : 'run'] = run;
     } catch (error) {
       host.showNote(error.message);
-      $('cellRun').disabled = false;
+      button.disabled = false;
       return;
     }
     render();
@@ -333,12 +419,13 @@ export function initCellularity(host) {
     host.reloadAnnotations(pane);  // контуры могли появиться по миниатюре
   }
 
-  async function cancel() {
+  async function cancel(method = 'marrowquant') {
     const pane = host.getActive();
-    const run = pane?.cell?.status?.run;
+    const key = method === 'ai' ? 'ai_run' : 'run';
+    const run = pane?.cell?.status?.[key];
     if (!run) return;
     try {
-      pane.cell.status.run = await api(
+      pane.cell.status[key] = await api(
         `/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/runs/${encodeURIComponent(run.id)}/cancel`,
         { method: 'POST' },
       );
@@ -349,9 +436,9 @@ export function initCellularity(host) {
     schedulePoll(pane);
   }
 
-  async function remove() {
+  async function remove(method = 'marrowquant') {
     const pane = host.getActive();
-    const run = pane?.cell?.status?.run;
+    const run = pane?.cell?.status?.[method === 'ai' ? 'ai_run' : 'run'];
     if (!run) return;
     const ok = await confirmDialog({
       title: t('cell.delete.title'), text: t('cell.delete.text'), submitLabel: t('common.delete'),

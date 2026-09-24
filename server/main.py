@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -161,6 +162,11 @@ class AnnotationPatch(BaseModel):
 class CellularityRunRequest(BaseModel):
     resolution: str | None = None   # по умолчанию — из настроек сервиса
     propose: bool = False           # найти контуры по миниатюре, если их нет
+    method: str = "marrowquant"     # 'marrowquant' — алгоритм, 'ai' — оценка по полям зрения
+
+
+class AiSettingsRequest(BaseModel):
+    key: str = ""                   # пусто — удалить ключ
 
 
 def create_app() -> FastAPI:
@@ -607,7 +613,8 @@ def create_app() -> FastAPI:
         slide_row = require_slide(slide_id, user)
         if not annotationsvc.can_annotate(db, user):
             raise HTTPException(403, "Запускать расчёт могут участники группы «Патологи» и администраторы")
-        return cellularity.start_run(slide_row, user, body.resolution, request, propose=body.propose)
+        return cellularity.start_run(slide_row, user, body.resolution, request, propose=body.propose,
+                                     method=body.method)
 
     @app.get("/api/slides/{slide_id}/cellularity/runs/{run_id}")
     def cellularity_run_status(slide_id: str, run_id: str, user=Depends(require_user)):
@@ -652,6 +659,20 @@ def create_app() -> FastAPI:
         if not annotationsvc.can_annotate(db, user):
             raise HTTPException(403, "Размечать сканы могут участники группы «Патологи» и администраторы")
         return cellularity.propose(slide_row, user, request)
+
+    @app.get("/api/settings/ai")
+    def ai_settings(user=Depends(require_admin)):
+        """Есть ли ключ и какая модель; сам ключ наружу не отдаётся."""
+        return {"configured": cellularity.ai_available(), "model": cellularity.ai_model,
+                "from_env": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+
+    @app.put("/api/settings/ai")
+    def ai_settings_save(body: AiSettingsRequest, request: Request, user=Depends(require_admin)):
+        """Ключ вводится администратором здесь, а не в переписке; хранится в data/ai.key."""
+        from . import cellularity_ai
+        cellularity_ai.set_api_key(settings.data_dir, body.key)
+        audit.log(db, request, audit.SETTINGS_AI, user=user, detail="ключ задан" if body.key.strip() else "ключ удалён")
+        return {"configured": cellularity.ai_available(), "model": cellularity.ai_model}
 
     @app.get("/api/cellularity/export.csv")
     def cellularity_export(user=Depends(require_admin)):

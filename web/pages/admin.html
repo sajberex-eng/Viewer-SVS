@@ -16,6 +16,7 @@
       <button class="btn tab-btn is-active" id="tabUsers" data-i18n="users.heading"></button>
       <button class="btn tab-btn" id="tabGroups" data-i18n="groups.heading"></button>
       <button class="btn tab-btn" id="tabJournal" data-i18n="journal.heading"></button>
+      <button class="btn tab-btn" id="tabSettings" data-i18n="settings.heading"></button>
     </nav>
     <div class="topbar-user">
       <span id="userName"></span>
@@ -76,6 +77,21 @@
         <tbody id="journalBody"></tbody>
       </table>
       <button class="btn" id="btnMore" data-i18n="journal.more"></button>
+    </section>
+
+    <section class="admin-section" id="settingsSection" hidden>
+      <div class="catalog-toolbar"><h2 data-i18n="settings.heading"></h2></div>
+      <div class="settings-card">
+        <h3 data-i18n="settings.ai.heading"></h3>
+        <p class="muted" data-i18n="settings.ai.text"></p>
+        <p id="aiStatus"></p>
+        <label><span data-i18n="settings.ai.key"></span>
+          <input type="password" id="aiKey" autocomplete="off" spellcheck="false"></label>
+        <div class="catalog-toolbar">
+          <button class="btn btn-primary" id="aiSave" data-i18n="settings.ai.save"></button>
+          <button class="btn" id="aiRemove" data-i18n="settings.ai.remove"></button>
+        </div>
+      </div>
     </section>
   </main>
 

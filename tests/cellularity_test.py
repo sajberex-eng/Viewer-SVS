@@ -243,6 +243,41 @@ def main() -> None:
         back = cs.load_class_map(work / "map.png")
         check("карта классов: PNG с палитрой читается обратно теми же индексами",
               np.array_equal(cmap, back) and set(np.unique(cmap)) <= set(range(7)) and (cmap == 6).sum() == int((art & tissue).sum()))
+        # ---------- оценка ИИ по полям зрения (шаг 6): выбор полей и сведение без сети ----------
+        from server import cellularity_ai as ai
+        disc_mask = np.zeros((120, 120), np.uint8)
+        cv2.circle(disc_mask, (60, 60), 50, 1, -1)
+        fragment_ai = cs.Fragment(bbox=(0, 0, 120 * 32, 120 * 32), thumb_mask=disc_mask, thumb_ds=32.0)
+        fields = ai.sample_fields(fragment_ai, 0.5, 4)   # диск диаметром 3,2 мм, поле 1 мм
+        inside = all(0 <= f["x"] and f["x"] + f["size"] <= 120 * 32 and f["tissue_fraction"] >= 0.6 for f in fields)
+        apart = all(math.hypot(a["x"] - b["x"], a["y"] - b["y"]) >= a["size"] * 0.45
+                    for i, a in enumerate(fields) for b in fields[i + 1:])  # шаг сетки — половина поля
+        check("поля зрения ИИ: внутри ткани, с долей ткани не меньше 0,6, разнесены",
+              2 <= len(fields) <= 4 and inside and apart and fields[0]["size"] == 2000, f"({len(fields)} полей)")
+        check("площадь ткани для веса фрагмента ~ площадь диска",
+              abs(ai.tissue_area_mm2(fragment_ai, 0.5) - math.pi * 0.8 ** 2) < 0.15)
+        answers = iter([{"applicable": True, "cellularity_pct": 40, "confidence": "high", "note": "a"},
+                        {"applicable": False, "cellularity_pct": 0, "confidence": "low", "note": "кость"},
+                        {"applicable": True, "cellularity_pct": 60, "confidence": "medium", "note": "b"},
+                        {"applicable": True, "cellularity_pct": 80, "confidence": "high", "note": "c"}])
+        seen_jpeg = []
+
+        def fake_ask(client, model, jpeg):
+            seen_jpeg.append(jpeg[:2])
+            return next(answers)
+
+        # два квадрата 2 × 2 мм: в каждом помещаются два поля по 1 мм
+        two = [cs.Fragment(bbox=(0, 0, 4000, 4000), tissue=[[[0, 0], [4000, 0], [4000, 4000], [0, 4000]]]),
+               cs.Fragment(bbox=(0, 0, 4000, 4000), tissue=[[[0, 0], [4000, 0], [4000, 4000], [0, 4000]]])]
+        progress = []
+        with openslide.OpenSlide(str(path)) as reopened:   # скан выше уже закрыт
+            out = ai.estimate(reopened, 0.5, two, None, "test-model", 2, progress=lambda d, n: progress.append((d, n)), ask=fake_ask)
+        check("оценка ИИ: неоценённое поле не входит в среднее, стекло — среднее фрагментов с весом площади",
+              out["fragments"][0]["cellularity_eq1_pct"] == 40.0 and out["fragments"][1]["cellularity_eq1_pct"] == 70.0
+              and out["total"]["cellularity_eq1_pct"] == 55.0 and out["total"]["fields_used"] == 3
+              and out["method"] == "ai" and all(j == b"\xff\xd8" for j in seen_jpeg),
+              f"({[f['cellularity_eq1_pct'] for f in out['fragments']]}, итог {out['total']['cellularity_eq1_pct']})")
+        check("ход оценки ИИ — по полям", progress == [(1, 4), (2, 4), (3, 4), (4, 4)], f"({progress})")
         grid = DeepZoomGrid(2048, 2048, 510, 1)
         check("сетка DeepZoom: 12 уровней, тайл с полями",
               grid.level_count == 12 and grid.tile_box(11, 1, 0) == (509, 0, 1021, 511) and grid.tile_box(11, 0, 0) == (0, 0, 511, 511))

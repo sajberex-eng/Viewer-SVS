@@ -562,6 +562,11 @@ input[type="range"] { accent-color: var(--accent); }
 /* Верх панели: одно число крупно, остальное под «Подробнее» */
 .cell-headline { display: grid; gap: 6px; }
 .cell-big { font-size: 34px; font-weight: 700; line-height: 1.1; color: var(--brand); }
+.cell-method-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.cell-ai { display: grid; gap: 6px; padding-top: 8px; border-top: 1px dashed var(--border); }
+.cell-big-ai { color: #7a3a10; }
+.settings-card { max-width: 560px; display: grid; gap: 10px; }
+.settings-card input { width: 100%; }
 .cell-sub { font-size: 12px; color: var(--muted); }
 .cell-details { border-top: 1px solid var(--border); padding-top: 6px; }
 .cell-details summary { cursor: pointer; font-size: 13px; color: var(--brand); margin-bottom: 6px; }
