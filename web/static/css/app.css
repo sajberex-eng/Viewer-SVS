@@ -559,6 +559,9 @@ input[type="range"] { accent-color: var(--accent); }
 
 /* Панель клеточности (этап 11) */
 .cell-panel { width: 320px; }
+/* Кнопки панели переносятся, а не вылезают за край (замечание патолога 2026-09-24) */
+.cell-panel .annot-tools { flex-wrap: wrap; }
+.cell-panel .annot-tools .btn { min-width: 0; white-space: normal; }
 .cell-h { margin: 6px 0 0; font-size: 13px; font-weight: 600; }
 .cell-note { font-size: 12px; }
 .cell-contour.is-tissue .annot-row-text { color: #0083a3; }
