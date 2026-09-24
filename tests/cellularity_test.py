@@ -248,22 +248,30 @@ def main() -> None:
         disc_mask = np.zeros((120, 120), np.uint8)
         cv2.circle(disc_mask, (60, 60), 50, 1, -1)
         fragment_ai = cs.Fragment(bbox=(0, 0, 120 * 32, 120 * 32), thumb_mask=disc_mask, thumb_ds=32.0)
-        fields = ai.sample_fields(fragment_ai, 0.5, 4)   # диск диаметром 3,2 мм, поле 1 мм
+        fields = ai.sample_fields(fragment_ai, 0.5, 4)   # диск диаметром 3,2 мм, участок 0,8 мм
         inside = all(0 <= f["x"] and f["x"] + f["size"] <= 120 * 32 and f["tissue_fraction"] >= 0.6 for f in fields)
         apart = all(math.hypot(a["x"] - b["x"], a["y"] - b["y"]) >= a["size"] * 0.45
-                    for i, a in enumerate(fields) for b in fields[i + 1:])  # шаг сетки — половина поля
-        check("поля зрения ИИ: внутри ткани, с долей ткани не меньше 0,6, разнесены",
-              2 <= len(fields) <= 4 and inside and apart and fields[0]["size"] == 2000, f"({len(fields)} полей)")
+                    for i, a in enumerate(fields) for b in fields[i + 1:])  # шаг сетки — половина окна
+        check("участки ИИ без модели: внутри ткани, с долей ткани не меньше 0,6, разнесены",
+              2 <= len(fields) <= 4 and inside and apart and fields[0]["size"] == 1600, f"({len(fields)} участков)")
+        # точки модели (пиксели обзора) привязываются к ближайшему окну с тканью, дубли не берутся
+        snapped = ai.snap_regions(fragment_ai, 0.5, [{"x": 60, "y": 60, "reason": "центр"}, {"x": 61, "y": 60, "reason": "тот же"}], 32.0)
+        check("привязка участков: центр диска → окно вокруг центра, второй участок не совпадает с первым",
+              len(snapped) == 2 and abs(snapped[0]["x"] + 800 - 60 * 32) < 300 and abs(snapped[0]["y"] + 800 - 60 * 32) < 300
+              and snapped[0]["reason"] == "центр" and (snapped[1]["x"], snapped[1]["y"]) != (snapped[0]["x"], snapped[0]["y"])
+              and [r["n"] for r in snapped] == [1, 2], f"({snapped})")
         check("площадь ткани для веса фрагмента ~ площадь диска",
               abs(ai.tissue_area_mm2(fragment_ai, 0.5) - math.pi * 0.8 ** 2) < 0.15)
-        answers = iter([{"applicable": True, "cellularity_pct": 40, "confidence": "high", "note": "a"},
-                        {"applicable": False, "cellularity_pct": 0, "confidence": "low", "note": "кость"},
-                        {"applicable": True, "cellularity_pct": 60, "confidence": "medium", "note": "b"},
-                        {"applicable": True, "cellularity_pct": 80, "confidence": "high", "note": "c"}])
-        seen_jpeg = []
+        answers = iter([{"cellularity_percent": 40, "regional_min_percent": 30, "regional_max_percent": 50,
+                         "heterogeneous": False, "description": "однородно", "limitations": None},
+                        {"cellularity_percent": 70, "regional_min_percent": 40, "regional_max_percent": 90,
+                         "heterogeneous": True, "description": "пятнисто", "limitations": "срез тонкий"}])
+        calls = []
 
-        def fake_ask(client, model, jpeg):
-            seen_jpeg.append(jpeg[:2])
+        def fake_ask(client, model, images, text, schema):
+            calls.append((schema.__name__, len(images), all(i[:2] == b"\xff\xd8" for i in images), text))
+            if schema is ai.RegionChoice:
+                return {"regions": [{"x": 10, "y": 10, "reason": "край"}, {"x": 100, "y": 100, "reason": "центр"}]}
             return next(answers)
 
         # два квадрата 2 × 2 мм: в каждом помещаются два поля по 1 мм
@@ -271,13 +279,20 @@ def main() -> None:
                cs.Fragment(bbox=(0, 0, 4000, 4000), tissue=[[[0, 0], [4000, 0], [4000, 4000], [0, 4000]]])]
         progress = []
         with openslide.OpenSlide(str(path)) as reopened:   # скан выше уже закрыт
-            out = ai.estimate(reopened, 0.5, two, None, "test-model", 2, progress=lambda d, n: progress.append((d, n)), ask=fake_ask)
-        check("оценка ИИ: неоценённое поле не входит в среднее, стекло — среднее фрагментов с весом площади",
+            out = ai.estimate(reopened, 0.5, two, None, "test-model", progress=lambda i, n, s: progress.append((i, n, s)), ask=fake_ask)
+        check("оценка ИИ: стекло — среднее фрагментов с весом площади, разброс — крайние по фрагментам, описание сохранено",
               out["fragments"][0]["cellularity_eq1_pct"] == 40.0 and out["fragments"][1]["cellularity_eq1_pct"] == 70.0
-              and out["total"]["cellularity_eq1_pct"] == 55.0 and out["total"]["fields_used"] == 3
-              and out["method"] == "ai" and all(j == b"\xff\xd8" for j in seen_jpeg),
-              f"({[f['cellularity_eq1_pct'] for f in out['fragments']]}, итог {out['total']['cellularity_eq1_pct']})")
-        check("ход оценки ИИ — по полям", progress == [(1, 4), (2, 4), (3, 4), (4, 4)], f"({progress})")
+              and out["total"]["cellularity_eq1_pct"] == 55.0 and out["total"]["fields_used"] == 4
+              and out["total"]["regional_min_pct"] == 30.0 and out["total"]["regional_max_pct"] == 90.0
+              and out["total"]["heterogeneous"] is True and out["fragments"][1]["description"] == "пятнисто"
+              and out["fragments"][1]["limitations"] == "срез тонкий" and out["fragments"][0]["regions"][0]["reason"] == "край"
+              and out["method"] == "ai",
+              f"({[f['cellularity_eq1_pct'] for f in out['fragments']]}, итог {out['total']})")
+        check("на фрагмент два запроса: обзор (1 картинка) и оценка (обзор + 2 участка, JPEG), в тексте — номер фрагмента",
+              [c[:3] for c in calls] == [("RegionChoice", 1, True), ("FragmentEstimate", 3, True)] * 2
+              and "фрагмента 2 из 2" in calls[3][3] and "прямоугольниками" in calls[1][3], f"({[c[:3] for c in calls]})")
+        check("ход оценки ИИ — по фрагментам и шагам",
+              progress == [(1, 2, "pick"), (1, 2, "estimate"), (2, 2, "pick"), (2, 2, "estimate")], f"({progress})")
         grid = DeepZoomGrid(2048, 2048, 510, 1)
         check("сетка DeepZoom: 12 уровней, тайл с полями",
               grid.level_count == 12 and grid.tile_box(11, 1, 0) == (509, 0, 1021, 511) and grid.tile_box(11, 0, 0) == (0, 0, 511, 511))

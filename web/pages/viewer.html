@@ -173,13 +173,14 @@
         </div>
         <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
         <label class="check cell-masks-toggle" id="cellMasksRow" hidden><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
-        <!-- Второй способ: оценка по полям зрения моделью с картинкой (решение заказчика 2026-09-24) -->
+        <!-- Второй способ: оценка моделью с картинкой по обзору фрагмента и двум участкам ×20 (решение и промт заказчика 2026-09-24) -->
         <div class="cell-ai" id="cellAi" hidden>
           <div class="cell-method-label" data-i18n="cell.method.ai"></div>
           <div class="cell-big cell-big-ai" id="cellAiBig">—</div>
           <div class="cell-sub" id="cellAiSub"></div>
           <div class="cell-progress" id="cellAiProgress" hidden><div class="cell-progress-bar" id="cellAiProgressBar"></div></div>
           <p class="cell-state" id="cellAiState" aria-live="polite"></p>
+          <div class="cell-ai-text" id="cellAiText" hidden></div>
           <p class="cell-stale" id="cellAiStale" hidden data-i18n="cell.stale"></p>
           <div class="annot-tools cell-edit">
             <button class="btn" id="cellAiRun" data-i18n="cell.ai.run" data-i18n-tip="cell.ai.run.tip"></button>

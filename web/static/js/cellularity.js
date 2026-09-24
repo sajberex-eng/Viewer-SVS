@@ -206,8 +206,8 @@ export function initCellularity(host) {
     } else if (active) {
       big.textContent = '…';
       const p = run.progress;
-      state.textContent = p?.fields_total
-        ? t('cell.ai.state.running', { i: p.fields_done, of: p.fields_total })
+      state.textContent = p?.of
+        ? t('cell.ai.state.running', { i: p.fragment, of: p.of, stage: t(`cell.ai.stage.${p.stage}`) })
         : t('cell.state.starting');
       $('cellAiProgressBar').style.width = `${Math.round((p?.fraction ?? 0) * 100)}%`;
     } else if (run.status === 'failed') {
@@ -220,34 +220,69 @@ export function initCellularity(host) {
       big.textContent = total == null ? '—' : `${formatNumber(total, 0)} %`;
       const parts = run.result.fragments.map((f) => `T${f.fragment} ${f.cellularity_eq1_pct == null ? '—' : formatNumber(f.cellularity_eq1_pct, 0)} %`);
       sub.textContent = parts.length > 1 ? t('cell.byFragments', { list: parts.join(', ') }) : '';
-      state.textContent = t('cell.ai.headline.note', { n: run.result.total?.fields_used ?? 0 });
-      renderAiFields(run);
+      const total_ = run.result.total ?? {};
+      const lo = total_.regional_min_pct;
+      const hi = total_.regional_max_pct;
+      if (total == null) {
+        state.textContent = t('cell.ai.note');
+      } else if (lo != null && hi != null && hi > lo) {
+        state.textContent = t(total_.heterogeneous ? 'cell.ai.heterogeneous' : 'cell.ai.homogeneous',
+          { min: formatNumber(lo, 0), max: formatNumber(hi, 0) });
+      } else {
+        state.textContent = t(total_.heterogeneous ? 'cell.ai.heterogeneous.plain' : 'cell.ai.homogeneous.plain');
+      }
+      renderAiText(run);
+      renderAiRegions(run);
     }
+    $('cellAiText').hidden = !done;
   }
 
-  function renderAiFields(run) {
+  // Описание модели по-русски — под числом, без раскрытия «Подробнее»: одно число при
+  // неоднородном мозге вводит в заблуждение (замечание заказчика 2026-09-24)
+  function renderAiText(run) {
+    const box = $('cellAiText');
+    const many = run.result.fragments.length > 1;
+    box.replaceChildren(...run.result.fragments.flatMap((fragment) => {
+      const items = [];
+      const p = document.createElement('p');
+      if (many) {
+        const b = document.createElement('b');
+        b.textContent = `T${fragment.fragment}: `;
+        p.append(b);
+      }
+      p.append(fragment.description || t('cell.ai.noDescription'));
+      items.push(p);
+      if (fragment.limitations) {
+        const q = document.createElement('p');
+        q.className = 'muted';
+        q.textContent = t('cell.ai.limitations', { text: fragment.limitations });
+        items.push(q);
+      }
+      return items;
+    }));
+  }
+
+  // Участки ×20, которые модель выбрала и рассмотрела: щелчок ведёт к участку на препарате
+  function renderAiRegions(run) {
     const pane = host.getActive();
     $('cellAiMeta').textContent = t('cell.ai.meta', {
       who: run.started_by, date: formatDateTime(run.finished_at ?? run.created_at), model: run.result.algorithm,
     });
     const list = $('cellAiFields');
-    list.replaceChildren(...run.result.fragments.flatMap((fragment) => fragment.fields.map((field, index) => {
+    list.replaceChildren(...run.result.fragments.flatMap((fragment) => (fragment.regions ?? []).map((region) => {
       const row = document.createElement('li');
       row.className = 'annot-row cell-field';
       const text = document.createElement('span');
       text.className = 'annot-row-text';
-      text.textContent = field.applicable
-        ? t('cell.ai.field', { fragment: fragment.fragment, n: index + 1, pct: formatNumber(field.cellularity_pct, 0), conf: t(`cell.ai.conf.${field.confidence}`) || field.confidence })
-        : t('cell.ai.field.skipped', { fragment: fragment.fragment, n: index + 1 });
+      text.textContent = t('cell.ai.region', { fragment: fragment.fragment, n: region.n });
       const meta = document.createElement('span');
       meta.className = 'annot-row-meta';
-      meta.textContent = field.note || '';
+      meta.textContent = region.reason || '';
       row.append(text, meta);
-      // щелчок — к этому полю зрения на препарате, чтобы сверить оценку глазом
       row.addEventListener('click', () => {
         if (!pane) return;
         const { viewport } = pane.viewer;
-        viewport.panTo(pane.image.imageToViewportCoordinates(field.x + field.size / 2, field.y + field.size / 2));
+        viewport.panTo(pane.image.imageToViewportCoordinates(region.x + region.size / 2, region.y + region.size / 2));
         viewport.applyConstraints();
       });
       return row;

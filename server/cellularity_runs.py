@@ -353,16 +353,17 @@ class CellularityService:
         if not key:
             self._finish(run_id, "failed", error="ключ доступа к ИИ не задан")
             return
-        fields = int(self.config.ai_fields) if self.config else 6
 
-        def on_progress(done: int, total: int) -> None:
-            self._progress[run_id] = {"fragment": 0, "of": 0, "stage": "ai", "fields_done": done,
-                                      "fields_total": total, "fraction": round(done / max(total, 1), 3)}
+        def on_progress(fragment: int, of: int, stage: str) -> None:
+            # два запроса на фрагмент: выбор участков и оценка
+            steps = (fragment - 1) * 2 + (1 if stage == "estimate" else 0)
+            self._progress[run_id] = {"fragment": fragment, "of": of, "stage": f"ai_{stage}",
+                                      "fraction": round(steps / max(of * 2, 1), 3)}
 
         try:
             with self.pool.acquire(slide_row["key"]) as handle:
                 result = ai.estimate(handle.slide, float(slide_row["mpp"]), fragments, ai.make_client(key),
-                                     self.ai_model, fields, progress=on_progress,
+                                     self.ai_model, progress=on_progress,
                                      should_stop=lambda: cancel is not None and cancel.is_set(), ask=self.ai_ask)
         except InterruptedError:
             self._finish(run_id, "cancelled", error="отменён")
@@ -492,7 +493,8 @@ class CellularityService:
     CSV_FIELDS = ("run", "slide", "started_by", "finished_at", "resolution", "pixel_um", "algorithm", "fragment",
                   "tissue_mm2", "marrow_mm2", "bone_mm2", "hemato_mm2", "adip_mm2", "imv_mm2", "other_mm2",
                   "artifacts_mm2", "cellularity_eq1_pct", "cellularity_eq2_pct", "adiposity_pct", "imv_pct",
-                  "other_pct", "adipocytes", "warnings", "method", "fields_used")
+                  "other_pct", "adipocytes", "warnings", "method", "fields_used",
+                  "ai_min_pct", "ai_max_pct", "ai_heterogeneous", "ai_description", "ai_limitations")
 
     def export_csv(self) -> str:
         """Все выполненные расчёты: по фрагментам и итог по стеклу. Сканы — только по ID."""
@@ -510,6 +512,8 @@ class CellularityService:
                     *[item.get(key) for key in self.CSV_FIELDS[8:22]],
                     "; ".join(item.get("warnings") or []),
                     row["method"], item.get("fields_used"),
+                    item.get("regional_min_pct"), item.get("regional_max_pct"), item.get("heterogeneous"),
+                    item.get("description"), item.get("limitations"),
                 ])
         writer.writerow([])
         writer.writerow([RESEARCH_NOTE])

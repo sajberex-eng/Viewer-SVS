@@ -45,8 +45,7 @@ class CellularityConfig:
     auto — считать в фоне сразу после загрузки скана H&E, чтобы патолог видел готовый результат."""
     resolution: str = "2"
     auto: bool = True
-    ai_model: str = "claude-opus-5"     # модель для оценки «на глаз» по полям зрения (второй способ)
-    ai_fields: int = 6                  # полей зрения на фрагмент для оценки ИИ
+    ai_model: str = "claude-opus-5"     # модель для оценки «на глаз» (второй способ): обзор + два участка ×20
 
 
 @dataclass(frozen=True)

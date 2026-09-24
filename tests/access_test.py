@@ -576,17 +576,24 @@ def main() -> None:
               saved["configured"] is True and "sk-test" not in admin.get("/api/settings/ai").text
               and (WORK_DIR / "data" / "ai.key").read_text(encoding="utf-8") == "sk-test-not-real"
               and not any("sk-test" in (row["detail"] or "") for row in admin.get("/api/journal").json()))
-        answers = iter([{"applicable": True, "cellularity_pct": 45, "confidence": "high", "note": "поле"}] * 20)
-        service.ai_ask = lambda client, model, jpeg: next(answers)
+        from server import cellularity_ai as ai_module
+
+        def fake_ask(client, model, images, text, schema):
+            if schema is ai_module.RegionChoice:
+                return {"regions": [{"x": 5, "y": 5, "reason": "a"}, {"x": 50, "y": 50, "reason": "b"}]}
+            return {"cellularity_percent": 45, "regional_min_percent": 40, "regional_max_percent": 50,
+                    "heterogeneous": False, "description": "равномерно", "limitations": None}
+        service.ai_ask = fake_ask
         ai_run = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"method": "ai"}).json()
         check("оценка ИИ поставлена в очередь отдельно от алгоритма", ai_run.get("status") in ("queued", "running") and ai_run.get("method") == "ai")
         deadline = time.time() + 120
         while ai_run["status"] in ("queued", "running") and time.time() < deadline:
             time.sleep(0.5)
             ai_run = alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{ai_run['id']}").json()
-        check("оценка ИИ завершилась: итог 45 %, поля с координатами, масок нет",
+        check("оценка ИИ завершилась: итог 45 %, участки с координатами и описание, масок нет",
               ai_run["status"] == "done" and ai_run["result"]["total"]["cellularity_eq1_pct"] == 45.0
-              and ai_run["masks_url"] is None and all("x" in f for f in ai_run["result"]["fragments"][0]["fields"]),
+              and ai_run["masks_url"] is None and all("x" in r for r in ai_run["result"]["fragments"][0]["regions"])
+              and ai_run["result"]["fragments"][0]["description"] == "равномерно",
               f"({ai_run['status']}: {ai_run.get('error')})")
         both = alice.get("/api/slides/dddddddddddd/cellularity").json()
         check("состояние отдаёт оба способа рядом", both["run"]["method"] == "marrowquant" and both["ai_run"]["id"] == ai_run["id"])
