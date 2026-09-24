@@ -48,7 +48,11 @@ main();
 async function main() {
   const query = new URLSearchParams(location.search);
   user = await api('/api/me');
-  $('userName').textContent = user.name || user.login;
+  // Имя пользователя — кружок с инициалами, полное имя в подсказке: место в шапке
+  // нужно увеличению (замечание патолога 2026-09-24)
+  const name = user.name || user.login;
+  $('userName').textContent = initials(name);
+  $('userName').title = t('common.user.tip', { name });
   $('btnLogout').addEventListener('click', logout);
 
   const slideId = query.get('slide');
@@ -672,13 +676,18 @@ function updateStatusBar() {
   updateZoomPanel();
   refreshRotatePanel();
   updateRulerButton();
-  // В строке состояния остаётся то, что меняется на ходу: увеличение и
-  // состояние загрузки. Размеры и микрометры ушли в «Сведения о скане» (ИН-16).
-  $('statusMag').textContent = t('status.mag', { mag: active.magnificationLabel() });
+  // Увеличение и отражение — в шапке (нижней строки больше нет). Размеры и
+  // микрометры ушли в «Сведения о скане» (ИН-16).
+  $('statusMag').textContent = active.magnificationLabel();
   $('statusFlip').hidden = !active.flipped;  // отражение видно и на снимке экрана (Т-3)
-  const status = $('statusTiles');
-  status.textContent = active.tilesStatus;
-  status.classList.toggle('is-error', active.tilesFailed);
+  // Сбой загрузки тайлов показывается всплывашкой; обычная подгрузка — нет
+  if (active.tilesFailed) showNote(active.tilesStatus);
+}
+
+function initials(name) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  const letters = parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2);
+  return letters.toUpperCase();
 }
 
 // Путь «2026-09-19 › Случай 01» рядом с названием скана. Щелчок открывает
@@ -1278,10 +1287,12 @@ function showNote(text, { error = true } = {}) {
   const status = $('statusTiles');
   status.textContent = text;
   status.classList.toggle('is-error', error);
+  status.hidden = false;
   setTimeout(() => {
     if (status.textContent === text) {
       status.textContent = '';
       status.classList.remove('is-error');
+      status.hidden = true;
     }
   }, 6000);
 }

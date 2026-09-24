@@ -39,8 +39,20 @@ class AuthConfig:
 
 
 @dataclass(frozen=True)
+class CellularityConfig:
+    """Оценка клеточности (этап 11). resolution — разрешение расчёта для всех: 'original',
+    '1' или '2' (мкм на точку); пользователь его не выбирает (решение заказчика 2026-09-24).
+    auto — считать в фоне сразу после загрузки скана H&E, чтобы патолог видел готовый результат."""
+    resolution: str = "2"
+    auto: bool = True
+    ai_model: str = "claude-sonnet-5"   # модель для оценки «на глаз» по полям зрения (второй способ)
+    ai_fields: int = 6                  # полей зрения на фрагмент для оценки ИИ
+
+
+@dataclass(frozen=True)
 class Settings:
     storage: StorageConfig = field(default_factory=StorageConfig)
+    cellularity: CellularityConfig = field(default_factory=CellularityConfig)
     tiles: TileConfig = field(default_factory=TileConfig)
     cache: CacheConfig = field(default_factory=CacheConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
@@ -89,6 +101,7 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
         tiles=_section(TileConfig, raw, "tiles"),
         cache=_section(CacheConfig, raw, "cache"),
         auth=_section(AuthConfig, raw, "auth"),
+        cellularity=_section(CellularityConfig, raw, "cellularity"),
         data_dir=data_dir,
         check_minutes=int(raw.get("check_minutes", 30)),
         open_slides=int(raw.get("open_slides", 4)),

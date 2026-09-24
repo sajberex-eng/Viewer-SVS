@@ -207,63 +207,71 @@ export function initCellularity(host) {
     }));
     $('cellContoursEmpty').hidden = items.length > 0;
     $('cellClearContours').hidden = !items.length;
-    $('cellRun').disabled = !counts.tissue;
   }
 
   function renderRun(status, canEdit) {
     const run = status?.run ?? null;
     const active = run && ['queued', 'running'].includes(run.status);
+    const done = run?.status === 'done' && run.result;
     $('cellRunBlock').hidden = !status;
     $('cellProgress').hidden = !active;
     $('cellRun').hidden = Boolean(active);
     $('cellCancel').hidden = !active || !canEdit;
-    $('cellResolution').disabled = Boolean(active);
+    $('cellRun').disabled = false;
+    // после готового результата запуск — это пересчёт: новый расчёт заменяет прежний
+    $('cellRun').textContent = t(done ? 'cell.rerun' : 'cell.run');
+    $('cellMasksRow').hidden = !done;
+    $('cellStale').hidden = !(done && run.stale);
+
+    // Крупно — одно число: клеточность по формуле 1 итогом по стеклу; рядом по фрагментам
+    const big = $('cellBig');
+    const sub = $('cellSub');
     const state = $('cellState');
     state.className = 'cell-state';
+    big.textContent = '—';
+    sub.textContent = '';
+    state.textContent = '';
     if (!run) {
-      state.textContent = t('cell.state.none');
+      state.textContent = t(canEdit ? 'cell.state.none.run' : 'cell.state.none');
     } else if (run.status === 'queued') {
-      state.textContent = run.queue_ahead
-        ? t('cell.state.queued', { n: run.queue_ahead })
-        : t('cell.state.starting');
+      big.textContent = '…';
+      state.textContent = run.queue_ahead ? t('cell.state.queued', { n: run.queue_ahead }) : t('cell.state.starting');
     } else if (run.status === 'running') {
+      big.textContent = '…';
       const p = run.progress;
       state.textContent = p
         ? t('cell.state.running', { i: p.fragment, of: p.of, stage: t(`cell.stage.${p.stage}`) })
         : t('cell.state.starting');
+      $('cellProgressBar').style.width = `${Math.round((p?.fraction ?? 0) * 100)}%`;
     } else if (run.status === 'failed') {
       state.classList.add('is-error');
       state.textContent = t('cell.state.failed', { error: run.error ?? '' });
     } else if (run.status === 'cancelled') {
       state.textContent = t('cell.state.cancelled');
-    } else {
-      state.textContent = t('cell.state.done', {
-        who: run.started_by, date: formatDateTime(run.finished_at), res: t(`cell.resolution.${run.resolution}`),
-        um: formatNumber(run.pixel_um, 2), s: formatNumber(run.elapsed_s ?? 0, 0),
-      });
+    } else if (done) {
+      const total = run.result.total?.cellularity_eq1_pct;
+      big.textContent = total == null ? '—' : `${formatNumber(total, 0)} %`;
+      const parts = run.result.fragments.map((f) => `T${f.fragment} ${f.cellularity_eq1_pct == null ? '—' : formatNumber(f.cellularity_eq1_pct, 0)} %`);
+      sub.textContent = parts.length > 1 ? t('cell.byFragments', { list: parts.join(', ') }) : '';
+      state.textContent = t('cell.headline.note');
     }
-    if (active && run.progress) {
-      $('cellProgressBar').style.width = `${Math.round(run.progress.fraction * 100)}%`;
-    } else if (active) {
-      $('cellProgressBar').style.width = '0%';
-    }
-    const done = run?.status === 'done' && run.result;
+    $('cellRunMeta').textContent = run && !active && run.status !== 'failed' ? t('cell.state.done', {
+      who: run.started_by, date: formatDateTime(run.finished_at ?? run.created_at), res: t(`cell.resolution.${run.resolution}`),
+      um: formatNumber(run.pixel_um ?? 0, 2), s: formatNumber(run.elapsed_s ?? 0, 0),
+    }) : '';
     $('cellResult').hidden = !done;
     $('cellDelete').hidden = !canEdit;
-    // после готового результата запуск — это пересчёт: новый расчёт заменяет прежний
-    $('cellRun').textContent = t(done ? 'cell.rerun' : 'cell.run');
     if (done) renderResult(run);
   }
 
   function renderResult(run) {
-    $('cellStale').hidden = !run.stale;
     const table = $('cellTable');
-    const head = ['', ...run.result.fragments.map((f) => String(f.fragment)), t('cell.total')];
+    const head = ['', ...run.result.fragments.map((f) => `T${f.fragment}`), t('cell.total')];
     const rows = [
+      ['cellularity_eq1_pct', 'pct'], ['cellularity_eq2_pct', 'pct'],
       ['tissue_mm2', 'mm2'], ['marrow_mm2', 'mm2'], ['bone_mm2', 'mm2'], ['hemato_mm2', 'mm2'],
       ['adip_mm2', 'mm2'], ['imv_mm2', 'mm2'], ['other_mm2', 'mm2'], ['artifacts_mm2', 'mm2'],
-      ['cellularity_eq1_pct', 'pct'], ['cellularity_eq2_pct', 'pct'], ['adiposity_pct', 'pct'],
-      ['imv_pct', 'pct'], ['other_pct', 'pct'], ['adipocytes', 'n'],
+      ['adiposity_pct', 'pct'], ['imv_pct', 'pct'], ['other_pct', 'pct'], ['adipocytes', 'n'],
     ];
     const cells = [...run.result.fragments, run.result.total];
     const thead = document.createElement('thead');
@@ -309,11 +317,11 @@ export function initCellularity(host) {
   async function start() {
     const pane = host.getActive();
     if (!pane) return;
-    const resolution = $('cellResolution').value;
+    // Одна кнопка: контуры, если их нет, сервер найдёт сам; разрешение задано в настройках
     $('cellRun').disabled = true;
     try {
       pane.cell.status.run = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/runs`, {
-        method: 'POST', body: { resolution },
+        method: 'POST', body: { propose: true },
       });
     } catch (error) {
       host.showNote(error.message);
@@ -322,6 +330,7 @@ export function initCellularity(host) {
     }
     render();
     schedulePoll(pane);
+    host.reloadAnnotations(pane);  // контуры могли появиться по миниатюре
   }
 
   async function cancel() {

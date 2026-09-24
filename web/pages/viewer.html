@@ -52,8 +52,12 @@
       </div>
     </nav>
     <div class="topbar-user">
-      <span id="userName"></span>
-      <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
+      <!-- Увеличение и пометка «отражено» живут здесь, а не в нижней строке:
+           нижняя строка крала поле зрения (замечание патолога 2026-09-24) -->
+      <output class="topbar-mag" id="statusMag" data-i18n-tip="zoom.current.tip"></output>
+      <span class="flip-mark" id="statusFlip" hidden data-i18n="flip.mark" data-i18n-tip="flip.mark.tip"></span>
+      <span class="user-badge" id="userName"></span>
+      <button class="btn btn-icon" id="btnLogout" data-icon="logout" data-i18n-label="common.logout" data-i18n-tip="common.logout"></button>
     </div>
   </header>
 
@@ -111,6 +115,8 @@
         </div>
       </div>
       <div class="panes" id="panes"></div>
+      <!-- Сообщения и подсказки всплывают над препаратом и исчезают сами: нижней строки больше нет -->
+      <div class="toast" id="statusTiles" aria-live="polite" hidden></div>
       <!-- Меню по правой кнопке на препарате (Т-5): быстрый доступ к рулетке
            и инструментам разметки без похода к панелям -->
       <div class="popover popover-menu stage-menu" id="stageMenu" hidden>
@@ -146,57 +152,56 @@
       <p class="muted" id="annotEmpty" data-i18n="annot.empty"></p>
     </aside>
 
-    <!-- Клеточность (этап 11): контуры, запуск, ход, результат, маски -->
+    <!-- Клеточность (этап 11): сверху одно число, всё остальное под «Подробнее»
+         (замечания патолога 2026-09-24: «нажал кнопку — получил результат») -->
     <aside class="annot-panel cell-panel" id="cellPanel" hidden>
       <div class="adjust-head">
         <h2 data-i18n="cell.title"></h2>
         <button class="icon-btn" id="cellClose" data-i18n-tip="adjust.close.tip">×</button>
       </div>
-      <p class="muted cell-note" data-i18n="cell.note"></p>
-
-      <h3 class="cell-h" data-i18n="cell.contours"></h3>
-      <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
-      <div class="annot-tools cell-edit">
-        <button class="btn" id="cellToolTissue" data-i18n="cell.contour.tissue" data-i18n-tip="cell.tool.tissue.tip"></button>
-        <button class="btn" id="cellToolArtifact" data-i18n="cell.contour.artifact" data-i18n-tip="cell.tool.artifact.tip"></button>
-      </div>
-      <div class="annot-tools cell-edit">
-        <button class="btn" id="cellPropose" data-i18n="cell.propose" data-i18n-tip="cell.propose.tip"></button>
-        <button class="btn" id="cellClearContours" hidden data-i18n="cell.clear" data-i18n-tip="cell.clear.tip"></button>
-      </div>
-      <ul class="annot-list" id="cellContours"></ul>
-      <p class="muted" id="cellContoursEmpty" data-i18n="cell.contours.empty"></p>
-
-      <div id="cellRunBlock" hidden>
-        <h3 class="cell-h" data-i18n="cell.run.heading"></h3>
-        <div class="cell-run-row cell-edit">
-          <label for="cellResolution" data-i18n="cell.resolution"></label>
-          <select id="cellResolution">
-            <option value="original" data-i18n="cell.resolution.original"></option>
-            <option value="2" data-i18n="cell.resolution.2"></option>
-            <option value="1" data-i18n="cell.resolution.1"></option>
-          </select>
-        </div>
+      <div class="cell-headline">
+        <div class="cell-big" id="cellBig">—</div>
+        <div class="cell-sub" id="cellSub"></div>
+        <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
+        <p class="cell-state" id="cellState" aria-live="polite"></p>
+        <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
+        <ul class="cell-warnings" id="cellWarnings" hidden></ul>
         <div class="annot-tools cell-edit">
           <button class="btn btn-primary" id="cellRun" data-i18n="cell.run" data-i18n-tip="cell.run.tip"></button>
           <button class="btn" id="cellCancel" hidden data-i18n="common.cancel"></button>
         </div>
-        <p class="cell-state" id="cellState" aria-live="polite"></p>
-        <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
-
-        <div id="cellResult" hidden>
-          <!-- Выключатель масок — первым делом: его ищут раньше таблицы (замечание заказчика 2026-09-23) -->
-          <label class="check cell-masks-toggle"><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
-          <label class="cell-opacity"><span data-i18n="cell.opacity"></span>
-            <input type="range" id="cellOpacity" min="10" max="100" step="5"></label>
-          <div class="cell-legend" id="cellLegend"></div>
-          <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
-          <table class="cell-table" id="cellTable"></table>
-          <ul class="cell-warnings" id="cellWarnings" hidden></ul>
-          <button class="btn cell-edit" id="cellDelete" data-i18n="cell.delete" data-i18n-tip="cell.delete.tip"></button>
-        </div>
-        <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
+        <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
+        <label class="check cell-masks-toggle" id="cellMasksRow" hidden><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
+        <p class="muted cell-note" data-i18n="cell.note"></p>
       </div>
+
+      <details class="cell-details" id="cellDetails">
+        <summary data-i18n="cell.details"></summary>
+        <h3 class="cell-h" data-i18n="cell.contours"></h3>
+        <div class="annot-tools cell-edit">
+          <button class="btn" id="cellToolTissue" data-i18n="cell.contour.tissue" data-i18n-tip="cell.tool.tissue.tip"></button>
+          <button class="btn" id="cellToolArtifact" data-i18n="cell.contour.artifact" data-i18n-tip="cell.tool.artifact.tip"></button>
+        </div>
+        <div class="annot-tools cell-edit">
+          <button class="btn" id="cellPropose" data-i18n="cell.propose" data-i18n-tip="cell.propose.tip"></button>
+          <button class="btn" id="cellClearContours" hidden data-i18n="cell.clear" data-i18n-tip="cell.clear.tip"></button>
+        </div>
+        <ul class="annot-list" id="cellContours"></ul>
+        <p class="muted" id="cellContoursEmpty" data-i18n="cell.contours.empty"></p>
+
+        <div id="cellRunBlock" hidden>
+          <h3 class="cell-h" data-i18n="cell.run.heading"></h3>
+          <p class="muted" id="cellRunMeta"></p>
+          <div id="cellResult" hidden>
+            <label class="cell-opacity"><span data-i18n="cell.opacity"></span>
+              <input type="range" id="cellOpacity" min="10" max="100" step="5"></label>
+            <div class="cell-legend" id="cellLegend"></div>
+            <table class="cell-table" id="cellTable"></table>
+            <button class="btn cell-edit" id="cellDelete" data-i18n="cell.delete" data-i18n-tip="cell.delete.tip"></button>
+          </div>
+          <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
+        </div>
+      </details>
     </aside>
 
     <aside class="adjust-panel" id="adjustPanel" hidden>
@@ -226,11 +231,6 @@
     </aside>
   </div>
 
-  <footer class="statusbar">
-    <span id="statusMag"></span>
-    <span class="flip-mark" id="statusFlip" hidden data-i18n="flip.mark" data-i18n-tip="flip.mark.tip"></span>
-    <span class="status-tiles" id="statusTiles" aria-live="polite"></span>
-  </footer>
 
   <template id="paneTemplate">
     <section class="pane">

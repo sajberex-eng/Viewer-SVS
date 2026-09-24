@@ -529,6 +529,39 @@ def main() -> None:
               and alice.get("/api/slides/dddddddddddd/cellularity").json()["run"] is None)
         check("журнал: удаление расчёта",
               any(row["action"] == "cellularity.delete" for row in admin.get("/api/journal").json()))
+        # фоновый расчёт после загрузки (решение заказчика 2026-09-24): контуры есть — расчёт
+        # стартует сам с разрешением из настроек; при свежем результате повторно не стартует
+        from dataclasses import replace
+        service = app.state.cellularity
+        service.config = replace(service.config, auto=True)
+        alice.post("/api/slides/dddddddddddd/annotations", json={"kind": "tissue", "points": square})
+        slide_row = db.query_one("SELECT * FROM slides WHERE id = 'dddddddddddd'")
+        actor = db.query_one("SELECT * FROM users WHERE login = 'user-a'")
+        service.auto_run(slide_row, actor)
+        deadline = time.time() + 180
+        auto = None
+        while time.time() < deadline:
+            time.sleep(0.5)
+            auto = alice.get("/api/slides/dddddddddddd/cellularity").json()["run"]
+            if auto and auto["status"] not in ("queued", "running"):
+                break
+        check("фоновый расчёт запустился сам и завершился при разрешении из настроек",
+              auto is not None and auto["status"] == "done" and auto["resolution"] == service.default_resolution,
+              f"({auto and auto['status']}, {auto and auto['resolution']})")
+        before = db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"]
+        service.auto_run(slide_row, actor)
+        time.sleep(1)
+        check("при свежем результате фоновый расчёт повторно не запускается",
+              db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"] == before)
+        check("журнал помечает автоматический запуск",
+              any(row["action"] == "cellularity.start" and "автоматически" in (row["detail"] or "")
+                  for row in admin.get("/api/journal").json()))
+        one_click = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"propose": True}).json()
+        check("запуск одной кнопкой: разрешение из настроек, контуры уже есть",
+              one_click.get("status") in ("queued", "running") and one_click.get("resolution") == service.default_resolution)
+        while alice.get(f"/api/slides/dddddddddddd/cellularity/runs/{one_click['id']}").json()["status"] in ("queued", "running"):
+            time.sleep(0.5)
+        service.config = replace(service.config, auto=False)
         admin.delete("/api/slides/dddddddddddd")
         check("удаление скана уносит расчёты и карты классов",
               db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"] == 0

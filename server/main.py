@@ -159,7 +159,8 @@ class AnnotationPatch(BaseModel):
 
 
 class CellularityRunRequest(BaseModel):
-    resolution: str = "original"
+    resolution: str | None = None   # по умолчанию — из настроек сервиса
+    propose: bool = False           # найти контуры по миниатюре, если их нет
 
 
 def create_app() -> FastAPI:
@@ -179,7 +180,8 @@ def create_app() -> FastAPI:
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
     perms = PermissionCache(db)
     warmer = Warmer(pool, tile_cache, settings.tiles, settings.thumbs_dir)
-    cellularity = CellularityService(db, settings.storage, settings.data_dir, pool, settings.tiles)
+    cellularity = CellularityService(db, settings.storage, settings.data_dir, pool, settings.tiles,
+                                     settings.cellularity)
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -207,6 +209,7 @@ def create_app() -> FastAPI:
     app.state.db = db
     app.state.perms = perms
     app.state.warmer = warmer
+    app.state.cellularity = cellularity  # для тестов фонового расчёта
     app.add_middleware(
         SessionMiddleware,
         secret_key=load_secret_key(settings),
@@ -604,7 +607,7 @@ def create_app() -> FastAPI:
         slide_row = require_slide(slide_id, user)
         if not annotationsvc.can_annotate(db, user):
             raise HTTPException(403, "Запускать расчёт могут участники группы «Патологи» и администраторы")
-        return cellularity.start_run(slide_row, user, body.resolution, request)
+        return cellularity.start_run(slide_row, user, body.resolution, request, propose=body.propose)
 
     @app.get("/api/slides/{slide_id}/cellularity/runs/{run_id}")
     def cellularity_run_status(slide_id: str, run_id: str, user=Depends(require_user)):
@@ -701,6 +704,8 @@ def create_app() -> FastAPI:
             catalog.update_slide(slide_id, title=body.title, stain=body.stain,
                                  ihc_marker=body.ihc_marker, note=body.note)
             audit.log(db, request, audit.SLIDE_UPDATE, user=user, object_type="slide", object_id=slide_id)
+            if body.stain is not None:
+                cellularity.auto_run(catalog.slide(slide_id), user)  # окраска стала H&E — считаем в фоне
         return {"ok": True}
 
     @app.delete("/api/slides/{slide_id}")
@@ -962,6 +967,7 @@ def create_app() -> FastAPI:
         slide_id = uploads.complete(upload_id, user)
         audit.log(db, request, audit.SLIDE_UPLOAD, user=user, object_type="slide", object_id=slide_id)
         warmer.enqueue(catalog.slide(slide_id))  # миниатюра и обзорные тайлы готовятся в фоне (СК-1)
+        cellularity.auto_run(catalog.slide(slide_id), user)  # клеточность H&E — тоже в фоне
         return {"slide_id": slide_id}
 
     @app.delete("/api/uploads/{upload_id}")

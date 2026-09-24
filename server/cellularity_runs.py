@@ -18,6 +18,7 @@ import io
 import json
 import logging
 import queue
+import secrets
 import shutil
 import threading
 from collections import OrderedDict
@@ -63,9 +64,10 @@ def fragments_from_rows(rows) -> list[cs.Fragment]:
 
 
 class CellularityService:
-    def __init__(self, db: Database, storage_config, data_dir: Path, pool, tiles_cfg):
+    def __init__(self, db: Database, storage_config, data_dir: Path, pool, tiles_cfg, config=None):
         self.db = db
         self.storage_config = storage_config
+        self.config = config
         self.root = Path(data_dir) / "cellularity"
         self.pool = pool
         self.tiles = tiles_cfg
@@ -120,6 +122,8 @@ class CellularityService:
                 "artifact": sum(1 for row in rows if row["kind"] == "artifact"),
             },
             "resolutions": list(RESOLUTIONS),
+            "resolution": self.default_resolution,
+            "auto": bool(self.config and self.config.auto),
             "run": self.run_dict(latest, contours_hash(rows)) if latest else None,
             "note": RESEARCH_NOTE,
         }
@@ -158,17 +162,32 @@ class CellularityService:
 
     # ---------- запуск и отмена ----------
 
-    def start_run(self, slide_row, user, resolution: str, request=None) -> dict:
+    @property
+    def default_resolution(self) -> str:
+        value = self.config.resolution if self.config else "2"
+        return value if value in RESOLUTIONS else "2"
+
+    def available(self, slide_row) -> bool:
+        return slide_row["stain"] == STAIN_FOR_TOOL and bool(slide_row["mpp"])
+
+    def start_run(self, slide_row, user, resolution: str | None = None, request=None,
+                  propose: bool = False, auto: bool = False) -> dict:
+        """Запуск расчёта. propose — если контуров нет, найти их по миниатюре (одна кнопка
+        для патолога); auto — фоновый запуск после загрузки, помечается в журнале."""
         if slide_row["stain"] != STAIN_FOR_TOOL:
             raise CellularityError("Оценка клеточности есть только у сканов с окраской H&E")
         if not slide_row["mpp"]:
             raise CellularityError("В файле скана нет размера пикселя: площади посчитать нельзя")
+        resolution = resolution or self.default_resolution
         if resolution not in RESOLUTIONS:
             raise CellularityError("Неизвестное разрешение расчёта")
         rows = self.contours(slide_row["id"])
+        if not rows and propose:
+            self.propose(slide_row, user, request)
+            rows = self.contours(slide_row["id"])
         fragments = fragments_from_rows(rows)
         if not fragments:
-            raise CellularityError("Обведите хотя бы один фрагмент ткани контуром «Ткань»")
+            raise CellularityError("Фрагменты ткани не найдены: обведите их контуром «Ткань»")
         active = self.db.query_one(
             "SELECT id FROM cellularity_runs WHERE slide_id = ? AND status IN ('queued', 'running')",
             (slide_row["id"],),
@@ -181,7 +200,7 @@ class CellularityService:
             job.check_memory(spec)
         except job.JobError as exc:
             raise CellularityError(str(exc)) from exc
-        run_id = hashlib.sha1(f"{slide_row['id']}:{user['id']}:{utc_iso('now')}:{len(rows)}".encode()).hexdigest()[:12]
+        run_id = secrets.token_hex(6)   # случайный: два запуска подряд по одному скану не должны совпасть
         snapshot = json.dumps([{"kind": row["kind"], "points": json.loads(row["points"])} for row in rows],
                               ensure_ascii=False)
         self.db.execute(
@@ -193,10 +212,35 @@ class CellularityService:
             (run_id, slide_row["id"], resolution, snapshot, contours_hash(rows), user["id"], user["login"]),
         )
         audit.log(self.db, request, audit.CELLULARITY_START, user=user, object_type="slide",
-                  object_id=slide_row["id"], detail=f"расчёт {run_id}, разрешение {resolution}, фрагментов {len(fragments)}")
+                  object_id=slide_row["id"],
+                  detail=f"расчёт {run_id}, разрешение {resolution}, фрагментов {len(fragments)}"
+                  + (", автоматически после загрузки" if auto else ""))
         self._cancels[run_id] = threading.Event()
         self._queue.put(run_id)
         return self.run_dict(self.run_row(run_id), contours_hash(rows))
+
+    def auto_run(self, slide_row, user) -> None:
+        """Фоновый расчёт после загрузки или смены окраски на H&E (решение заказчика
+        2026-09-24): контуры по миниатюре и расчёт при разрешении из настроек, чтобы
+        патолог открыл скан с готовым результатом. Тихо пропускается, если инструмента
+        у скана нет, расчёт уже идёт или свежий результат есть. Идёт в своём потоке:
+        поиск контуров читает миниатюру, а ответ на загрузку ждать не должен."""
+        if not (self.config and self.config.auto) or slide_row is None or not self.available(slide_row):
+            return
+        latest = self.latest(slide_row["id"])
+        if latest is not None and (latest["status"] in ACTIVE or
+                                   (latest["status"] == "done" and latest["contours_hash"] == contours_hash(self.contours(slide_row["id"])))):
+            return
+
+        def go():
+            try:
+                self.start_run(slide_row, user, propose=True, auto=True)
+            except CellularityError as exc:
+                log.info("Фоновый расчёт клеточности %s не запущен: %s", slide_row["id"], exc)
+            except Exception:
+                log.exception("Фоновый расчёт клеточности %s: ошибка запуска", slide_row["id"])
+
+        threading.Thread(target=go, name="cellularity-auto", daemon=True).start()
 
     def cancel(self, row, user, request=None) -> dict:
         if row["status"] not in ACTIVE:

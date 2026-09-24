@@ -50,6 +50,8 @@ const SHAPES = {
   // Клеточность (КЛ-1, значок выбран заказчиком 2026-09-22): знак процента,
   // верхний кружок пустой (жир), нижний закрашен (клетка)
   cellularity: '<circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3" fill="currentColor" stroke="none"/><path d="M19 5L5 19"/>',
+  // Выход: дверь со стрелкой
+  logout: '<path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4"/><path d="M14 8l4 4-4 4M18 12H9"/>',
   // Ещё: кнопки, которые не поместились (В-4)
   more: '<circle cx="5.5" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/>'
     + '<circle cx="18.5" cy="12" r="1.7" fill="currentColor" stroke="none"/>',
