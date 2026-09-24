@@ -48,9 +48,9 @@ export function initCellularity(host) {
   $('cellToolArtifact').addEventListener('click', () => host.setTool(host.activeTool() === 'artifact' ? null : 'artifact'));
   $('cellPropose').addEventListener('click', propose);
   $('cellClearContours').addEventListener('click', clearContours);
-  $('cellRun').addEventListener('click', start);
-  $('cellCancel').addEventListener('click', cancel);
-  $('cellDelete').addEventListener('click', remove);
+  $('cellRun').addEventListener('click', () => start('marrowquant'));   // не start: иначе в способ уходит событие
+  $('cellCancel').addEventListener('click', () => cancel('marrowquant'));
+  $('cellDelete').addEventListener('click', () => remove('marrowquant'));
   $('cellAiRun').addEventListener('click', () => start('ai'));
   $('cellAiCancel').addEventListener('click', () => cancel('ai'));
   $('cellAiDelete').addEventListener('click', () => remove('ai'));

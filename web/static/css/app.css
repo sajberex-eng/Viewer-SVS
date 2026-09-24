@@ -575,7 +575,10 @@ input[type="range"] { accent-color: var(--accent); }
 #cellResult { display: grid; gap: 6px; }
 /* Кнопки панели переносятся, а не вылезают за край (замечание патолога 2026-09-24) */
 .cell-panel .annot-tools { flex-wrap: wrap; }
-.cell-panel .annot-tools .btn { min-width: 0; white-space: normal; }
+/* Кнопки контуров переносят текст, поэтому им нельзя фиксированную высоту 32 px:
+   иначе вторая строка вылезает за рамку кнопки (замечание заказчика 2026-09-24) */
+.cell-panel .annot-tools .btn { min-width: 0; white-space: normal; height: auto; min-height: 32px;
+  padding: 5px 10px; line-height: 1.2; text-align: center; }
 .cell-h { margin: 6px 0 0; font-size: 13px; font-weight: 600; }
 .cell-note { font-size: 12px; }
 .cell-contour.is-tissue .annot-row-text { color: #0083a3; }
