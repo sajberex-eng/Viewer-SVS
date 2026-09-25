@@ -494,7 +494,8 @@ class CellularityService:
                   "tissue_mm2", "marrow_mm2", "bone_mm2", "hemato_mm2", "adip_mm2", "imv_mm2", "other_mm2",
                   "artifacts_mm2", "cellularity_eq1_pct", "cellularity_eq2_pct", "adiposity_pct", "imv_pct",
                   "other_pct", "adipocytes", "warnings", "method", "fields_used",
-                  "ai_min_pct", "ai_max_pct", "ai_heterogeneous", "ai_description", "ai_limitations")
+                  "ai_min_pct", "ai_max_pct", "ai_heterogeneous", "ai_causes", "ai_note",
+                  "ai_input_tokens", "ai_output_tokens")
 
     def export_csv(self) -> str:
         """Все выполненные расчёты: по фрагментам и итог по стеклу. Сканы — только по ID."""
@@ -513,7 +514,9 @@ class CellularityService:
                     "; ".join(item.get("warnings") or []),
                     row["method"], item.get("fields_used"),
                     item.get("regional_min_pct"), item.get("regional_max_pct"), item.get("heterogeneous"),
-                    item.get("description"), item.get("limitations"),
+                    ", ".join(item.get("causes") or []), item.get("description"),
+                    *([(result.get("usage") or {}).get("input_tokens"), (result.get("usage") or {}).get("output_tokens")]
+                      if item["fragment"] == "итог" else [None, None]),
                 ])
         writer.writerow([])
         writer.writerow([RESEARCH_NOTE])

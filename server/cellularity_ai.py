@@ -1,7 +1,8 @@
 """Оценка клеточности «на глаз» моделью с картинкой — второй способ рядом с алгоритмом
-(решение заказчика 2026-09-24, раздел 13.8 ТЗ, шаг 6). Подача изображений и промт —
-по тексту заказчика от 2026-09-24: обзор фрагмента плюс два участка ×20 с отметкой их
-положения на обзоре, ответ с описанием по-русски.
+(решение заказчика 2026-09-24, раздел 13.8 ТЗ, шаг 6). Подача изображений — по тексту
+заказчика от 2026-09-24: обзор фрагмента плюс два участка ×20 с отметкой их положения на
+обзоре. Промт сокращён 2026-09-25 по его же слову: число, разброс, признак неоднородности
+по порогу 20 п. п., причины из списка и одна фраза вместо морфологического описания.
 
 Что уходит наружу: обзорное изображение фрагмента в малом увеличении с нарисованным контуром
 ткани и два участка внутри контура при разрешении объектива ×20 (около 0,8 мм стороной).
@@ -13,7 +14,7 @@
 1. обзор с контуром → модель выбирает два участка, которые хочет рассмотреть ближе
    (неоднородные или сомнительные); точки привязываются к ближайшему окну с тканью;
 2. обзор с номерами участков и два участка ×20 → средняя клеточность фрагмента, разброс
-   по участкам, признак неоднородности, описание и ограничения оценки.
+   по частям, признак неоднородности (порог 20 п. п.), причины из списка, одна фраза.
 Стекло — среднее фрагментов с весом площади ткани, разброс — крайние значения фрагментов.
 Это оценка, а не измерение: масок и площадей у неё нет.
 """
@@ -24,6 +25,7 @@ import io
 import math
 import os
 from pathlib import Path
+from typing import Literal
 
 import cv2
 import numpy as np
@@ -38,53 +40,55 @@ DETAIL_PX = 1568             # сторона картинки участка, �
 REGIONS = 2                  # участков ×20 на фрагмент — по промту заказчика
 GRID_UM = 16.0               # шаг растра ткани при привязке участков
 MIN_TISSUE_FRACTION = 0.6    # окно годится под участок, если ткани в нём не меньше этой доли
-MAX_TOKENS = 8000            # с запасом на размышление модели и описание по-русски
+MAX_TOKENS = 4000            # ответ короткий; запас на размышление модели
+EFFORT = "low"               # уровень усилий модели: задача не требует долгого размышления
 KEY_FILE = "ai.key"
 
-# Промт заказчика (2026-09-24). Правила оценки — в системной части, состав картинок и что
-# вернуть — в пользовательской: так первая часть одинакова у всех запросов.
+# Промт заказчика (2026-09-24, сокращён 2026-09-25 по его слову после пробы на случае 1).
+# Правила оценки — в системной части, состав картинок и что вернуть — в пользовательской:
+# так первая часть одинакова у всех запросов. Менять только по слову заказчика.
 SYSTEM_PROMPT = (
-    "Вы — опытный гематопатолог, визуально оценивающий клеточность костного мозга на гистологических "
-    "препаратах с окраской H&E.\n"
-    "Вам передаются обзорное изображение фрагмента трепанобиоптата на малом увеличении и два изображения "
-    "неоднородных или сомнительных участков при увеличении ×20 объектива с обозначением их положения на обзоре.\n"
-    "Клеточность (%) = площадь кроветворной ткани / суммарная площадь кроветворной и жировой ткани × 100.\n"
-    "Оценивайте среднюю клеточность и её распределение по обзорному изображению. Изображения ×20 используйте "
-    "для уточнения соответствующих участков, не перенося их клеточность на весь биоптат и не учитывая эти "
-    "площади повторно.\n"
-    "Оценивайте область внутри заданного контура или маски; при отсутствии разметки — весь пригодный костный "
-    "мозг. Исключайте кость, кортикальный слой, хрящ, фон, сгустки крови и артефакты. Отличайте жировые "
-    "вакуоли от разрывов, сосудистых просветов и изменений стромы. Оценивайте площади тканей, а не количество "
-    "ядер или долю фиолетовых пикселей.\n"
-    "Учитывайте неоднородность независимо от её причины. Включайте пригодные малоклеточные и высококлеточные "
-    "участки, взвешивая их вклад по площади. Лимфоидные узелки и другие клеточные очаги исключайте только при "
-    "отдельном указании оценить клеточность вне этих областей.\n"
-    "Выражайте клеточность в процентах (%), обычно округляя до 5 процентных пунктов. Не устанавливайте причину "
-    "неоднородности без достаточных морфологических данных."
+    "Вы — опытный гематопатолог, оценивающий клеточность костного мозга на препаратах с окраской H&E "
+    "визуально, как у микроскопа.\n"
+    "Вам передаются обзор фрагмента трепанобиоптата на малом увеличении (контур оцениваемой ткани зелёный, "
+    "артефакты красные) и два участка при ×20, отмеченные на обзоре номерами.\n"
+    "Клеточность (%) = площадь кроветворной ткани / суммарная площадь кроветворной и жировой ткани × 100. "
+    "Оценивайте площади, а не число ядер и не долю фиолетового цвета.\n"
+    "Исключайте кость, кортикальный слой, хрящ, фон, сгустки крови и артефакты. Жировые вакуоли отличайте "
+    "от разрывов, сосудов и отёка стромы.\n"
+    "Среднюю клеточность и её распределение оценивайте по обзору. Участки ×20 служат только для уточнения "
+    "соответствующих зон: их клеточность на весь фрагмент не переносите.\n"
+    "Округляйте до 5 процентных пунктов. Фрагмент считайте неоднородным, только если клеточность его частей "
+    "различается не меньше чем на 20 процентных пунктов на заметной площади. Лимфоидные узелки и другие очаги "
+    "включайте в оценку.\n"
+    "Отвечайте кратко: без описания морфологии, без перечисления исключённого, без оговорок о методе и "
+    "качестве среза. Положение зон называйте словами (слева, справа, в центре, у кости, по краю), "
+    "а не номерами участков."
 )
 PICK_PROMPT = (
     "Это обзорное изображение фрагмента {n} из {of} трепанобиоптата на малом увеличении: {w} × {h} точек, "
     "около {um:.0f} мкм на точку. Контур оцениваемой ткани обведён зелёной линией, артефакты — красной. "
     "Выберите {k} участка внутри контура, которые нужно рассмотреть при ×20 объектива: неоднородные или "
     "сомнительные, где по обзору нельзя уверенно оценить клеточность. Для каждого укажите центр в пикселях "
-    "этого изображения (x слева направо, y сверху вниз) и коротко причину выбора по-русски."
+    "этого изображения (x слева направо, y сверху вниз) и причину выбора по-русски — не больше шести слов."
 )
 ESTIMATE_PROMPT = (
-    "Изображение 1 — обзор фрагмента {n} из {of} трепанобиоптата на малом увеличении ({um:.0f} мкм на точку); "
-    "контур оцениваемой ткани обведён зелёной линией, артефакты — красной, выбранные участки отмечены "
-    "прямоугольниками с номерами. Следующие изображения — эти участки при ×20 объектива по порядку номеров "
-    "(сторона около {detail:.1f} мм).\n"
-    "Оцените клеточность фрагмента внутри контура. Обязательно дайте краткое текстовое описание на русском "
-    "языке: общая клеточность, однородность или неоднородность, расположение и примерная протяжённость "
-    "отличающихся зон, клеточность в каждой из них. Региональный диапазон отражает различия между участками, "
-    "а не погрешность средней оценки. Если показатель невозможно оценить, используйте null."
+    "Изображение 1 — обзор фрагмента {n} из {of} ({um:.0f} мкм на точку); следующие изображения — участки ×20 "
+    "по порядку номеров (сторона около {detail:.1f} мм).\n"
+    "Верните: cellularity_percent — средняя клеточность фрагмента; regional_min_percent и "
+    "regional_max_percent — крайние значения по частям фрагмента; heterogeneous — true или false по порогу "
+    "20 п. п.; causes — за счёт чего неоднородность, из списка, только при heterogeneous = true (иначе пустой "
+    "список); note — одна фраза до 20 слов: где и какая клеточность отличается (пустая строка при однородной). "
+    "Если оценить нельзя — null и причина в note."
 )
+Cause = Literal["жировые поля", "фиброз стромы", "лимфоидный узелок", "очаг плотных клеток",
+                "субкортикальная зона", "отёк или кровоизлияние", "артефакт", "другое"]
 
 
 class RegionPick(BaseModel):
     x: int = Field(description="центр участка, пикселей от левого края обзорного изображения")
     y: int = Field(description="центр участка, пикселей от верхнего края обзорного изображения")
-    reason: str = Field(description="коротко, почему этот участок нужно рассмотреть при ×20")
+    reason: str = Field(description="почему этот участок нужно рассмотреть при ×20, не больше шести слов")
 
 
 class RegionChoice(BaseModel):
@@ -93,13 +97,13 @@ class RegionChoice(BaseModel):
 
 
 class FragmentEstimate(BaseModel):
-    """Ответ модели на втором шаге — поля по промту заказчика."""
-    cellularity_percent: float | None = Field(description="средняя клеточность всего оцениваемого фрагмента, %")
-    regional_min_percent: float | None = Field(description="минимальная клеточность среди оцениваемых участков, %")
-    regional_max_percent: float | None = Field(description="максимальная клеточность среди оцениваемых участков, %")
-    heterogeneous: bool | None = Field(description="клеточность неоднородна")
-    description: str = Field(description="краткое морфологическое описание по-русски с указанием зон и их клеточности")
-    limitations: str | None = Field(description="ограничения оценки или null")
+    """Ответ модели на втором шаге — поля по промту заказчика (редакция 2026-09-25)."""
+    cellularity_percent: float | None = Field(description="средняя клеточность фрагмента, %")
+    regional_min_percent: float | None = Field(description="минимум по частям фрагмента, %")
+    regional_max_percent: float | None = Field(description="максимум по частям фрагмента, %")
+    heterogeneous: bool | None = Field(description="разница частей не меньше 20 процентных пунктов")
+    causes: list[Cause] = Field(description="за счёт чего неоднородность; пусто при однородной")
+    note: str = Field(description="одна фраза до 20 слов: где и какая клеточность отличается; пусто при однородной")
 
 
 class AiUnavailable(Exception):
@@ -343,6 +347,7 @@ def ask_model(client, model: str, images: list[bytes], text: str, schema) -> dic
     """Один запрос: картинки и текст → ответ по строгой схеме (structured outputs).
 
     None — модель отказалась отвечать (stop_reason refusal) или ответ не разобрался.
+    В ответ добавляется ключ "_usage" с токенами запроса: из них складывается стоимость оценки.
     """
     import anthropic
 
@@ -357,6 +362,7 @@ def ask_model(client, model: str, images: list[bytes], text: str, schema) -> dic
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": content}],
             output_format=schema,
+            output_config={"effort": EFFORT},
         )
     except anthropic.AuthenticationError as exc:
         raise AiUnavailable("ключ доступа к ИИ не принят: проверьте его в разделе «Настройки»") from exc
@@ -368,7 +374,9 @@ def ask_model(client, model: str, images: list[bytes], text: str, schema) -> dic
         raise AiUnavailable(f"ИИ ответил ошибкой {exc.status_code}") from exc
     if response.stop_reason == "refusal" or response.parsed_output is None:
         return None
-    return response.parsed_output.model_dump()
+    out = response.parsed_output.model_dump()
+    out["_usage"] = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return out
 
 
 # ---------- расчёт по стеклу ----------
@@ -392,6 +400,17 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
     """
     total = len(fragments)
     results = []
+    usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
+
+    def account(answer):
+        if answer is None:
+            return
+        used = answer.pop("_usage", None)
+        if used:
+            usage["requests"] += 1
+            usage["input_tokens"] += int(used.get("input_tokens") or 0)
+            usage["output_tokens"] += int(used.get("output_tokens") or 0)
+
     for index, fragment in enumerate(fragments, 1):
         if should_stop and should_stop():
             raise InterruptedError
@@ -403,12 +422,13 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
         choice = ask(client, model, [jpeg(overview)],
                      PICK_PROMPT.format(n=index, of=total, w=overview.width, h=overview.height, um=um, k=REGIONS),
                      RegionChoice)
+        account(choice)
         picks = list((choice or {}).get("regions") or [])[:REGIONS]
         regions = snap_regions(fragment, base_mpp, picks, ds)
         if not regions:
             results.append({"fragment": index, "tissue_mm2": round(tissue_area_mm2(fragment, base_mpp), 4),
                             "cellularity_eq1_pct": None, "regional_min_pct": None, "regional_max_pct": None,
-                            "heterogeneous": None, "description": "", "limitations": None, "regions": [],
+                            "heterogeneous": None, "causes": [], "description": "", "regions": [],
                             "fields_used": 0, "warnings": ["внутри контура не нашлось участков с тканью"]})
             continue
         if should_stop and should_stop():
@@ -424,22 +444,25 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
         answer = ask(client, model, [jpeg(marked), *(jpeg(d) for d in details)],
                      ESTIMATE_PROMPT.format(n=index, of=total, um=um, detail=DETAIL_UM / 1000),
                      FragmentEstimate)
+        account(answer)
         item = {"fragment": index, "tissue_mm2": round(tissue_area_mm2(fragment, base_mpp), 4),
                 "regions": [{k: v for k, v in r.items() if k != "tissue_fraction"} for r in regions],
                 "fields_used": len(regions), "warnings": []}
         if answer is None:
             item.update({"cellularity_eq1_pct": None, "regional_min_pct": None, "regional_max_pct": None,
-                         "heterogeneous": None, "description": "", "limitations": None,
+                         "heterogeneous": None, "causes": [], "description": "",
                          "warnings": ["модель не дала оценку по этому фрагменту"]})
         else:
             pct = _pct(answer.get("cellularity_percent"))
             lo, hi = _pct(answer.get("regional_min_percent")), _pct(answer.get("regional_max_percent"))
             if lo is not None and hi is not None and lo > hi:
                 lo, hi = hi, lo
+            hetero = answer.get("heterogeneous")
+            # причины имеют смысл только при неоднородности: модель иногда заполняет их и без неё
+            causes = [str(c) for c in (answer.get("causes") or [])] if hetero else []
             item.update({"cellularity_eq1_pct": pct, "regional_min_pct": lo, "regional_max_pct": hi,
-                         "heterogeneous": answer.get("heterogeneous"),
-                         "description": str(answer.get("description") or "").strip(),
-                         "limitations": (str(answer["limitations"]).strip() or None) if answer.get("limitations") else None})
+                         "heterogeneous": hetero, "causes": causes,
+                         "description": " ".join(str(answer.get("note") or "").split())[:300]})
             if pct is None:
                 item["warnings"].append("модель не смогла оценить клеточность фрагмента")
         results.append(item)
@@ -456,6 +479,7 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
     return {
         "method": "ai",
         "algorithm": f"оценка по обзору и участкам ×20, модель {model}",
+        "usage": usage,
         "pixel_um": round(DETAIL_UM / DETAIL_PX, 3),
         "fragments": results,
         "total": {

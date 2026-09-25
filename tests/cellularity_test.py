@@ -263,15 +263,16 @@ def main() -> None:
         check("площадь ткани для веса фрагмента ~ площадь диска",
               abs(ai.tissue_area_mm2(fragment_ai, 0.5) - math.pi * 0.8 ** 2) < 0.15)
         answers = iter([{"cellularity_percent": 40, "regional_min_percent": 30, "regional_max_percent": 50,
-                         "heterogeneous": False, "description": "однородно", "limitations": None},
+                         "heterogeneous": False, "causes": ["жировые поля"], "note": "", "_usage": {"input_tokens": 9000, "output_tokens": 100}},
                         {"cellularity_percent": 70, "regional_min_percent": 40, "regional_max_percent": 90,
-                         "heterogeneous": True, "description": "пятнисто", "limitations": "срез тонкий"}])
+                         "heterogeneous": True, "causes": ["лимфоидный узелок"], "note": " слева  плотнее ", "_usage": {"input_tokens": 9500, "output_tokens": 110}}])
         calls = []
 
         def fake_ask(client, model, images, text, schema):
             calls.append((schema.__name__, len(images), all(i[:2] == b"\xff\xd8" for i in images), text))
             if schema is ai.RegionChoice:
-                return {"regions": [{"x": 10, "y": 10, "reason": "край"}, {"x": 100, "y": 100, "reason": "центр"}]}
+                return {"regions": [{"x": 10, "y": 10, "reason": "край"}, {"x": 100, "y": 100, "reason": "центр"}],
+                        "_usage": {"input_tokens": 1000, "output_tokens": 50}}
             return next(answers)
 
         # два квадрата 2 × 2 мм: в каждом помещаются два поля по 1 мм
@@ -284,13 +285,14 @@ def main() -> None:
               out["fragments"][0]["cellularity_eq1_pct"] == 40.0 and out["fragments"][1]["cellularity_eq1_pct"] == 70.0
               and out["total"]["cellularity_eq1_pct"] == 55.0 and out["total"]["fields_used"] == 4
               and out["total"]["regional_min_pct"] == 30.0 and out["total"]["regional_max_pct"] == 90.0
-              and out["total"]["heterogeneous"] is True and out["fragments"][1]["description"] == "пятнисто"
-              and out["fragments"][1]["limitations"] == "срез тонкий" and out["fragments"][0]["regions"][0]["reason"] == "край"
-              and out["method"] == "ai",
+              and out["total"]["heterogeneous"] is True and out["fragments"][1]["description"] == "слева плотнее"
+              and out["fragments"][1]["causes"] == ["лимфоидный узелок"] and out["fragments"][0]["causes"] == []
+              and out["fragments"][0]["regions"][0]["reason"] == "край" and out["method"] == "ai"
+              and out["usage"] == {"requests": 4, "input_tokens": 20500, "output_tokens": 310},
               f"({[f['cellularity_eq1_pct'] for f in out['fragments']]}, итог {out['total']})")
         check("на фрагмент два запроса: обзор (1 картинка) и оценка (обзор + 2 участка, JPEG), в тексте — номер фрагмента",
               [c[:3] for c in calls] == [("RegionChoice", 1, True), ("FragmentEstimate", 3, True)] * 2
-              and "фрагмента 2 из 2" in calls[3][3] and "прямоугольниками" in calls[1][3], f"({[c[:3] for c in calls]})")
+              and "фрагмента 2 из 2" in calls[3][3] and "участки ×20" in calls[1][3], f"({[c[:3] for c in calls]})")
         check("ход оценки ИИ — по фрагментам и шагам",
               progress == [(1, 2, "pick"), (1, 2, "estimate"), (2, 2, "pick"), (2, 2, "estimate")], f"({progress})")
         grid = DeepZoomGrid(2048, 2048, 510, 1)

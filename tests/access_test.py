@@ -582,7 +582,7 @@ def main() -> None:
             if schema is ai_module.RegionChoice:
                 return {"regions": [{"x": 5, "y": 5, "reason": "a"}, {"x": 50, "y": 50, "reason": "b"}]}
             return {"cellularity_percent": 45, "regional_min_percent": 40, "regional_max_percent": 50,
-                    "heterogeneous": False, "description": "равномерно", "limitations": None}
+                    "heterogeneous": False, "causes": [], "note": "равномерно"}
         service.ai_ask = fake_ask
         ai_run = alice.post("/api/slides/dddddddddddd/cellularity/runs", json={"method": "ai"}).json()
         check("оценка ИИ поставлена в очередь отдельно от алгоритма", ai_run.get("status") in ("queued", "running") and ai_run.get("method") == "ai")

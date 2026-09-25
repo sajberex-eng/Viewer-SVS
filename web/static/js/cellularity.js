@@ -237,37 +237,43 @@ export function initCellularity(host) {
     $('cellAiText').hidden = !done;
   }
 
-  // Описание модели по-русски — под числом, без раскрытия «Подробнее»: одно число при
-  // неоднородном мозге вводит в заблуждение (замечание заказчика 2026-09-24)
+  // Строка по фрагменту под числом, без раскрытия «Подробнее»: одно число при неоднородном
+  // мозге вводит в заблуждение (заказчик, 2026-09-24); с 2026-09-25 — коротко: однородный
+  // или нет, за счёт чего, одна фраза модели
   function renderAiText(run) {
     const box = $('cellAiText');
     const many = run.result.fragments.length > 1;
-    box.replaceChildren(...run.result.fragments.flatMap((fragment) => {
-      const items = [];
+    box.replaceChildren(...run.result.fragments.map((fragment) => {
       const p = document.createElement('p');
       if (many) {
         const b = document.createElement('b');
         b.textContent = `T${fragment.fragment}: `;
         p.append(b);
       }
-      p.append(fragment.description || t('cell.ai.noDescription'));
-      items.push(p);
-      if (fragment.limitations) {
-        const q = document.createElement('p');
-        q.className = 'muted';
-        q.textContent = t('cell.ai.limitations', { text: fragment.limitations });
-        items.push(q);
+      let verdict;
+      if (fragment.cellularity_eq1_pct == null) {
+        verdict = t('cell.ai.frag.none');
+      } else if (fragment.heterogeneous) {
+        const causes = (fragment.causes ?? []).join(', ');
+        verdict = causes ? t('cell.ai.frag.hetero', { causes }) : t('cell.ai.heterogeneous.plain');
+      } else {
+        verdict = t('cell.ai.homogeneous.plain');
       }
-      return items;
+      const note = (fragment.description || '').trim();
+      p.append(note ? `${verdict}. ${note}` : verdict);
+      return p;
     }));
   }
 
   // Участки ×20, которые модель выбрала и рассмотрела: щелчок ведёт к участку на препарате
   function renderAiRegions(run) {
     const pane = host.getActive();
+    const usage = run.result.usage;
     $('cellAiMeta').textContent = t('cell.ai.meta', {
       who: run.started_by, date: formatDateTime(run.finished_at ?? run.created_at), model: run.result.algorithm,
-    });
+    }) + (usage?.requests ? t('cell.ai.usage', {
+      n: usage.requests, k: formatNumber((usage.input_tokens + usage.output_tokens) / 1000, 1),
+    }) : '');
     const list = $('cellAiFields');
     list.replaceChildren(...run.result.fragments.flatMap((fragment) => (fragment.regions ?? []).map((region) => {
       const row = document.createElement('li');
