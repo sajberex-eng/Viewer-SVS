@@ -46,6 +46,7 @@ class CellularityConfig:
     resolution: str = "2"
     auto: bool = True
     ai_model: str = "claude-opus-5"     # модель для оценки «на глаз» (второй способ): обзор + два участка ×20
+    gemini_model: str = "gemini-flash-latest"   # запасной ИИ при исчерпании лимита Anthropic (решение заказчика 2026-09-25)
 
 
 @dataclass(frozen=True)

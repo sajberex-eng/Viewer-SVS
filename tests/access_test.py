@@ -598,8 +598,17 @@ def main() -> None:
         both = alice.get("/api/slides/dddddddddddd/cellularity").json()
         check("состояние отдаёт оба способа рядом", both["run"]["method"] == "marrowquant" and both["ai_run"]["id"] == ai_run["id"])
         check("выгрузка CSV содержит способ расчёта", "ai" in admin.get("/api/cellularity/export.csv").text.split("\r\n")[-4])
+        spare = admin.put("/api/settings/ai", json={"gemini_key": "gm-test-not-real"}).json()
+        check("ключ запасного Gemini сохранён отдельно, наружу не отдаётся, ключ Anthropic не тронут",
+              spare["gemini_configured"] is True and spare["configured"] is True and "gm-test" not in admin.get("/api/settings/ai").text
+              and (WORK_DIR / "data" / "gemini.key").read_text(encoding="utf-8") == "gm-test-not-real"
+              and not any("gm-test" in (row["detail"] or "") for row in admin.get("/api/journal").json()))
         admin.put("/api/settings/ai", json={"key": ""})
-        check("ключ удалён", admin.get("/api/settings/ai").json()["configured"] is False and not (WORK_DIR / "data" / "ai.key").exists())
+        check("ключ Anthropic удалён, кнопка ИИ остаётся благодаря запасному ключу",
+              admin.get("/api/settings/ai").json()["configured"] is False and not (WORK_DIR / "data" / "ai.key").exists()
+              and alice.get("/api/slides/dddddddddddd/cellularity").json()["ai_available"] is True)
+        admin.put("/api/settings/ai", json={"gemini_key": ""})
+        check("ключ Gemini удалён", admin.get("/api/settings/ai").json()["gemini_configured"] is False and not (WORK_DIR / "data" / "gemini.key").exists())
         admin.delete("/api/slides/dddddddddddd")
         check("удаление скана уносит расчёты и карты классов",
               db.query_one("SELECT count(*) AS n FROM cellularity_runs WHERE slide_id = 'dddddddddddd'")["n"] == 0

@@ -115,7 +115,11 @@ class CellularityService:
         )
 
     def ai_available(self) -> bool:
-        return ai.api_key(self.data_dir) is not None
+        return ai.api_key(self.data_dir) is not None or ai.gemini_key(self.data_dir) is not None
+
+    @property
+    def gemini_model(self) -> str:
+        return getattr(self.config, "gemini_model", None) or ai.GEMINI_MODEL
 
     @property
     def ai_model(self) -> str:
@@ -350,7 +354,8 @@ class CellularityService:
         run_id = row["id"]
         cancel = self._cancels.get(run_id)
         key = ai.api_key(self.data_dir)
-        if not key:
+        spare = ai.gemini_key(self.data_dir)
+        if not key and not spare:
             self._finish(run_id, "failed", error="ключ доступа к ИИ не задан")
             return
 
@@ -362,7 +367,8 @@ class CellularityService:
 
         try:
             with self.pool.acquire(slide_row["key"]) as handle:
-                result = ai.estimate(handle.slide, float(slide_row["mpp"]), fragments, ai.make_client(key),
+                result = ai.estimate(handle.slide, float(slide_row["mpp"]), fragments,
+                                     ai.make_client(key, spare, self.gemini_model),
                                      self.ai_model, progress=on_progress,
                                      should_stop=lambda: cancel is not None and cancel.is_set(), ask=self.ai_ask)
         except InterruptedError:

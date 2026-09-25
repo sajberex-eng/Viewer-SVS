@@ -36,8 +36,10 @@ async function main() {
   $('btnMore').addEventListener('click', () => loadJournal(false));
   $('btnExport').addEventListener('click', exportJournal);
   $('journalAction').addEventListener('change', () => loadJournal(true));
-  $('aiSave').addEventListener('click', () => saveAiKey($('aiKey').value));
-  $('aiRemove').addEventListener('click', () => saveAiKey(''));
+  $('aiSave').addEventListener('click', () => saveAiKey({ key: $('aiKey').value }));
+  $('aiRemove').addEventListener('click', () => saveAiKey({ key: '' }));
+  $('geminiSave').addEventListener('click', () => saveAiKey({ gemini_key: $('geminiKey').value }));
+  $('geminiRemove').addEventListener('click', () => saveAiKey({ gemini_key: '' }));
   for (const [name, tab] of Object.entries(TABS)) {
     $(tab.button).addEventListener('click', () => openTab(name));
   }
@@ -66,14 +68,20 @@ function showAiStatus(state) {
   $('aiStatus').textContent = state.from_env ? t('settings.ai.fromEnv')
     : state.configured ? t('settings.ai.configured', { model: state.model }) : t('settings.ai.missing');
   $('aiRemove').hidden = !state.configured || state.from_env;
+  $('geminiStatus').textContent = state.gemini_from_env ? t('settings.ai.fromEnv')
+    : state.gemini_configured ? t('settings.gemini.configured', { model: state.gemini_model }) : t('settings.gemini.missing');
+  $('geminiRemove').hidden = !state.gemini_configured || state.gemini_from_env;
 }
 
-async function saveAiKey(key) {
+// body — { key } для Anthropic или { gemini_key } для запасного Gemini; пустая строка удаляет ключ
+async function saveAiKey(body) {
+  const value = body.key ?? body.gemini_key ?? '';
   try {
-    const state = await api('/api/settings/ai', { method: 'PUT', body: { key } });
+    const state = await api('/api/settings/ai', { method: 'PUT', body });
     $('aiKey').value = '';
+    $('geminiKey').value = '';
     showAiStatus(state);
-    setNote(t(key.trim() ? 'settings.ai.saved' : 'settings.ai.removed'));
+    setNote(t(value.trim() ? 'settings.ai.saved' : 'settings.ai.removed'));
   } catch (error) {
     setNote(error.message, true);
   }

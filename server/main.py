@@ -166,7 +166,8 @@ class CellularityRunRequest(BaseModel):
 
 
 class AiSettingsRequest(BaseModel):
-    key: str = ""                   # пусто — удалить ключ
+    key: str | None = None          # ключ Anthropic: пусто — удалить, None — не трогать
+    gemini_key: str | None = None   # ключ запасного Gemini, так же
 
 
 def create_app() -> FastAPI:
@@ -662,17 +663,28 @@ def create_app() -> FastAPI:
 
     @app.get("/api/settings/ai")
     def ai_settings(user=Depends(require_admin)):
-        """Есть ли ключ и какая модель; сам ключ наружу не отдаётся."""
-        return {"configured": cellularity.ai_available(), "model": cellularity.ai_model,
-                "from_env": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+        """Есть ли ключи и какие модели; сами ключи наружу не отдаются."""
+        from . import cellularity_ai
+        return {"configured": cellularity_ai.api_key(settings.data_dir) is not None, "model": cellularity.ai_model,
+                "from_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "gemini_configured": cellularity_ai.gemini_key(settings.data_dir) is not None,
+                "gemini_model": cellularity.gemini_model,
+                "gemini_from_env": bool(os.environ.get("GEMINI_API_KEY"))}
 
     @app.put("/api/settings/ai")
     def ai_settings_save(body: AiSettingsRequest, request: Request, user=Depends(require_admin)):
-        """Ключ вводится администратором здесь, а не в переписке; хранится в data/ai.key."""
+        """Ключи вводятся администратором здесь, а не в переписке; хранятся в data/ai.key и data/gemini.key."""
         from . import cellularity_ai
-        cellularity_ai.set_api_key(settings.data_dir, body.key)
-        audit.log(db, request, audit.SETTINGS_AI, user=user, detail="ключ задан" if body.key.strip() else "ключ удалён")
-        return {"configured": cellularity.ai_available(), "model": cellularity.ai_model}
+        changes = []
+        if body.key is not None:
+            cellularity_ai.set_api_key(settings.data_dir, body.key)
+            changes.append("ключ Anthropic задан" if body.key.strip() else "ключ Anthropic удалён")
+        if body.gemini_key is not None:
+            cellularity_ai.set_gemini_key(settings.data_dir, body.gemini_key)
+            changes.append("ключ Gemini задан" if body.gemini_key.strip() else "ключ Gemini удалён")
+        if changes:
+            audit.log(db, request, audit.SETTINGS_AI, user=user, detail="; ".join(changes))
+        return ai_settings(user)
 
     @app.get("/api/cellularity/export.csv")
     def cellularity_export(user=Depends(require_admin)):

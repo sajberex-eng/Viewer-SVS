@@ -10,6 +10,11 @@
 хранится на сервере (data/ai.key, вводится администратором в разделе «Настройки») либо
 в переменной ANTHROPIC_API_KEY контейнера.
 
+Запасной ИИ (решение заказчика 2026-09-25): при исчерпании лимита у Anthropic (429, счёт)
+тот же запрос уходит в Gemini API (ключ data/gemini.key или GEMINI_API_KEY, модель
+cellularity.gemini_model). Если ключа Anthropic нет, а ключ Gemini есть, Gemini работает
+основным. Ответ Gemini проверяется той же схемой Pydantic, в usage запоминается модель.
+
 Как считается, по каждому фрагменту два запроса:
 1. обзор с контуром → модель выбирает два участка, которые хочет рассмотреть ближе
    (неоднородные или сомнительные); точки привязываются к ближайшему окну с тканью;
@@ -22,8 +27,12 @@ from __future__ import annotations
 
 import base64
 import io
+import json
+import logging
 import math
 import os
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Literal
 
@@ -34,6 +43,8 @@ from pydantic import BaseModel, Field
 
 from . import cellularity_slide as cs
 
+log = logging.getLogger(__name__)
+
 OVERVIEW_PX = 1568           # длинная сторона обзора, точек (больше модель всё равно уменьшает)
 DETAIL_UM = 800.0            # сторона участка ×20, мкм (поле зрения ×20 около 0,8–1 мм)
 DETAIL_PX = 1568             # сторона картинки участка, точек (~0,5 мкм на точку — объектив ×20)
@@ -43,6 +54,10 @@ MIN_TISSUE_FRACTION = 0.6    # окно годится под участок, е
 MAX_TOKENS = 4000            # ответ короткий; запас на размышление модели
 EFFORT = "low"               # уровень усилий модели: задача не требует долгого размышления
 KEY_FILE = "ai.key"
+GEMINI_KEY_FILE = "gemini.key"
+GEMINI_MODEL = "gemini-flash-latest"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+REQUEST_TIMEOUT = 240.0      # на один запрос к любому ИИ, секунд
 
 # Промт заказчика (2026-09-24, сокращён 2026-09-25 по его слову после пробы на случае 1).
 # Правила оценки — в системной части, состав картинок и что вернуть — в пользовательской:
@@ -110,17 +125,24 @@ class AiUnavailable(Exception):
     """Ключ не задан, модель недоступна или ответила отказом."""
 
 
-# ---------- ключ ----------
+class LimitExhausted(AiUnavailable):
+    """Основной ИИ исчерпал лимит (предел запросов или счёт): повод перейти на запасной."""
+
+
+# ---------- ключи ----------
 
 def key_path(data_dir: Path) -> Path:
     return Path(data_dir) / KEY_FILE
 
 
-def api_key(data_dir: Path) -> str | None:
-    env = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+def gemini_key_path(data_dir: Path) -> Path:
+    return Path(data_dir) / GEMINI_KEY_FILE
+
+
+def _read_key(path: Path, env_name: str) -> str | None:
+    env = os.environ.get(env_name, "").strip()
     if env:
         return env
-    path = key_path(data_dir)
     try:
         value = path.read_text(encoding="utf-8").strip()
     except OSError:
@@ -128,9 +150,8 @@ def api_key(data_dir: Path) -> str | None:
     return value or None
 
 
-def set_api_key(data_dir: Path, value: str | None) -> None:
+def _write_key(path: Path, value: str | None) -> None:
     """Сохранить ключ (пустой — удалить). Файл только для владельца; в журнал и ответы не попадает."""
-    path = key_path(data_dir)
     if not value or not value.strip():
         path.unlink(missing_ok=True)
         return
@@ -140,6 +161,22 @@ def set_api_key(data_dir: Path, value: str | None) -> None:
         os.chmod(path, 0o600)
     except OSError:
         pass
+
+
+def api_key(data_dir: Path) -> str | None:
+    return _read_key(key_path(data_dir), "ANTHROPIC_API_KEY")
+
+
+def set_api_key(data_dir: Path, value: str | None) -> None:
+    _write_key(key_path(data_dir), value)
+
+
+def gemini_key(data_dir: Path) -> str | None:
+    return _read_key(gemini_key_path(data_dir), "GEMINI_API_KEY")
+
+
+def set_gemini_key(data_dir: Path, value: str | None) -> None:
+    _write_key(gemini_key_path(data_dir), value)
 
 
 # ---------- ткань фрагмента в грубом растре ----------
@@ -335,20 +372,26 @@ def jpeg(image: Image.Image, quality: int = 85) -> bytes:
     return buffer.getvalue()
 
 
-# ---------- модель ----------
+# ---------- модели ----------
 
-def make_client(key: str):
-    import anthropic
+class AiClients:
+    """Основной ИИ (Anthropic) и запасной (Gemini); любого из них может не быть."""
 
-    return anthropic.Anthropic(api_key=key, max_retries=3, timeout=240.0)
+    def __init__(self, anthropic_key: str | None, gemini_key: str | None = None, gemini_model: str = GEMINI_MODEL):
+        self.anthropic = None
+        if anthropic_key:
+            import anthropic
+
+            self.anthropic = anthropic.Anthropic(api_key=anthropic_key, max_retries=3, timeout=REQUEST_TIMEOUT)
+        self.gemini_key = gemini_key or None
+        self.gemini_model = gemini_model
 
 
-def ask_model(client, model: str, images: list[bytes], text: str, schema) -> dict | None:
-    """Один запрос: картинки и текст → ответ по строгой схеме (structured outputs).
+def make_client(key: str | None, gemini_key: str | None = None, gemini_model: str = GEMINI_MODEL) -> AiClients:
+    return AiClients(key, gemini_key, gemini_model)
 
-    None — модель отказалась отвечать (stop_reason refusal) или ответ не разобрался.
-    В ответ добавляется ключ "_usage" с токенами запроса: из них складывается стоимость оценки.
-    """
+
+def _ask_anthropic(client, model: str, images: list[bytes], text: str, schema) -> dict | None:
     import anthropic
 
     content = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg",
@@ -367,16 +410,120 @@ def ask_model(client, model: str, images: list[bytes], text: str, schema) -> dic
     except anthropic.AuthenticationError as exc:
         raise AiUnavailable("ключ доступа к ИИ не принят: проверьте его в разделе «Настройки»") from exc
     except anthropic.RateLimitError as exc:
-        raise AiUnavailable("ИИ временно недоступен: превышен предел запросов, попробуйте позже") from exc
+        raise LimitExhausted("ИИ временно недоступен: превышен предел запросов, попробуйте позже") from exc
     except anthropic.APIConnectionError as exc:
         raise AiUnavailable("нет связи с ИИ: сервер не достучался до api.anthropic.com") from exc
     except anthropic.APIStatusError as exc:
+        # исчерпанный счёт приходит как 400 с текстом про credit balance, перегрузка — 529
+        if exc.status_code in (402, 529) or "credit" in str(exc).lower():
+            raise LimitExhausted(f"ИИ недоступен: {exc.status_code}, исчерпан лимит или счёт") from exc
         raise AiUnavailable(f"ИИ ответил ошибкой {exc.status_code}") from exc
     if response.stop_reason == "refusal" or response.parsed_output is None:
         return None
     out = response.parsed_output.model_dump()
-    out["_usage"] = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    out["_usage"] = {"model": model, "input_tokens": response.usage.input_tokens,
+                     "output_tokens": response.usage.output_tokens}
     return out
+
+
+def gemini_schema(model_class) -> dict:
+    """Схема ответа для Gemini из модели Pydantic: подмножество OpenAPI — без $ref и anyOf,
+    «или null» превращается в nullable, типы прописными."""
+    raw = model_class.model_json_schema()
+    defs = raw.get("$defs", {})
+
+    def convert(node: dict) -> dict:
+        if "$ref" in node:
+            node = defs[node["$ref"].rsplit("/", 1)[-1]]
+        out: dict = {}
+        nullable = False
+        if "anyOf" in node:
+            variants = [v for v in node["anyOf"] if v.get("type") != "null"]
+            nullable = len(variants) < len(node["anyOf"])
+            node = {**node, **(variants[0] if variants else {})}
+            node.pop("anyOf", None)
+        if "type" in node:
+            out["type"] = str(node["type"]).upper()
+        if "enum" in node:
+            out["enum"] = list(node["enum"])
+        if "description" in node:
+            out["description"] = node["description"]
+        if node.get("type") == "object":
+            out["properties"] = {name: convert(prop) for name, prop in node.get("properties", {}).items()}
+            if node.get("required"):
+                out["required"] = list(node["required"])
+        if node.get("type") == "array" and "items" in node:
+            out["items"] = convert(node["items"])
+        if nullable:
+            out["nullable"] = True
+        return out
+
+    return convert(raw)
+
+
+def gemini_request(url: str, key: str, body: dict) -> dict:
+    """Один HTTP-запрос к Gemini API; подменяется в тестах."""
+    data = json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(url, data=data, method="POST", headers={
+        "Content-Type": "application/json", "x-goog-api-key": key})
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _ask_gemini(key: str, model: str, images: list[bytes], text: str, schema) -> dict | None:
+    parts = [{"inlineData": {"mimeType": "image/jpeg", "data": base64.standard_b64encode(d).decode("ascii")}}
+             for d in images]
+    parts.append({"text": text})
+    body = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"responseMimeType": "application/json", "responseSchema": gemini_schema(schema),
+                             "maxOutputTokens": MAX_TOKENS},
+    }
+    try:
+        reply = gemini_request(GEMINI_URL.format(model=model), key, body)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise AiUnavailable("ключ Gemini не принят: проверьте его в разделе «Настройки»") from exc
+        if exc.code == 429:
+            raise AiUnavailable("запасной ИИ тоже недоступен: превышен предел запросов Gemini") from exc
+        raise AiUnavailable(f"Gemini ответил ошибкой {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise AiUnavailable("нет связи с Gemini: сервер не достучался до generativelanguage.googleapis.com") from exc
+    candidates = reply.get("candidates") or []
+    if not candidates or (reply.get("promptFeedback") or {}).get("blockReason"):
+        return None
+    content = candidates[0].get("content") or {}
+    raw_text = "".join(p.get("text", "") for p in content.get("parts") or [])
+    try:
+        parsed = schema.model_validate(json.loads(raw_text))
+    except Exception as exc:  # ответ не по схеме — как отказ, без падения оценки
+        log.warning("Gemini: ответ не разобран (%s)", exc)
+        return None
+    out = parsed.model_dump()
+    meta = reply.get("usageMetadata") or {}
+    out["_usage"] = {"model": model, "input_tokens": int(meta.get("promptTokenCount") or 0),
+                     "output_tokens": int(meta.get("candidatesTokenCount") or 0) + int(meta.get("thoughtsTokenCount") or 0)}
+    return out
+
+
+def ask_model(client: AiClients, model: str, images: list[bytes], text: str, schema) -> dict | None:
+    """Один запрос: картинки и текст → ответ по строгой схеме (structured outputs).
+
+    Сначала основной ИИ; при исчерпании его лимита — запасной Gemini, если задан ключ.
+    None — модель отказалась отвечать или ответ не разобрался. В ответе ключ "_usage"
+    с моделью и токенами запроса: из них складывается стоимость оценки.
+    """
+    if client.anthropic is not None:
+        try:
+            return _ask_anthropic(client.anthropic, model, images, text, schema)
+        except LimitExhausted as exc:
+            if not client.gemini_key:
+                raise
+            log.warning("Основной ИИ: %s — запрос уходит в запасной %s", exc, client.gemini_model)
+    elif not client.gemini_key:
+        raise AiUnavailable("ключ доступа к ИИ не задан")
+    return _ask_gemini(client.gemini_key, client.gemini_model, images, text, schema)
 
 
 # ---------- расчёт по стеклу ----------
@@ -400,7 +547,7 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
     """
     total = len(fragments)
     results = []
-    usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0}
+    usage = {"requests": 0, "input_tokens": 0, "output_tokens": 0, "models": {}}
 
     def account(answer):
         if answer is None:
@@ -408,6 +555,8 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
         used = answer.pop("_usage", None)
         if used:
             usage["requests"] += 1
+            name = str(used.get("model") or model)
+            usage["models"][name] = usage["models"].get(name, 0) + 1
             usage["input_tokens"] += int(used.get("input_tokens") or 0)
             usage["output_tokens"] += int(used.get("output_tokens") or 0)
 
@@ -478,7 +627,9 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
                      (len(means) > 1 and max(means) - min(means) >= 10)) if means else None
     return {
         "method": "ai",
-        "algorithm": f"оценка по обзору и участкам ×20, модель {model}",
+        "algorithm": f"оценка по обзору и участкам ×20, модель {model}" + (
+            "; запасной " + ", ".join(f"{name}: {n} запр." for name, n in usage["models"].items() if name != model)
+            if any(name != model for name in usage["models"]) else ""),
         "usage": usage,
         "pixel_um": round(DETAIL_UM / DETAIL_PX, 3),
         "fragments": results,

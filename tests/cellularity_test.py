@@ -288,11 +288,54 @@ def main() -> None:
               and out["total"]["heterogeneous"] is True and out["fragments"][1]["description"] == "слева плотнее"
               and out["fragments"][1]["causes"] == ["лимфоидный узелок"] and out["fragments"][0]["causes"] == []
               and out["fragments"][0]["regions"][0]["reason"] == "край" and out["method"] == "ai"
-              and out["usage"] == {"requests": 4, "input_tokens": 20500, "output_tokens": 310},
+              and out["usage"] == {"requests": 4, "input_tokens": 20500, "output_tokens": 310, "models": {"test-model": 4}},
               f"({[f['cellularity_eq1_pct'] for f in out['fragments']]}, итог {out['total']})")
         check("на фрагмент два запроса: обзор (1 картинка) и оценка (обзор + 2 участка, JPEG), в тексте — номер фрагмента",
               [c[:3] for c in calls] == [("RegionChoice", 1, True), ("FragmentEstimate", 3, True)] * 2
               and "фрагмента 2 из 2" in calls[3][3] and "участки ×20" in calls[1][3], f"({[c[:3] for c in calls]})")
+        # запасной Gemini: схема без anyOf/$ref, переход при исчерпании лимита, ответ по той же схеме
+        gs = ai.gemini_schema(ai.FragmentEstimate)
+        rs = ai.gemini_schema(ai.RegionChoice)
+        check("схема Gemini: типы прописными, «или null» → nullable, список причин с enum, вложенная модель без $ref",
+              gs["type"] == "OBJECT" and gs["properties"]["cellularity_percent"] == {"type": "NUMBER", "nullable": True, "description": gs["properties"]["cellularity_percent"]["description"]}
+              and gs["properties"]["causes"]["items"]["enum"][0] == "жировые поля" and "anyOf" not in json.dumps(gs)
+              and rs["properties"]["regions"]["items"]["properties"]["x"]["type"] == "INTEGER" and "$ref" not in json.dumps(rs)
+              and set(gs["required"]) == {"cellularity_percent", "regional_min_percent", "regional_max_percent", "heterogeneous", "causes", "note"},
+              f"({json.dumps(gs, ensure_ascii=False)[:200]})")
+        sent = []
+
+        def fake_gemini(url, key, body):
+            props = body["generationConfig"]["responseSchema"]["properties"]
+            sent.append({"url": url, "key": key, "images": sum(1 for p in body["contents"][0]["parts"] if "inlineData" in p),
+                         "schema": body["generationConfig"]["responseSchema"]["type"], "system": body["systemInstruction"]["parts"][0]["text"][:20]})
+            answer = ({"regions": [{"x": 1, "y": 2, "reason": "край"}]} if "regions" in props
+                      else {"cellularity_percent": 55, "regional_min_percent": 50, "regional_max_percent": 60, "heterogeneous": False,
+                            "causes": [], "note": ""})
+            return {"candidates": [{"content": {"parts": [{"text": json.dumps(answer)}]}}],
+                    "usageMetadata": {"promptTokenCount": 7000, "candidatesTokenCount": 40, "thoughtsTokenCount": 10}}
+
+        original_ask, original_request = ai._ask_anthropic, ai.gemini_request
+        ai._ask_anthropic = lambda *a, **k: (_ for _ in ()).throw(ai.LimitExhausted("предел запросов"))
+        ai.gemini_request = fake_gemini
+        try:
+            clients = ai.make_client("sk-fake", "gm-fake", "gemini-test")
+            got = ai.ask_model(clients, "claude-test", [b"\xff\xd8"], "текст", ai.FragmentEstimate)
+            no_spare = ai.make_client("sk-fake", None)
+            try:
+                ai.ask_model(no_spare, "claude-test", [b"\xff\xd8"], "текст", ai.FragmentEstimate)
+                failed = None
+            except ai.AiUnavailable as exc:
+                failed = str(exc)
+            only_spare = ai.ask_model(ai.make_client(None, "gm-fake", "gemini-test"), "claude-test", [b"\xff\xd8", b"\xff\xd8"], "текст", ai.RegionChoice)
+        finally:
+            ai._ask_anthropic, ai.gemini_request = original_ask, original_request
+        check("исчерпан лимит основного ИИ → тот же запрос уходит в Gemini, ответ по схеме, токены с моделью",
+              got and got["cellularity_percent"] == 55 and got["_usage"] == {"model": "gemini-test", "input_tokens": 7000, "output_tokens": 50}
+              and sent[0]["url"].endswith("gemini-test:generateContent") and sent[0]["key"] == "gm-fake" and sent[0]["images"] == 1
+              and sent[0]["schema"] == "OBJECT" and sent[0]["system"].startswith("Вы — опытный"), f"({got}, {sent})")
+        check("без ключа Gemini исчерпание лимита — ошибка оценки; без ключа Anthropic Gemini работает основным",
+              failed == "предел запросов" and only_spare is not None and only_spare["regions"][0]["reason"] == "край"
+              and only_spare["_usage"]["model"] == "gemini-test" and sent[1]["images"] == 2, f"({failed}, {only_spare})")
         check("ход оценки ИИ — по фрагментам и шагам",
               progress == [(1, 2, "pick"), (1, 2, "estimate"), (2, 2, "pick"), (2, 2, "estimate")], f"({progress})")
         grid = DeepZoomGrid(2048, 2048, 510, 1)
