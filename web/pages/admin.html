@@ -82,6 +82,16 @@
     <section class="admin-section" id="settingsSection" hidden>
       <div class="catalog-toolbar"><h2 data-i18n="settings.heading"></h2></div>
       <div class="settings-card">
+        <h3 data-i18n="settings.provider.heading"></h3>
+        <p class="muted" data-i18n="settings.provider.text"></p>
+        <label><span data-i18n="settings.provider.label"></span>
+          <select id="aiProvider">
+            <option value="gemini" data-i18n="settings.provider.gemini"></option>
+            <option value="anthropic" data-i18n="settings.provider.anthropic"></option>
+          </select></label>
+        <p id="providerStatus" class="muted"></p>
+      </div>
+      <div class="settings-card">
         <h3 data-i18n="settings.ai.heading"></h3>
         <p class="muted" data-i18n="settings.ai.text"></p>
         <p id="aiStatus"></p>

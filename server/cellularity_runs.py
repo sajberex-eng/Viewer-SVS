@@ -122,6 +122,11 @@ class CellularityService:
         return getattr(self.config, "gemini_model", None) or ai.GEMINI_MODEL
 
     @property
+    def ai_provider(self) -> str:
+        """Основной поставщик: выбор администратора, иначе cellularity.ai_provider, иначе Gemini."""
+        return ai.provider(self.data_dir, getattr(self.config, "ai_provider", None) or ai.DEFAULT_PROVIDER)
+
+    @property
     def ai_model(self) -> str:
         return self.config.ai_model if self.config else "claude-opus-5"
 
@@ -142,7 +147,8 @@ class CellularityService:
             "run": self.run_dict(latest, contours_hash(rows)) if latest else None,
             "ai_run": self.run_dict(ai_latest, contours_hash(rows)) if ai_latest else None,
             "ai_available": self.ai_available(),
-            "ai_model": self.ai_model,
+            "ai_model": self.gemini_model if self.ai_provider == "gemini" else self.ai_model,
+            "ai_provider": self.ai_provider,
             "note": RESEARCH_NOTE,
         }
 
@@ -368,7 +374,7 @@ class CellularityService:
         try:
             with self.pool.acquire(slide_row["key"]) as handle:
                 result = ai.estimate(handle.slide, float(slide_row["mpp"]), fragments,
-                                     ai.make_client(key, spare, self.gemini_model),
+                                     ai.make_client(key, spare, self.gemini_model, self.ai_provider),
                                      self.ai_model, progress=on_progress,
                                      should_stop=lambda: cancel is not None and cancel.is_set(), ask=self.ai_ask)
         except InterruptedError:

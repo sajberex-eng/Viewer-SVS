@@ -15,6 +15,7 @@ import math
 import shutil
 import sys
 import tempfile
+import urllib.error
 from pathlib import Path
 
 import cv2
@@ -318,9 +319,9 @@ def main() -> None:
         ai._ask_anthropic = lambda *a, **k: (_ for _ in ()).throw(ai.LimitExhausted("предел запросов"))
         ai.gemini_request = fake_gemini
         try:
-            clients = ai.make_client("sk-fake", "gm-fake", "gemini-test")
+            clients = ai.make_client("sk-fake", "gm-fake", "gemini-test", primary="anthropic")
             got = ai.ask_model(clients, "claude-test", [b"\xff\xd8"], "текст", ai.FragmentEstimate)
-            no_spare = ai.make_client("sk-fake", None)
+            no_spare = ai.make_client("sk-fake", None, primary="anthropic")
             try:
                 ai.ask_model(no_spare, "claude-test", [b"\xff\xd8"], "текст", ai.FragmentEstimate)
                 failed = None
@@ -336,6 +337,57 @@ def main() -> None:
         check("без ключа Gemini исчерпание лимита — ошибка оценки; без ключа Anthropic Gemini работает основным",
               failed == "предел запросов" and only_spare is not None and only_spare["regions"][0]["reason"] == "край"
               and only_spare["_usage"]["model"] == "gemini-test" and sent[1]["images"] == 2, f"({failed}, {only_spare})")
+        # переключатель основного ИИ: по умолчанию Gemini, выбор в файле, запасной в обе стороны
+        calls_order = []
+
+        def anth(client, model, images, text, schema):
+            calls_order.append("anthropic")
+            return {"cellularity_percent": 40, "regional_min_percent": 35, "regional_max_percent": 45, "heterogeneous": False,
+                    "causes": [], "note": "", "_usage": {"model": model, "input_tokens": 1, "output_tokens": 1}}
+
+        def gem_limit(url, key, body):
+            calls_order.append("gemini")
+            raise urllib.error.HTTPError(url, 429, "quota", {}, None)
+
+        def gem_ok(url, key, body):
+            calls_order.append("gemini")
+            return fake_gemini(url, key, body)
+
+        ai._ask_anthropic = anth
+        try:
+            ai.gemini_request = gem_ok
+            both = lambda primary: ai.make_client("sk-fake", "gm-fake", "gemini-test", primary=primary)
+            calls_order.clear(); a = ai.ask_model(both("gemini"), "claude-test", [b"\xff\xd8"], "т", ai.FragmentEstimate)
+            first_gemini = list(calls_order)
+            calls_order.clear(); b = ai.ask_model(both("anthropic"), "claude-test", [b"\xff\xd8"], "т", ai.FragmentEstimate)
+            first_anthropic = list(calls_order)
+            ai.gemini_request = gem_limit
+            calls_order.clear(); after_limit = ai.ask_model(both("gemini"), "claude-test", [b"\xff\xd8"], "т", ai.FragmentEstimate)
+            gemini_then_anthropic = list(calls_order)
+            calls_order.clear()
+            try:
+                ai.ask_model(ai.make_client(None, "gm-fake", "gemini-test", primary="gemini"), "claude-test", [b"\xff\xd8"], "т", ai.FragmentEstimate)
+                lonely = None
+            except ai.LimitExhausted as exc:
+                lonely = str(exc)
+            anth_only = ai.ask_model(ai.make_client("sk-fake", None, primary="gemini"), "claude-test", [b"\xff\xd8"], "т", ai.FragmentEstimate)
+        finally:
+            ai._ask_anthropic, ai.gemini_request = original_ask, original_request
+        check("основной ИИ по выбору: gemini → сначала Gemini, anthropic → сначала Claude; без ключа основного работает второй",
+              first_gemini == ["gemini"] and a["_usage"]["model"] == "gemini-test"
+              and first_anthropic == ["anthropic"] and b["_usage"]["model"] == "claude-test"
+              and anth_only["_usage"]["model"] == "claude-test", f"({first_gemini}, {first_anthropic})")
+        check("Gemini исчерпал квоту (429) → запрос уходит в Claude; без второго ключа — ошибка предела",
+              gemini_then_anthropic == ["gemini", "anthropic"] and after_limit["_usage"]["model"] == "claude-test"
+              and lonely is not None and "предел" in lonely, f"({gemini_then_anthropic}, {lonely})")
+        with tempfile.TemporaryDirectory() as prov:
+            check("основной ИИ по умолчанию Gemini; файл выбора главнее настройки; мусор в файле игнорируется",
+                  ai.provider(Path(prov)) == "gemini" and ai.provider(Path(prov), "anthropic") == "anthropic"
+                  and (ai.set_provider(Path(prov), "anthropic") or ai.provider(Path(prov)) == "anthropic")
+                  and (Path(prov) / "ai.provider").write_text("что-то", encoding="utf-8") is not None and ai.provider(Path(prov)) == "gemini")
+        check("подпись расчёта: ответивший больше всех + остальные при переходе",
+              ai._label("m", {"gemini-x": 6, "claude-y": 2}) == "оценка по обзору и участкам ×20, модель gemini-x; часть запросов по исчерпании лимита: claude-y 2"
+              and ai._label("m", {}) == "оценка по обзору и участкам ×20, модель m")
         check("ход оценки ИИ — по фрагментам и шагам",
               progress == [(1, 2, "pick"), (1, 2, "estimate"), (2, 2, "pick"), (2, 2, "estimate")], f"({progress})")
         grid = DeepZoomGrid(2048, 2048, 510, 1)

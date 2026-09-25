@@ -598,6 +598,15 @@ def main() -> None:
         both = alice.get("/api/slides/dddddddddddd/cellularity").json()
         check("состояние отдаёт оба способа рядом", both["run"]["method"] == "marrowquant" and both["ai_run"]["id"] == ai_run["id"])
         check("выгрузка CSV содержит способ расчёта", "ai" in admin.get("/api/cellularity/export.csv").text.split("\r\n")[-4])
+        default_provider = admin.get("/api/settings/ai").json()["provider"]
+        switched = admin.put("/api/settings/ai", json={"provider": "anthropic"}).json()
+        bad = admin.put("/api/settings/ai", json={"provider": "gpt"})
+        forbidden = alice.put("/api/settings/ai", json={"provider": "gemini"})
+        check("основной ИИ по умолчанию Gemini, администратор переключает на Claude, чужое значение и не-администратор отвергнуты",
+              default_provider == "gemini" and switched["provider"] == "anthropic" and bad.status_code == 400
+              and forbidden.status_code == 403 and alice.get("/api/slides/dddddddddddd/cellularity").json()["ai_provider"] == "anthropic"
+              and any("основной ИИ: anthropic" in (row["detail"] or "") for row in admin.get("/api/journal").json()))
+        admin.put("/api/settings/ai", json={"provider": "gemini"})
         spare = admin.put("/api/settings/ai", json={"gemini_key": "gm-test-not-real"}).json()
         check("ключ запасного Gemini сохранён отдельно, наружу не отдаётся, ключ Anthropic не тронут",
               spare["gemini_configured"] is True and spare["configured"] is True and "gm-test" not in admin.get("/api/settings/ai").text

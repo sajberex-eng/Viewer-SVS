@@ -40,6 +40,7 @@ async function main() {
   $('aiRemove').addEventListener('click', () => saveAiKey({ key: '' }));
   $('geminiSave').addEventListener('click', () => saveAiKey({ gemini_key: $('geminiKey').value }));
   $('geminiRemove').addEventListener('click', () => saveAiKey({ gemini_key: '' }));
+  $('aiProvider').addEventListener('change', () => saveAiKey({ provider: $('aiProvider').value }));
   for (const [name, tab] of Object.entries(TABS)) {
     $(tab.button).addEventListener('click', () => openTab(name));
   }
@@ -65,6 +66,11 @@ async function loadSettings() {
 }
 
 function showAiStatus(state) {
+  $('aiProvider').value = state.provider;
+  const other = state.provider === 'gemini' ? state.configured : state.gemini_configured;
+  const main = state.provider === 'gemini' ? state.gemini_configured : state.configured;
+  $('providerStatus').textContent = !main && !other ? t('settings.provider.none')
+    : !main ? t('settings.provider.noMain') : other ? t('settings.provider.spare') : t('settings.provider.noSpare');
   $('aiStatus').textContent = state.from_env ? t('settings.ai.fromEnv')
     : state.configured ? t('settings.ai.configured', { model: state.model }) : t('settings.ai.missing');
   $('aiRemove').hidden = !state.configured || state.from_env;
@@ -81,7 +87,7 @@ async function saveAiKey(body) {
     $('aiKey').value = '';
     $('geminiKey').value = '';
     showAiStatus(state);
-    setNote(t(value.trim() ? 'settings.ai.saved' : 'settings.ai.removed'));
+    setNote(body.provider ? t('settings.provider.saved') : t(value.trim() ? 'settings.ai.saved' : 'settings.ai.removed'));
   } catch (error) {
     setNote(error.message, true);
   }

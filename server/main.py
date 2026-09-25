@@ -167,7 +167,8 @@ class CellularityRunRequest(BaseModel):
 
 class AiSettingsRequest(BaseModel):
     key: str | None = None          # ключ Anthropic: пусто — удалить, None — не трогать
-    gemini_key: str | None = None   # ключ запасного Gemini, так же
+    gemini_key: str | None = None   # ключ Gemini, так же
+    provider: str | None = None     # основной ИИ: gemini или anthropic; None — не трогать
 
 
 def create_app() -> FastAPI:
@@ -667,6 +668,7 @@ def create_app() -> FastAPI:
         from . import cellularity_ai
         return {"configured": cellularity_ai.api_key(settings.data_dir) is not None, "model": cellularity.ai_model,
                 "from_env": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "provider": cellularity.ai_provider,
                 "gemini_configured": cellularity_ai.gemini_key(settings.data_dir) is not None,
                 "gemini_model": cellularity.gemini_model,
                 "gemini_from_env": bool(os.environ.get("GEMINI_API_KEY"))}
@@ -676,6 +678,11 @@ def create_app() -> FastAPI:
         """Ключи вводятся администратором здесь, а не в переписке; хранятся в data/ai.key и data/gemini.key."""
         from . import cellularity_ai
         changes = []
+        if body.provider is not None:
+            if body.provider not in cellularity_ai.PROVIDERS:
+                raise HTTPException(400, "Неизвестный поставщик ИИ")
+            cellularity_ai.set_provider(settings.data_dir, body.provider)
+            changes.append(f"основной ИИ: {body.provider}")
         if body.key is not None:
             cellularity_ai.set_api_key(settings.data_dir, body.key)
             changes.append("ключ Anthropic задан" if body.key.strip() else "ключ Anthropic удалён")

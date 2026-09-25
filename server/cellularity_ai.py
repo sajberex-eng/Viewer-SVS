@@ -10,10 +10,12 @@
 хранится на сервере (data/ai.key, вводится администратором в разделе «Настройки») либо
 в переменной ANTHROPIC_API_KEY контейнера.
 
-Запасной ИИ (решение заказчика 2026-09-25): при исчерпании лимита у Anthropic (429, счёт)
-тот же запрос уходит в Gemini API (ключ data/gemini.key или GEMINI_API_KEY, модель
-cellularity.gemini_model). Если ключа Anthropic нет, а ключ Gemini есть, Gemini работает
-основным. Ответ Gemini проверяется той же схемой Pydantic, в usage запоминается модель.
+Два поставщика (решение заказчика 2026-09-25): Gemini API (ключ data/gemini.key или
+GEMINI_API_KEY, модель cellularity.gemini_model) и Anthropic. Какой из них основной, выбирает
+администратор переключателем в «Настройках» (data/ai.provider); по умолчанию — Gemini. Второй
+поставщик — запасной: когда у основного исчерпан лимит (предел запросов, счёт), тот же запрос
+уходит к нему. Если ключа основного нет, работает тот, чей ключ задан. Ответ Gemini проверяется
+той же схемой Pydantic, в usage запоминается модель каждого запроса.
 
 Как считается, по каждому фрагменту два запроса:
 1. обзор с контуром → модель выбирает два участка, которые хочет рассмотреть ближе
@@ -55,6 +57,9 @@ MAX_TOKENS = 4000            # ответ короткий; запас на ра
 EFFORT = "low"               # уровень усилий модели: задача не требует долгого размышления
 KEY_FILE = "ai.key"
 GEMINI_KEY_FILE = "gemini.key"
+PROVIDER_FILE = "ai.provider"
+PROVIDERS = ("gemini", "anthropic")
+DEFAULT_PROVIDER = "gemini"
 GEMINI_MODEL = "gemini-flash-latest"
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 REQUEST_TIMEOUT = 240.0      # на один запрос к любому ИИ, секунд
@@ -177,6 +182,25 @@ def gemini_key(data_dir: Path) -> str | None:
 
 def set_gemini_key(data_dir: Path, value: str | None) -> None:
     _write_key(gemini_key_path(data_dir), value)
+
+
+def provider(data_dir: Path, default: str = DEFAULT_PROVIDER) -> str:
+    """Основной поставщик: выбор администратора (data/ai.provider), иначе настройка по умолчанию."""
+    try:
+        value = (Path(data_dir) / PROVIDER_FILE).read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        value = ""
+    if value in PROVIDERS:
+        return value
+    return default if default in PROVIDERS else DEFAULT_PROVIDER
+
+
+def set_provider(data_dir: Path, value: str) -> None:
+    if value not in PROVIDERS:
+        raise ValueError("неизвестный поставщик ИИ")
+    path = Path(data_dir) / PROVIDER_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value, encoding="utf-8")
 
 
 # ---------- ткань фрагмента в грубом растре ----------
@@ -375,9 +399,11 @@ def jpeg(image: Image.Image, quality: int = 85) -> bytes:
 # ---------- модели ----------
 
 class AiClients:
-    """Основной ИИ (Anthropic) и запасной (Gemini); любого из них может не быть."""
+    """Оба поставщика; любого из них может не быть. primary — основной, второй — запасной."""
 
-    def __init__(self, anthropic_key: str | None, gemini_key: str | None = None, gemini_model: str = GEMINI_MODEL):
+    def __init__(self, anthropic_key: str | None, gemini_key: str | None = None, gemini_model: str = GEMINI_MODEL,
+                 primary: str = DEFAULT_PROVIDER):
+        self.primary = primary if primary in PROVIDERS else DEFAULT_PROVIDER
         self.anthropic = None
         if anthropic_key:
             import anthropic
@@ -387,8 +413,9 @@ class AiClients:
         self.gemini_model = gemini_model
 
 
-def make_client(key: str | None, gemini_key: str | None = None, gemini_model: str = GEMINI_MODEL) -> AiClients:
-    return AiClients(key, gemini_key, gemini_model)
+def make_client(key: str | None, gemini_key: str | None = None, gemini_model: str = GEMINI_MODEL,
+                primary: str = DEFAULT_PROVIDER) -> AiClients:
+    return AiClients(key, gemini_key, gemini_model, primary)
 
 
 def _ask_anthropic(client, model: str, images: list[bytes], text: str, schema) -> dict | None:
@@ -486,7 +513,7 @@ def _ask_gemini(key: str, model: str, images: list[bytes], text: str, schema) ->
         if exc.code in (401, 403):
             raise AiUnavailable("ключ Gemini не принят: проверьте его в разделе «Настройки»") from exc
         if exc.code == 429:
-            raise AiUnavailable("запасной ИИ тоже недоступен: превышен предел запросов Gemini") from exc
+            raise LimitExhausted("Gemini: превышен предел запросов или квота") from exc
         raise AiUnavailable(f"Gemini ответил ошибкой {exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         raise AiUnavailable("нет связи с Gemini: сервер не достучался до generativelanguage.googleapis.com") from exc
@@ -510,20 +537,27 @@ def _ask_gemini(key: str, model: str, images: list[bytes], text: str, schema) ->
 def ask_model(client: AiClients, model: str, images: list[bytes], text: str, schema) -> dict | None:
     """Один запрос: картинки и текст → ответ по строгой схеме (structured outputs).
 
-    Сначала основной ИИ; при исчерпании его лимита — запасной Gemini, если задан ключ.
-    None — модель отказалась отвечать или ответ не разобрался. В ответе ключ "_usage"
-    с моделью и токенами запроса: из них складывается стоимость оценки.
+    Сначала основной поставщик (client.primary); при исчерпании его лимита — второй, если задан
+    его ключ. model — модель Anthropic. None — модель отказалась отвечать или ответ не
+    разобрался. В ответе ключ "_usage" с моделью и токенами запроса: из них складывается
+    стоимость оценки.
     """
-    if client.anthropic is not None:
+    order = ["gemini", "anthropic"] if client.primary == "gemini" else ["anthropic", "gemini"]
+    have = {"gemini": bool(client.gemini_key), "anthropic": client.anthropic is not None}
+    chain = [name for name in order if have[name]]
+    if not chain:
+        raise AiUnavailable("ключ доступа к ИИ не задан")
+    last: LimitExhausted | None = None
+    for name in chain:
         try:
+            if name == "gemini":
+                return _ask_gemini(client.gemini_key, client.gemini_model, images, text, schema)
             return _ask_anthropic(client.anthropic, model, images, text, schema)
         except LimitExhausted as exc:
-            if not client.gemini_key:
-                raise
-            log.warning("Основной ИИ: %s — запрос уходит в запасной %s", exc, client.gemini_model)
-    elif not client.gemini_key:
-        raise AiUnavailable("ключ доступа к ИИ не задан")
-    return _ask_gemini(client.gemini_key, client.gemini_model, images, text, schema)
+            last = exc
+            if name != chain[-1]:
+                log.warning("ИИ %s: %s — запрос уходит к запасному", name, exc)
+    raise last
 
 
 # ---------- расчёт по стеклу ----------
@@ -535,6 +569,17 @@ def _pct(value) -> float | None:
         return round(min(100.0, max(0.0, float(value))), 1)
     except (TypeError, ValueError):
         return None
+
+
+def _label(default_model: str, models: dict) -> str:
+    """Подпись расчёта: модель, ответившая больше всех, и — если запросы делились — остальные."""
+    if not models:
+        return f"оценка по обзору и участкам ×20, модель {default_model}"
+    ranked = sorted(models.items(), key=lambda item: (-item[1], item[0]))
+    text = f"оценка по обзору и участкам ×20, модель {ranked[0][0]}"
+    if len(ranked) > 1:
+        text += "; часть запросов по исчерпании лимита: " + ", ".join(f"{name} {n}" for name, n in ranked[1:])
+    return text
 
 
 def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model: str,
@@ -627,9 +672,7 @@ def estimate(slide, base_mpp: float, fragments: list[cs.Fragment], client, model
                      (len(means) > 1 and max(means) - min(means) >= 10)) if means else None
     return {
         "method": "ai",
-        "algorithm": f"оценка по обзору и участкам ×20, модель {model}" + (
-            "; запасной " + ", ".join(f"{name}: {n} запр." for name, n in usage["models"].items() if name != model)
-            if any(name != model for name in usage["models"]) else ""),
+        "algorithm": _label(model, usage["models"]),
         "usage": usage,
         "pixel_um": round(DETAIL_UM / DETAIL_PX, 3),
         "fragments": results,
