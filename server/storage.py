@@ -53,6 +53,18 @@ class DiskSpace:
     free: int
 
 
+def open_slide_file(path: Path) -> openslide.OpenSlide:
+    """Открыть файл скана: KFB — через обёртку KFBio, остальное — OpenSlide."""
+    try:
+        if path.suffix.lower() == KFB_EXTENSION:
+            return kfb.KfbFile(str(path))
+        return openslide.OpenSlide(path)
+    except (OSError, openslide.OpenSlideError) as exc:
+        raise StorageUnavailable(f"Не удалось открыть слайд: {exc}") from exc
+    except Exception as exc:  # чужая обёртка KFB может бросить что угодно
+        raise StorageUnavailable(f"Не удалось открыть слайд: {exc}") from exc
+
+
 def key_for(slide_id: str, extension: str = ".svs") -> str:
     """Ключ хранилища по внутреннему идентификатору слайда и расширению формата.
 
@@ -108,15 +120,7 @@ class LocalFolderStorage(Storage):
         return sorted(objects, key=lambda o: o.key)
 
     def open_slide(self, key: str) -> openslide.OpenSlide:
-        path = self._path(key)
-        try:
-            if path.suffix.lower() == KFB_EXTENSION:
-                return kfb.KfbFile(str(path))
-            return openslide.OpenSlide(path)
-        except (OSError, openslide.OpenSlideError) as exc:
-            raise StorageUnavailable(f"Не удалось открыть слайд: {exc}") from exc
-        except Exception as exc:  # чужая обёртка KFB может бросить что угодно
-            raise StorageUnavailable(f"Не удалось открыть слайд: {exc}") from exc
+        return open_slide_file(self._path(key))
 
     def put(self, key: str, source: Path) -> StoredObject:
         """Переносит принятый файл в хранилище.
@@ -163,7 +167,46 @@ class LocalFolderStorage(Storage):
             )
 
 
+class InPlaceStorage(Storage):
+    """Настольная программа (docs/TOR-desktop.md, раздел 6): сканы лежат в папках
+    пользователя и открываются на месте. Ключ скана — полный путь к файлу; его
+    знает только база, в API он не уходит. Файлы на диске программа не меняет
+    (НП-13): «положить» и «удалить» здесь ничего не делают с диском."""
+
+    def __init__(self, config: StorageConfig):
+        self.max_upload_bytes = 0
+        self.reserve_bytes = 0
+
+    @staticmethod
+    def _path(key: str) -> Path:
+        path = Path(key)
+        if not path.is_absolute() or slide_extension(path.name) is None:
+            raise StorageUnavailable("Ключ скана не указывает на файл скана")
+        return path
+
+    def list_slides(self) -> list[StoredObject]:
+        return []  # каталог сверяет с диском library.py, по подключённым папкам
+
+    def open_slide(self, key: str) -> openslide.OpenSlide:
+        return open_slide_file(self._path(key))
+
+    def put(self, key: str, source: Path) -> StoredObject:
+        raise StorageUnavailable("В программе сканы не загружаются: добавьте папку, где они лежат")
+
+    def delete(self, key: str) -> bool:
+        return False  # файл пользователя не трогаем никогда
+
+    def space(self) -> DiskSpace:
+        usage = shutil.disk_usage(Path.home())
+        return DiskSpace(usage.total, usage.free)
+
+    def check_can_accept(self, size: int) -> None:
+        raise NotEnoughSpace("В программе сканы не загружаются")
+
+
 def create_storage(config: StorageConfig) -> Storage:
     if config.type == "local":
         return LocalFolderStorage(config)
+    if config.type == "in_place":
+        return InPlaceStorage(config)
     raise ValueError(f"config: неизвестный тип хранилища «{config.type}»")

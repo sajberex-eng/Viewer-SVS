@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import re
+
 HE, AE, GOMORI, CONGO, IHC = "HE", "AE", "GOMORI", "CONGO", "IHC"
 
 # Порядок — как в списке выбора
@@ -47,6 +49,17 @@ _FILE_NAMES = {"HE": HE, "H&E": HE, "AE": AE, "GOMORI": GOMORI, "CONGO": CONGO}
 
 def from_file_name(token: str | None) -> str | None:
     return _FILE_NAMES.get((token or "").upper())
+
+
+def from_free_name(name: str) -> str | None:
+    """Настольная программа: имена файлов у врача свободные («Биопсия HE.svs»),
+    поэтому окраска ищется отдельным словом в любом месте имени — из того же
+    списка однозначных обозначений."""
+    for word in re.split(r"[^\w&]+", name.rsplit(".", 1)[0]):
+        code = from_file_name(word)
+        if code:
+            return code
+    return None
 
 
 def checked(code: str | None, marker: str | None) -> tuple[str | None, str | None]:

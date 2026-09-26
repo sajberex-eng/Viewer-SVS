@@ -47,9 +47,12 @@ def parse_name(filename: str) -> tuple[str | None, str | None, str | None]:
 
 
 def slide_title(row) -> str:
-    """Название для интерфейса. Имя файла сюда не попадает никогда."""
+    """Название для интерфейса. Имя файла сюда не попадает никогда — кроме
+    настольной программы, где скан лежит в папке самого пользователя (НП-6)."""
     if row["title"]:
         return row["title"]
+    if "fingerprint" in row.keys() and row["fingerprint"] and row["original_name"]:
+        return row["original_name"].rsplit(".", 1)[0]
     if row["case_code"]:
         stain = stains.short(row["stain"], row["ihc_marker"])
         return " · ".join(part for part in (row["case_code"], row["glass"], stain) if part)
@@ -77,6 +80,8 @@ class Catalog:
         self._last_check = 0.0
         # Уборку брошенных загрузок подключает main.py: каталог о них не знает
         self.on_periodic_check = None
+        # Настольная программа: сверку с диском ведут подключённые папки (library.py)
+        self.library = None
 
     # ---------- чтение ----------
 
@@ -86,8 +91,10 @@ class Catalog:
     def folder(self, folder_id: int) -> sqlite3.Row | None:
         return self._db.query_one("SELECT * FROM folders WHERE id = ?", (folder_id,))
 
-    def slides(self, folder_id: int | None = None) -> list[sqlite3.Row]:
+    def slides(self, folder_id: int | None = None, with_missing: bool = False) -> list[sqlite3.Row]:
         if folder_id is None:
+            if with_missing:  # программа показывает пропавший файл с пометкой (НП-14)
+                return self._db.query("SELECT * FROM slides ORDER BY folder_id, title, id")
             return self._db.query("SELECT * FROM slides WHERE missing = 0 ORDER BY folder_id, title, id")
         return self._db.query(
             "SELECT * FROM slides WHERE folder_id = ? AND missing = 0 ORDER BY title, id", (folder_id,)
@@ -318,6 +325,8 @@ class Catalog:
         Новые файлы в хранилище не подхватываются: сканы попадают в каталог
         только через загрузку администратором.
         """
+        if self.library is not None:
+            return self.library.sync_all()
         with self._lock:
             present = {obj.key for obj in self._storage.list_slides()}
             known = self._db.query("SELECT key, missing FROM slides")

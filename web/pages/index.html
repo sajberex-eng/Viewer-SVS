@@ -27,10 +27,12 @@
     <aside class="tree-panel">
       <div class="tree-head">
         <h2 data-i18n="catalog.heading"></h2>
-        <button class="btn" id="btnNewFolder" hidden data-i18n="catalog.newFolder" data-i18n-tip="catalog.newFolder.tip"></button>
+        <button class="btn no-desktop" id="btnNewFolder" hidden data-i18n="catalog.newFolder" data-i18n-tip="catalog.newFolder.tip"></button>
+        <!-- Программа: сканы открываются из папок компьютера (docs/TOR-desktop.md, НП-12) -->
+        <button class="btn only-desktop" id="btnAddFolder" hidden data-i18n="catalog.addFolder" data-i18n-tip="catalog.addFolder.tip"></button>
       </div>
       <ul class="tree" id="tree"></ul>
-      <div class="tree-space" hidden id="spaceBox">
+      <div class="tree-space no-desktop" hidden id="spaceBox">
         <p class="muted" id="space"></p>
         <!-- Сверка каталога с диском: файл мог пропасть после сбоя (КД-5) -->
         <button class="link-btn" id="btnCheckStorage" hidden data-i18n="catalog.checkStorage" data-i18n-tip="catalog.checkStorage.tip"></button>
@@ -41,8 +43,9 @@
       <div class="catalog-toolbar">
         <nav class="crumbs" id="crumbs" aria-label="Путь"></nav>
         <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search">
+        <button class="btn only-desktop" id="btnRefresh" hidden data-i18n="catalog.refresh" data-i18n-tip="catalog.refresh.tip"></button>
         <button class="btn no-desktop" id="btnAccess" hidden data-i18n="catalog.access" data-i18n-tip="catalog.access.tip"></button>
-        <button class="btn btn-primary" id="btnUpload" hidden data-i18n="catalog.upload" data-i18n-tip="catalog.upload.tip"></button>
+        <button class="btn btn-primary no-desktop" id="btnUpload" hidden data-i18n="catalog.upload" data-i18n-tip="catalog.upload.tip"></button>
         <input type="file" id="fileInput" multiple hidden>
       </div>
       <p class="catalog-note" id="note" aria-live="polite"></p>
@@ -53,6 +56,11 @@
         <button class="btn" id="btnOpenAccess" data-i18n="catalog.openAccess"></button>
       </div>
       <ul class="catalog-grid" id="grid"></ul>
+      <!-- Файлы, которые не открылись, видны с причиной (НП-17) -->
+      <section class="problem-box" id="problemBox" hidden>
+        <h3 data-i18n="catalog.problems"></h3>
+        <ul class="problem-list" id="problems"></ul>
+      </section>
       <div class="drop-hint" id="dropHint" hidden></div>
     </section>
   </main>

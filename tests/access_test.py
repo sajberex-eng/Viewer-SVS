@@ -711,6 +711,14 @@ def check_stain_migration() -> None:
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = OFF")
     conn.execute("ALTER TABLE slides DROP COLUMN ihc_marker")
+    # как было до версии 9: без папок на диске и отпечатков (настольная программа)
+    conn.executescript("""
+        DROP TABLE scan_problems;
+        DROP INDEX folders_source_path;
+        DROP INDEX slides_fingerprint;
+        ALTER TABLE folders DROP COLUMN source_path;
+        ALTER TABLE slides DROP COLUMN fingerprint;
+    """)
     # как было до версии 7: виды аннотаций только point и polygon, таблицы расчётов нет
     conn.executescript("""
         DROP TABLE cellularity_runs;
@@ -740,6 +748,9 @@ def check_stain_migration() -> None:
     migrated.execute("INSERT INTO annotations (id, slide_id, kind, points, author) VALUES ('a2', 'm1', 'tissue', '[[0,0],[9,0],[9,9]]', 'x')")
     contour = migrated.query_one("SELECT kind FROM annotations WHERE id = 'a2'")["kind"]
     runs_table = migrated.query_one("SELECT count(*) AS n FROM cellularity_runs")["n"]
+    library = (migrated.query_one("SELECT count(*) AS n FROM scan_problems")["n"],
+               migrated.query_one("SELECT source_path FROM folders WHERE id = 1")["source_path"],
+               migrated.query_one("SELECT fingerprint FROM slides WHERE id = 'm1'")["fingerprint"])
     migrated.close_all()
     check(f"перенос базы 5 → {SCHEMA_VERSION}: схема обновлена", version == SCHEMA_VERSION, f"({version})")
     check("перенос базы 5 → 6: окраски разложены",
@@ -747,6 +758,8 @@ def check_stain_migration() -> None:
           f"({rows})")
     check("перенос базы 6 → 7: аннотация сохранена, контур «ткань» принимается, таблица расчётов есть",
           kept is not None and tuple(kept) == ("polygon", "старая", "кто-то") and contour == "tissue" and runs_table == 0)
+    check("перенос базы 8 → 9: поля настольной программы пустые, таблица файлов с ошибкой есть",
+          library == (0, None, None), f"({library})")
 
 
 if __name__ == "__main__":

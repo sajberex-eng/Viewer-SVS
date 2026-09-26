@@ -42,6 +42,7 @@ from .cellularity_runs import CellularityError, CellularityService
 from .config import BASE_DIR, load_secret_key, load_settings
 from .db import Database, utc_iso
 from .desktop import LOCAL_LOGIN, LaunchKeys, ensure_local_admin
+from .library import Library
 from .perms import PermissionCache
 from .slides import LABEL_IMAGE, SlidePool, render_thumbnail, thumbnail_path
 from .storage import StorageUnavailable, create_storage
@@ -167,6 +168,14 @@ class CellularityRunRequest(BaseModel):
     method: str = "marrowquant"     # 'marrowquant' — алгоритм, 'ai' — оценка по полям зрения
 
 
+class SourceRequest(BaseModel):
+    path: str
+
+
+class SyncRequest(BaseModel):
+    folder_id: int | None = None   # None — все подключённые папки
+
+
 class AiSettingsRequest(BaseModel):
     key: str | None = None          # ключ Anthropic: пусто — удалить, None — не трогать
     gemini_key: str | None = None   # ключ Gemini, так же
@@ -189,13 +198,22 @@ def create_app() -> FastAPI:
     catalog.on_periodic_check = uploads.cleanup_stale  # брошенные загрузки убираются сами
     tile_cache = TileCache(settings.tile_cache_dir, int(settings.cache.max_gb * 1e9))
     perms = PermissionCache(db)
-    warmer = Warmer(pool, tile_cache, settings.tiles, settings.thumbs_dir)
+    warmer = Warmer(pool, tile_cache, settings.tiles, settings.thumbs_dir, overview=not settings.desktop)
+    # Настольная программа: сканы открываются из папок пользователя (docs/TOR-desktop.md, раздел 6)
+    library = Library(db, pool, warmer) if settings.desktop else None
+    catalog.library = library
     cellularity = CellularityService(db, settings.storage, settings.data_dir, pool, settings.tiles,
                                      settings.cellularity)
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
 
     def initial_check() -> None:
+        if library is not None:
+            try:
+                log.info("Папки сверены с диском: %s", library.sync_all())
+            except Exception:
+                log.exception("Сверка папок при запуске не удалась")
+            return
         try:
             log.info("Хранилище проверено: %s", catalog.check_integrity())
             uploads.cleanup_stale()
@@ -220,6 +238,7 @@ def create_app() -> FastAPI:
     app.state.perms = perms
     app.state.warmer = warmer
     app.state.cellularity = cellularity  # для тестов фонового расчёта
+    app.state.library = library
     app.state.desktop = settings.desktop
     launch_keys = LaunchKeys()
     app.state.launch_keys = launch_keys  # ключ выдаёт программа при запуске (desktop/launcher.py)
@@ -324,6 +343,8 @@ def create_app() -> FastAPI:
             "has_label": bool(row["has_label"]),
             "added_at": utc_iso(row["added_at"]),
         }
+        if row["missing"]:
+            info["missing"] = True  # только в программе: веб-сервис пропавшие сканы не отдаёт
         if user["role"] == "admin":
             info["original_name"] = row["original_name"]
             info["access_mode"] = row["access_mode"]
@@ -334,7 +355,20 @@ def create_app() -> FastAPI:
         info = {"id": row["id"], "name": row["name"], "parent_id": row["parent_id"]}
         if user["role"] == "admin":
             info["access_mode"] = row["access_mode"]
+        if library is not None:
+            info["path"] = row["source_path"]            # папка на диске пользователя
+            info["is_source"] = library.is_source(row)    # добавлена пользователем, можно отключить
         return info
+
+    def web_only() -> None:
+        """Действия веб-сервиса, которых нет в программе: там дерево повторяет диск,
+        а файлы пользователя программа не переносит и не удаляет (НП-5, НП-13)."""
+        if settings.desktop:
+            raise HTTPException(404, "В программе недоступно: папки и файлы меняются на диске")
+
+    def desktop_only() -> None:
+        if library is None:
+            raise HTTPException(404)
 
     def require_slide(slide_id: str, user):
         """Скан, доступный этому пользователю. Иначе 404: чужой скан неотличим от несуществующего."""
@@ -472,10 +506,23 @@ def create_app() -> FastAPI:
         """Папки и сканы, доступные этому пользователю."""
         catalog.check_if_stale()
         access = access_for(user)
-        slides = catalog.slides()
+        slides = catalog.slides(with_missing=library is not None)
         visible_slides = [row for row in slides if access.can_view_slide(row)]
         visible_folders = access.visible_folder_ids(slides)
         space = None
+        if library is not None:
+            # Служебная папка отключённых сканов не показывается; папки с файлами,
+            # которые не открылись, видны, даже если сканов в них нет (НП-17)
+            hidden = library.detached_folder_id()
+            problems = [p for p in library.problems() if p["folder_id"] != hidden]
+            visible_folders = {f["id"] for f in catalog.folders()} - {hidden}
+            visible_slides = [row for row in visible_slides if row["folder_id"] != hidden]
+            return {
+                "folders": [folder_summary(row, user) for row in catalog.folders() if row["id"] in visible_folders],
+                "slides": [slide_summary(row, user) for row in visible_slides],
+                "problems": problems,
+                "space": None,
+            }
         if user["role"] == "admin":
             disk = storage.space()
             space = {
@@ -737,12 +784,14 @@ def create_app() -> FastAPI:
 
     @app.post("/api/folders")
     def create_folder(body: FolderRequest, request: Request, user=Depends(require_admin)):
+        web_only()
         folder_id = catalog.create_folder(body.name, body.parent_id, user)
         audit.log(db, request, audit.FOLDER_CREATE, user=user, object_type="folder", object_id=folder_id)
         return {"id": folder_id}
 
     @app.patch("/api/folders/{folder_id}")
     def patch_folder(folder_id: int, body: FolderPatch, request: Request, user=Depends(require_admin)):
+        web_only()
         if body.name is not None:
             catalog.rename_folder(folder_id, body.name)
             audit.log(db, request, audit.FOLDER_RENAME, user=user, object_type="folder", object_id=folder_id)
@@ -758,6 +807,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/folders/{folder_id}")
     def delete_folder(folder_id: int, request: Request, user=Depends(require_admin)):
+        web_only()
         folders, slides = catalog.delete_folder(folder_id)
         audit.log(
             db, request, audit.FOLDER_DELETE, user=user, object_type="folder", object_id=folder_id,
@@ -770,6 +820,7 @@ def create_app() -> FastAPI:
     @app.patch("/api/slides/{slide_id}")
     def patch_slide(slide_id: str, body: SlidePatch, request: Request, user=Depends(require_admin)):
         if body.folder_id is not None:
+            web_only()
             catalog.move_slide(slide_id, body.folder_id)
             audit.log(db, request, audit.SLIDE_MOVE, user=user, object_type="slide", object_id=slide_id)
         if body.title is not None or body.stain is not None or body.note is not None:
@@ -782,6 +833,7 @@ def create_app() -> FastAPI:
 
     @app.delete("/api/slides/{slide_id}")
     def delete_slide(slide_id: str, request: Request, user=Depends(require_admin)):
+        web_only()
         catalog.delete_slide(slide_id)
         cellularity.delete_slide_data(slide_id)  # карты классов лежат вне базы (КЛ-8)
         audit.log(db, request, audit.SLIDE_DELETE, user=user, object_type="slide", object_id=slide_id)
@@ -789,7 +841,33 @@ def create_app() -> FastAPI:
 
     @app.post("/api/storage/check")
     def storage_check(user=Depends(require_admin)):
+        web_only()
         return {**catalog.check_integrity(), "uploads": uploads.cleanup_stale()}
+
+    # ---------- папки со сканами: только программа ----------
+
+    @app.post("/api/library/sources")
+    def add_source(body: SourceRequest, request: Request, user=Depends(require_admin)):
+        desktop_only()
+        folder_id = library.add_source(body.path, user)
+        audit.log(db, request, audit.FOLDER_CREATE, user=user, object_type="folder", object_id=folder_id,
+                  detail="папка подключена")
+        return {"id": folder_id}
+
+    @app.delete("/api/library/sources/{folder_id}")
+    def remove_source(folder_id: int, request: Request, user=Depends(require_admin)):
+        desktop_only()
+        slides = library.remove_source(folder_id)
+        audit.log(db, request, audit.FOLDER_DELETE, user=user, object_type="folder", object_id=folder_id,
+                  detail=f"папка отключена, сканов: {slides}")
+        return {"slides": slides}
+
+    @app.post("/api/library/sync")
+    def sync_library(body: SyncRequest, user=Depends(require_admin)):
+        desktop_only()
+        if body.folder_id is None:
+            return library.sync_all()
+        return library.sync_folder(body.folder_id)
 
     # ---------- доступ ----------
 
@@ -1005,6 +1083,7 @@ def create_app() -> FastAPI:
 
     @app.post("/api/uploads")
     def start_upload(body: UploadStart, request: Request, user=Depends(require_admin)):
+        web_only()  # в программе сканы не загружаются, а открываются на месте (НП-5)
         state = uploads.start(body.folder_id, body.name, body.size, user)
         if state["received"] == 0:
             audit.log(

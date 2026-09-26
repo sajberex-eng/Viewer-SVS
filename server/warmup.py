@@ -34,8 +34,12 @@ PAUSE_BETWEEN_TILES_S = 0.02  # уступка просмотру: прогре�
 
 
 class Warmer:
-    def __init__(self, pool: SlidePool, tile_cache: TileCache, tiles: TileConfig, thumbs_dir):
+    def __init__(self, pool: SlidePool, tile_cache: TileCache, tiles: TileConfig, thumbs_dir,
+                 overview: bool = True):
         self._pool = pool
+        # Настольная программа готовит только миниатюру (НП-16): в подключённой папке
+        # бывает сотня сканов, а обзорные тайлы сделает первое открытие
+        self._overview = overview
         self._cache = tile_cache
         self._tiles = tiles
         self._thumbs_dir = thumbs_dir
@@ -98,7 +102,7 @@ class Warmer:
             if not thumb.exists():
                 render_thumbnail(handle.slide, thumb)
             tiler = handle.tiler
-            for level in range(tiler.level_count):
+            for level in range(tiler.level_count if self._overview else 0):
                 cols, rows = tiler.tile_count(level)
                 if cols * rows > MAX_OVERVIEW_TILES:
                     break  # дальше уровни только растут: это уже не обзор

@@ -75,8 +75,8 @@ def main() -> None:
         check("вошёл администратор программы с отметкой desktop",
               me.get("login") == LOCAL_LOGIN and me.get("role") == "admin" and me.get("desktop") is True, str(me))
         check("каталог открывается", window.get("/").status_code == 200)
-        check("права администратора: создание папки",
-              window.post("/api/folders", json={"name": "Проверка"}).status_code == 200)
+        check("права администратора: настройки ИИ и журнал",
+              window.get("/api/settings/ai").status_code == 200 and window.get("/api/journal").status_code == 200)
 
         other = TestClient(app, base_url=LOCAL)
         check("тот же ключ второй раз не действует", enter(other, key).status_code == 404)

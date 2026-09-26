@@ -7,7 +7,9 @@
   3  группы пользователей; обязательной смены выданного пароля больше нет;
   4  аннотации на сканах (этап 9);
   5  цвет аннотации;
-  6  окраска кодом из списка и маркер ИГХ отдельно (этап 11, ОК-3).
+  6  окраска кодом из списка и маркер ИГХ отдельно (этап 11, ОК-3);
+  7  контуры клеточности и расчёты; 8  способ расчёта;
+  9  настольная программа: папки на диске, отпечаток скана, файлы, которые не открылись.
 """
 from __future__ import annotations
 
@@ -18,7 +20,7 @@ from pathlib import Path
 
 from . import stains
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Группы, которые заводятся при создании базы. Дальше администратор
 # сам создаёт, переименовывает и удаляет их. «Администраторы» в таблице
@@ -59,6 +61,7 @@ CREATE TABLE folders (
     access_mode TEXT CHECK (access_mode IN ('admins', 'all', 'selected')),
     created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
     created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    source_path TEXT,  -- версия 9, настольная программа: папка на диске, которую повторяет эта
     CHECK (parent_id IS NOT NULL OR access_mode IS NOT NULL)
 );
 
@@ -87,7 +90,8 @@ CREATE TABLE slides (
     ihc_marker    TEXT,                      -- маркер ИГХ, только при stain = 'IHC'
     missing       INTEGER NOT NULL DEFAULT 0,
     uploaded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    added_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    added_at      TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fingerprint   TEXT   -- версия 9, настольная программа: узнать скан после переименования (НП-15)
 );
 
 CREATE INDEX slides_folder ON slides(folder_id);
@@ -218,8 +222,26 @@ CREATE TABLE cellularity_runs (
 CREATE INDEX cellularity_runs_slide ON cellularity_runs(slide_id, created_at);
 """
 
+# Версия 9: настольная программа (docs/TOR-desktop.md, раздел 6). Папки каталога
+# повторяют папки на диске (folders.source_path), скан узнаётся по отпечатку
+# после переименования и переноса (slides.fingerprint), а файлы, которые не
+# открылись, видны с причиной (НП-17). У веб-сервиса эти поля пустые.
+LIBRARY_SCHEMA = """
+CREATE UNIQUE INDEX folders_source_path ON folders(source_path) WHERE source_path IS NOT NULL;
+CREATE INDEX slides_fingerprint ON slides(fingerprint) WHERE fingerprint IS NOT NULL;
+
+CREATE TABLE scan_problems (
+    id        INTEGER PRIMARY KEY,
+    folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+    name      TEXT NOT NULL,
+    reason    TEXT NOT NULL
+);
+
+CREATE INDEX scan_problems_folder ON scan_problems(folder_id);
+"""
+
 # Схема для чистой установки: всегда последняя версия
-SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA + ANNOTATIONS_SCHEMA + CELLULARITY_SCHEMA
+SCHEMA += UPLOADS_SCHEMA + GROUPS_SCHEMA + ANNOTATIONS_SCHEMA + CELLULARITY_SCHEMA + LIBRARY_SCHEMA
 
 
 def _seed_groups(conn: sqlite3.Connection) -> None:
@@ -459,6 +481,11 @@ class Database:
                         if "method" not in columns:
                             conn.execute("ALTER TABLE cellularity_runs ADD COLUMN method TEXT NOT NULL DEFAULT 'marrowquant'")
                         version = 8
+                    if version == 8:
+                        conn.execute("ALTER TABLE folders ADD COLUMN source_path TEXT")
+                        conn.execute("ALTER TABLE slides ADD COLUMN fingerprint TEXT")
+                        _run_statements(conn, LIBRARY_SCHEMA)
+                        version = 9
                 conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:

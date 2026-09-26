@@ -12,6 +12,7 @@ let user = null;
 let folders = [];
 let slides = [];
 let space = null;
+let problems = [];  // программа: файлы, которые не открылись (НП-17)
 let currentFolder = null; // null означает «все папки»
 const expanded = new Set();
 
@@ -26,7 +27,10 @@ async function main() {
   $('btnProfile').addEventListener('click', changePassword);
   $('search').addEventListener('input', renderSlides);
 
-  if (user.role === 'admin') {
+  if (user.role === 'admin' && isDesktop) {
+    for (const id of ['linkJournal', 'linkSettings', 'btnAddFolder', 'btnRefresh']) $(id).hidden = false;
+    setUpDesktop();
+  } else if (user.role === 'admin') {
     for (const id of ['linkUsers', 'linkJournal', 'linkSettings', 'btnNewFolder', 'btnUpload', 'btnAccess']) $(id).hidden = false;
     setUpAdmin();
   }
@@ -40,7 +44,7 @@ async function main() {
     renderSlides();
   }
   // После каталога: прерванным загрузкам нужны названия папок
-  if (user.role === 'admin') await loadPending();
+  if (user.role === 'admin' && !isDesktop) await loadPending();
 }
 
 // silent: обновление в фоне, после загрузки скана. Надпись «Загрузка…» в этом
@@ -52,6 +56,7 @@ async function load({ silent = false } = {}) {
     folders = data.folders;
     slides = data.slides;
     space = data.space;
+    problems = data.problems ?? [];
     if (currentFolder !== null && !folders.some((f) => f.id === currentFolder)) currentFolder = null;
     renderTree();
     renderSlides();
@@ -82,7 +87,7 @@ function renderTree() {
   root.append(folderRow({ id: null, name: t('catalog.root') }, 0));
   const list = [root, ...childrenOf(null).flatMap((folder) => branch(folder, 1))];
   $('tree').replaceChildren(...list);
-  if (user.role === 'admin') updateFolderButtons();
+  if (user.role === 'admin' && !isDesktop) updateFolderButtons();
 }
 
 // В корне («Все папки») загружать и настраивать доступ некуда: кнопки
@@ -126,18 +131,22 @@ function folderRow(folder, depth) {
   name.className = 'tree-name';
   name.type = 'button';
   name.textContent = folder.name;
+  if (folder.path) name.title = folder.path;  // программа: папка на диске
   name.addEventListener('click', () => {
     currentFolder = folder.id;
     if (folder.id !== null) expanded.add(folder.id);
     renderTree();
     renderSlides();
+    // Программа сверяет папку с диском при открытии (НП-14); сервер не чаще раза в 10 с
+    if (isDesktop && folder.id !== null && user.role === 'admin') syncFolder(folder.id);
   });
 
   row.append(toggle, name);
-  if (user.role === 'admin' && folder.id !== null) {
-    // В программе один пользователь, доступ не настраивается (НП-3)
-    if (!isDesktop) row.append(accessBadge(folder));
-    row.append(folderActions(folder));
+  if (user.role === 'admin' && folder.id !== null && isDesktop) {
+    // В программе дерево повторяет диск: меню есть только у добавленной папки (НП-12)
+    if (folder.is_source) row.append(folderActions(folder));
+  } else if (user.role === 'admin' && folder.id !== null) {
+    row.append(accessBadge(folder), folderActions(folder));
   }
   return row;
 }
@@ -173,12 +182,19 @@ function toggleFolderMenu(folder, anchor) {
     });
     return button;
   };
-  menu.append(
-    item(t('catalog.rename'), () => renameFolder(folder)),
-    item(t('catalog.moveFolder'), () => moveFolder(folder)),
-    ...(isDesktop ? [] : [item(t('catalog.access'), () => editAccess({ folder }))]),
-    item(t('catalog.deleteFolder'), () => deleteFolder(folder), 'is-danger'),
-  );
+  if (isDesktop) {
+    menu.append(
+      item(t('catalog.refresh'), () => refreshFolders(folder.id)),
+      item(t('library.disconnect'), () => disconnectFolder(folder), 'is-danger'),
+    );
+  } else {
+    menu.append(
+      item(t('catalog.rename'), () => renameFolder(folder)),
+      item(t('catalog.moveFolder'), () => moveFolder(folder)),
+      item(t('catalog.access'), () => editAccess({ folder })),
+      item(t('catalog.deleteFolder'), () => deleteFolder(folder), 'is-danger'),
+    );
+  }
   anchor.append(menu);
   anchor.querySelector('.icon-btn').setAttribute('aria-expanded', 'true');
   menu.querySelector('.btn').focus();
@@ -280,15 +296,17 @@ function renderSlides() {
   // миниатюры перезапрашиваются и заметно мигают при каждом обновлении.
   // Путь показывается там, где папка не очевидна: в корне и в поиске (ИН-2)
   const showPath = currentFolder === null || Boolean($('search').value.trim());
-  const signature = `${showPath}|${list.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}`).join('|')}`;
+  const signature = `${showPath}|${list.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}:${slide.missing ?? ''}`).join('|')}`;
   if (signature !== shownSignature) {
     shownSignature = signature;
     $('grid').replaceChildren(...list.map((slide) => card(slide, showPath)));
   }
   renderCrumbs();
   renderClosedNote();
+  renderProblems();
   if (list.length) setNote('');
   else if ($('search').value.trim()) setNote(t('catalog.nothingFound'));
+  else if (!slides.length && isDesktop) setNote(t('catalog.emptyDesktop'));
   else if (!slides.length) setNote(user.role === 'admin' ? t('catalog.emptyAdmin') : t('catalog.empty'));
   else setNote(t('catalog.emptyFolder'));
 }
@@ -311,6 +329,21 @@ function renderClosedNote() {
     && effectiveMode(currentFolder) === 'admins'
     && slides.some((slide) => descendants(currentFolder).has(slide.folder_id));
   note.hidden = !show;
+}
+
+// Программа: файлы, которые не открылись, видны с причиной — в открытой папке и глубже (НП-17)
+function renderProblems() {
+  const box = $('problemBox');
+  if (!box) return;
+  const inView = currentFolder === null ? problems : problems.filter((p) => descendants(currentFolder).has(p.folder_id));
+  box.hidden = !inView.length;
+  $('problems').replaceChildren(...inView.map((problem) => {
+    const item = document.createElement('li');
+    const where = pathOf(problem.folder_id).map((folder) => folder.name).join(' › ');
+    item.textContent = problem.name ? `${problem.name} — ${problem.reason}` : problem.reason;
+    item.title = where;
+    return item;
+  }));
 }
 
 function renderCrumbs() {
@@ -353,9 +386,15 @@ function card(slide, showPath = false) {
   const item = document.createElement('li');
   item.className = 'slide-item';
 
-  const link = document.createElement('a');
+  // Пропавший файл (программа, НП-14): карточка остаётся, но не открывается
+  const link = document.createElement(slide.missing ? 'div' : 'a');
   link.className = 'slide-card';
-  link.href = `/viewer?slide=${encodeURIComponent(slide.id)}`;
+  if (slide.missing) {
+    item.classList.add('is-missing');
+    link.title = t('catalog.missing.tip');
+  } else {
+    link.href = `/viewer?slide=${encodeURIComponent(slide.id)}`;
+  }
 
   const image = document.createElement('img');
   image.src = `/api/slides/${encodeURIComponent(slide.id)}/thumbnail.jpg`;
@@ -374,7 +413,9 @@ function card(slide, showPath = false) {
   const scan = [slide.format, objective].filter(Boolean).join(' ');
   const added = slide.added_at ? t('catalog.addedAt', { date: formatDateTime(slide.added_at).split(',')[0] }) : '';
   const size = slide.size_bytes ? sizeText(slide.size_bytes) : '';
-  details.textContent = [stainShort(slide), scan, added, size].filter(Boolean).join(' · ');
+  details.textContent = slide.missing
+    ? t('catalog.missing')
+    : [stainShort(slide), scan, added, size].filter(Boolean).join(' · ');
   if (slide.stain) details.title = stainFull(slide);
 
   link.append(image, title);
@@ -393,9 +434,14 @@ function card(slide, showPath = false) {
 function slideMenu(slide) {
   const menu = document.createElement('div');
   menu.className = 'slide-actions';
+  if (isDesktop) {
+    // Файлы пользователя программа не переносит и не удаляет (НП-13)
+    menu.append(actionButton(t('catalog.edit'), () => editSlide(slide)));
+    return menu;
+  }
   menu.append(
     actionButton(t('catalog.edit'), () => editSlide(slide)),
-    ...(isDesktop ? [] : [actionButton(t('catalog.access'), () => editAccess({ slide }))]),
+    actionButton(t('catalog.access'), () => editAccess({ slide })),
     actionButton(t('catalog.move'), () => moveSlide(slide)),
     actionButton(t('common.delete'), () => removeSlide(slide), 'is-danger'),
   );
@@ -426,6 +472,94 @@ function renderSpace() {
     ? t('catalog.spaceLow', { free })
     : t('catalog.space', { free, total: sizeText(space.total_bytes) });
   node.classList.toggle('is-warning', low);
+}
+
+// ---------- программа: папки со сканами на компьютере ----------
+
+function setUpDesktop() {
+  $('btnAddFolder').addEventListener('click', addFolder);
+  $('btnRefresh').addEventListener('click', () => refreshFolders(null));
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest('.tree-actions')) closeFolderMenu();
+  });
+}
+
+// Окно выбора папки даёт программа (pywebview); без неё — путь вручную
+async function addFolder() {
+  const connect = (path) => {
+    setNote(t('library.refreshing'));
+    return api('/api/library/sources', { method: 'POST', body: { path } });
+  };
+  let done = null;
+  const native = window.pywebview?.api?.pick_folder;
+  if (native) {
+    const path = await native();
+    if (!path) return;
+    try {
+      done = await connect(path);
+    } catch (error) {
+      setNote(error.message, true);
+      return;
+    }
+  } else {
+    done = await formDialog({
+      title: t('library.addTitle'),
+      submitLabel: t('catalog.addFolder'),
+      fields: [{ name: 'path', label: t('library.pathLabel'), hint: t('library.pathHint'), required: true }],
+      onSubmit: (data) => connect(data.path),
+    });
+  }
+  if (!done) return;
+  currentFolder = done.id;
+  expanded.add(done.id);
+  await load();
+}
+
+async function refreshFolders(folderId) {
+  $('btnRefresh').disabled = true;
+  setNote(t('library.refreshing'));
+  try {
+    const result = await api('/api/library/sync', { method: 'POST', body: { folder_id: folderId } });
+    await load({ silent: true });
+    reportSync(result);
+  } catch (error) {
+    setNote(error.message, true);
+  }
+  $('btnRefresh').disabled = false;
+}
+
+async function syncFolder(folderId) {
+  try {
+    const result = await api('/api/library/sync', { method: 'POST', body: { folder_id: folderId } });
+    if (result.skipped) return;
+    await load({ silent: true });
+    if (result.unavailable) setNote(t('library.unavailable'), true);
+  } catch {
+    // сверка в фоне: каталог уже показан, ошибку увидят по кнопке «Обновить»
+  }
+}
+
+function reportSync(result) {
+  if (result.unavailable) {
+    setNote(t('library.unavailable'), true);
+    return;
+  }
+  setNote(t('library.refreshed', {
+    added: result.added ?? 0, relinked: result.relinked ?? 0,
+    missing: result.missing ?? 0, problems: result.problems ?? 0,
+  }), Boolean(result.missing || result.problems));
+}
+
+async function disconnectFolder(folder) {
+  const ok = await confirmDialog({
+    title: t('library.disconnectTitle', { folder: folder.name }),
+    text: t('library.disconnectText'),
+    submitLabel: t('library.disconnect'),
+  });
+  if (!ok) return;
+  await api(`/api/library/sources/${folder.id}`, { method: 'DELETE' });
+  currentFolder = null;
+  await load();
 }
 
 // ---------- действия администратора ----------

@@ -300,15 +300,16 @@ python -m venv .venv
 .venv\Scripts\python.exe -X utf8 tests\smoke_test.py
 .venv\Scripts\python.exe -X utf8 tests\cellularity_test.py
 .venv\Scripts\python.exe -X utf8 tests\desktop_test.py
+.venv\Scripts\python.exe -X utf8 tests\library_test.py
 ```
 
-`desktop_test.py` — настольный режим (`desktop: true`), см. ниже.
+`desktop_test.py` и `library_test.py` — настольная программа (`desktop: true`), см. ниже.
 
 ## Настольная программа (начата 2026-09-26)
 
 ТЗ — [docs/TOR-desktop.md](docs/TOR-desktop.md), редакция 3: решения заказчика в разделе 0, этапы и приёмка в разделе 11. Кратко: тот же код в окне `pywebview` на одном компьютере, без входа по паролю; сканы открываются прямо из папок, которые выбирает пользователь, без копирования и переименования; KFB — через 64-битную `ImageOperationLib.dll` из установленной у заказчика программы KFBIO **KFSlideOS** (`%LOCALAPPDATA%\Programs\KFSlideOS\resources\server\backend`), в сборку не входит. Название — HemCenterHistoDigital; имя и папку KFSlideOS не занимать. `C:\Program Files (x86)\kfbio\K-Viewer` — там библиотека 32-битная 2016 года, не годится. Подписи кода нет (решение заказчика). macOS отложена: нет Mac.
 
-Этап 1 сделан 2026-09-26: `server/desktop.py`, настройка `desktop: true`, вход `/desktop/enter?key=…` одноразовым ключом из `app.state.launch_keys`, `<html data-desktop>` и классы `no-desktop` / `only-desktop`, `isDesktop` в `api.js`. Стенд настольного режима: сценарий в папке сессии с `config.yaml` (`desktop: true`), наполнение через `TestClient(app, base_url="http://127.0.0.1")` — другой Host отклоняется; сервер пишет ключ в файл, окно открывается на `http://127.0.0.1:<порт>/desktop/enter?key=…` (в `launch.json` — `"url": "http://127.0.0.1:<порт>"`, не `localhost`). **Данные стенда класть в короткий путь** (`%LOCALAPPDATA%\Temp\hcd-stand`): из папки сессии путь к кэшу тайлов длиннее 260 знаков, и Windows отказывает в записи.
+Этап 1 сделан 2026-09-26: `server/desktop.py`, настройка `desktop: true`, вход `/desktop/enter?key=…` одноразовым ключом из `app.state.launch_keys`, `<html data-desktop>` и классы `no-desktop` / `only-desktop`, `isDesktop` в `api.js`. Стенд настольного режима: сценарий в папке сессии с `config.yaml` (`desktop: true`), наполнение через `TestClient(app, base_url="http://127.0.0.1")` — другой Host отклоняется; сервер пишет ключ в файл, окно открывается на `http://127.0.0.1:<порт>/desktop/enter?key=…` (в `launch.json` — `"url": "http://127.0.0.1:<порт>"`, не `localhost`). Этап 2 сделан 2026-09-26: `server/library.py` (подключённые папки, сверка с диском, отпечаток), `InPlaceStorage` (тип `in_place`, в программе по умолчанию; ключ — полный путь, удаление ничего не делает с диском), схема 9. В программе маршруты создания и удаления папок, переноса и удаления сканов, загрузки отвечают 404 (`web_only()` в `main.py`). **Тест переноса базы строит «старую» базу из текущей схемы — у новых колонок и таблиц сначала удалять индексы, потом `DROP COLUMN`.** **Данные стенда класть в короткий путь** (`%LOCALAPPDATA%\Temp\hcd-stand`): из папки сессии путь к кэшу тайлов длиннее 260 знаков, и Windows отказывает в записи.
 
 Тест прав обязателен после любых правок `access.py`, `catalog.py` и маршрутов: он проверяет, что чужой скан не отдаётся ни сведениями, ни тайлом, ни миниатюрой, ни этикеткой.
 

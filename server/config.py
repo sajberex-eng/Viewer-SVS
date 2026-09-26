@@ -98,8 +98,13 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
     if not data_dir.is_absolute():
         data_dir = BASE_DIR / data_dir
 
+    desktop = bool(raw.get("desktop", False))
+    storage_raw = dict(raw.get("storage") or {})
+    if desktop:
+        storage_raw.setdefault("type", "in_place")  # программа открывает сканы на месте (НП-12)
+
     return Settings(
-        storage=_section(StorageConfig, raw, "storage"),
+        storage=_section(StorageConfig, {"storage": storage_raw}, "storage"),
         tiles=_section(TileConfig, raw, "tiles"),
         cache=_section(CacheConfig, raw, "cache"),
         auth=_section(AuthConfig, raw, "auth"),
@@ -107,7 +112,7 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
         data_dir=data_dir,
         check_minutes=int(raw.get("check_minutes", 30)),
         open_slides=int(raw.get("open_slides", 4)),
-        desktop=bool(raw.get("desktop", False)),
+        desktop=desktop,
     )
 
 

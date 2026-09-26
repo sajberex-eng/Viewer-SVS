@@ -1122,3 +1122,12 @@ input[type="range"] { accent-color: var(--accent); }
    скрипты показывают эти элементы снятием hidden по роли администратора. */
 [data-desktop] .no-desktop { display: none !important; }
 html:not([data-desktop]) .only-desktop { display: none !important; }
+
+/* Программа: пропавший файл — карточка бледная и не открывается (НП-14);
+   файлы, которые не открылись, списком под сканами (НП-17) */
+.slide-item.is-missing .slide-card { opacity: 0.55; cursor: default; }
+.slide-item.is-missing .slide-card img { filter: grayscale(1); }
+.slide-item.is-missing .slide-card .muted { color: var(--danger); }
+.problem-box { margin-top: 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.problem-box h3 { margin: 0 0 6px; font-size: 13px; color: var(--danger); }
+.problem-list { margin: 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12px; overflow-wrap: anywhere; }
