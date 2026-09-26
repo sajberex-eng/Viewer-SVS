@@ -15,6 +15,7 @@ from __future__ import annotations
 import ctypes
 import io
 import logging
+import sys
 import threading
 
 from PIL import Image
@@ -119,3 +120,9 @@ class KfbFile:
 
     def __exit__(self, *exc) -> None:
         self.close()
+
+
+if sys.platform == "win32":
+    # Windows (настольная программа): ASlide там нет, KFB читает своя обёртка над
+    # библиотекой KFBio из установленной KFSlideOS (docs/TOR-desktop.md, раздел 7)
+    from .kfb_win import AVAILABLE, KfbFile, unavailable_reason  # noqa: F401, E402

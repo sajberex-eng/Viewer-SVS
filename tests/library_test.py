@@ -81,6 +81,9 @@ def main() -> None:
     build_svs(SCANS / "Случай 1" / "Окраски" / "Ki-67.svs", size=1024, objective=40)
     build_svs(SCANS / "Отдельный.svs", size=768, objective=20)
     (SCANS / "Случай 1" / "Повреждённый.svs").write_bytes(os.urandom(4096))
+    # KFB: с KFSlideOS библиотека KFBio отклоняет файл, без неё — «нужна KFSlideOS»;
+    # в обоих случаях файл виден с причиной, а программа не падает (НП-17, НП-20)
+    (SCANS / "Случай 1" / "Сломанный.kfb").write_bytes(os.urandom(100_000))
     (SCANS / "Случай 1" / "заметки.txt").write_text("не скан", encoding="utf-8")
     disk_before = state_of_files(WORK_DIR / "Сканы пациентов")
 
@@ -103,9 +106,13 @@ def main() -> None:
         check("окраска распознана по имени файла", titles["Биопсия HE"]["stain"] == "HE", str(titles["Биопсия HE"]["stain"]))
         check("увеличение прочитано из файла", titles["Ki-67"]["objective"] == 40)
         problems = data["problems"]
+        reasons = {p["name"]: p["reason"] for p in problems}
         check("повреждённый файл виден с причиной, в сканы не попал (НП-17)",
-              [p["name"] for p in problems] == ["Повреждённый.svs"] and "не распознан" in problems[0]["reason"],
+              set(reasons) == {"Повреждённый.svs", "Сломанный.kfb"} and "не распознан" in reasons["Повреждённый.svs"],
               str(problems))
+        check("повреждённый KFB — с причиной от KFBio или «нужна KFSlideOS»",
+              "KFBio" in reasons.get("Сломанный.kfb", "") or "KFSlideOS" in reasons.get("Сломанный.kfb", ""),
+              reasons.get("Сломанный.kfb", ""))
         check("файлы не-сканы не видны", all("заметки" not in s["title"] for s in data["slides"]))
 
         he = titles["Биопсия HE"]
