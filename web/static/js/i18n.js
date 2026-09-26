@@ -413,6 +413,7 @@ const STRINGS = {
     'cell.row.other_pct': 'Прочее, % пространства',
     'cell.row.adipocytes': 'Жировых клеток',
     'cell.masks': 'Показывать маски',
+    'cell.contours.show': 'Показывать контуры',
     'cell.opacity': 'Прозрачность',
     'cell.part.bone': 'кость',
     'cell.part.hemato': 'кроветворная',

@@ -29,6 +29,7 @@ export class AnnotationLayer {
     this.viewer = view.viewer;
     this.items = [];
     this.visible = true;
+    this.contoursVisible = true;  // контуры клеточности («Ткань», «Артефакт») выключаются отдельно от остальных пометок
     this.tool = null;      // null | 'point' | 'polygon' | 'tissue' | 'artifact'
     this.draft = [];       // вершины начатого контура, в координатах скана
     this.selectedId = null;
@@ -80,8 +81,20 @@ export class AnnotationLayer {
     if (!visible) this.hideTip();
   }
 
+  // Контуры клеточности можно спрятать, не трогая пометки для обучения. Пока выбран
+  // инструмент «Ткань» или «Артефакт», они видны в любом случае: иначе рисуешь вслепую.
+  setContoursVisible(visible) {
+    this.contoursVisible = visible;
+    this.#applyContoursVisibility();
+  }
+
+  #applyContoursVisibility() {
+    this.svg.classList.toggle('is-contours-hidden', !this.contoursVisible && !CONTOUR_KINDS.includes(this.tool));
+  }
+
   setTool(tool) {
     this.tool = tool;
+    this.#applyContoursVisibility();
     this.draft = [];
     this.view.parts.stage.classList.toggle('is-marking', Boolean(tool));
     this.render();

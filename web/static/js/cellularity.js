@@ -27,6 +27,7 @@ export function initCellularity(host) {
   //       focusAnnotation, removeAnnotation, showNote
   const panel = $('cellPanel');
   let masksShown = localStorage.getItem('viewer.cellMasks') !== 'off';
+  let contoursShown = localStorage.getItem('viewer.cellContours') !== 'off';
   let opacity = Number(localStorage.getItem('viewer.cellOpacity') ?? 0.6);
   if (!(opacity >= 0 && opacity <= 1)) opacity = 0.6;
 
@@ -54,6 +55,14 @@ export function initCellularity(host) {
   $('cellAiRun').addEventListener('click', () => start('ai'));
   $('cellAiCancel').addEventListener('click', () => cancel('ai'));
   $('cellAiDelete').addEventListener('click', () => remove('ai'));
+  // Контуры «Ткань» и «Артефакт» выключаются так же, как маски; выбор запоминается в браузере
+  const setContoursShown = (shown) => {
+    contoursShown = shown;
+    localStorage.setItem('viewer.cellContours', shown ? 'on' : 'off');
+    $('cellContours').checked = shown;
+    for (const pane of host.getPanes()) pane.annotations?.setContoursVisible(shown);
+  };
+  $('cellContours').addEventListener('change', () => setContoursShown($('cellContours').checked));
   $('cellMasks').addEventListener('change', () => {
     masksShown = $('cellMasks').checked;
     localStorage.setItem('viewer.cellMasks', masksShown ? 'on' : 'off');
@@ -173,6 +182,8 @@ export function initCellularity(host) {
     $('cellToolTissue').classList.toggle('is-active', host.activeTool() === 'tissue');
     $('cellToolArtifact').classList.toggle('is-active', host.activeTool() === 'artifact');
     renderContours(pane, canEdit);
+    $('cellContoursRow').hidden = !contours(pane).length;   // переключатель нужен, только когда есть что прятать
+    $('cellContours').checked = contoursShown;
     renderRun(status, canEdit);
     renderAi(status, canEdit);
     $('cellExport').hidden = !(status && host.isAdmin());
@@ -311,6 +322,7 @@ export function initCellularity(host) {
       meta.textContent = item.comment || `${item.author}, ${formatDateTime(item.created_at)}`;
       row.append(text, meta);
       row.addEventListener('click', () => {
+        if (!contoursShown) setContoursShown(true);   // перейти к спрятанному контуру нельзя, не показав его
         pane.annotations.select(item.id);
         host.focusAnnotation(item);
       });
@@ -527,6 +539,7 @@ export function initCellularity(host) {
     try {
       const created = await api(`/api/slides/${encodeURIComponent(pane.slide.id)}/cellularity/propose`, { method: 'POST' });
       host.showNote(t('cell.propose.done', { n: created.length }), { error: false });
+      if (created.length && !contoursShown) setContoursShown(true);   // найденное сразу видно
     } catch (error) {
       host.showNote(error.message);
     } finally {
@@ -540,6 +553,7 @@ export function initCellularity(host) {
     // половина создана: сведения о расчёте нужны сразу — маски видят все (КЛ-9)
     onPaneAdded(pane) {
       pane.cell = { status: null, maskItem: null, maskRunId: null, timer: null };
+      pane.annotations?.setContoursVisible(contoursShown);
       load(pane);
     },
     onPaneRemoved(pane) {

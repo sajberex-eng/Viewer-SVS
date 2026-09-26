@@ -379,6 +379,8 @@ input[type="range"] { accent-color: var(--accent); }
   overflow: visible;
 }
 .annot-layer.is-hidden { display: none; }
+.annot-layer.is-contours-hidden .is-tissue,
+.annot-layer.is-contours-hidden .is-artifact { display: none; }
 .annot-layer .annot-line {
   fill: none;
   stroke: var(--annot-color);
