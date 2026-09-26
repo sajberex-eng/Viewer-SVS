@@ -11,6 +11,10 @@ const FIXED_MAGNIFICATIONS = [4, 10, 20, 40];
 const MAX_DIGITAL_ZOOM = 2; // зум не дальше 2× от увеличения сканирования (Н-2)
 const SCALEBAR_MAX_PX = 180;
 const ZOOM_STEP = 1.3;
+// Щипок по тачпаду: шаг колеса ограничен, чтобы одно движение пальцев не давало скачка,
+// а чувствительность подобрана так, что полный щипок даёт примерно то же, что и мышью
+const PINCH_MAX_DELTA = 20;
+const PINCH_SENSITIVITY = 0.012;
 
 const { Point } = OpenSeadragon;
 
@@ -49,6 +53,7 @@ export class SlideView {
     this.parts.paneClose.addEventListener('click', () => onClose(this));
 
     this.viewer = this.#createViewer();
+    this.#initTrackpadZoom();
     // Размер области просмотра запомнен при создании половины, а экран мог
     // с тех пор разделиться (ссылка на два скана): «вписать» считается заново.
     // Обработчик добавлен первым и срабатывает раньше восстановления вида из ссылки.
@@ -118,6 +123,56 @@ export class SlideView {
       viewer.addHandler(event, () => this.onViewChange?.(this));
     }
     return viewer;
+  }
+
+  // Щипок двумя пальцами по тачпаду (макбук). Chrome, Edge и Firefox присылают его как
+  // колесо с нажатым Ctrl и любым размером шага, а OpenSeadragon читает у колеса только
+  // знак: зум идёт грубыми ступенями по 1,3× на каждое событие, а в Safari щипок приходит
+  // событиями жеста, на которые библиотека лишь отменяет действие браузера, и зума нет
+  // вообще. Поэтому щипок обрабатываем сами, плавно, вокруг точки под пальцами; обычное
+  // колесо мыши (без Ctrl) остаётся у библиотеки.
+  #initTrackpadZoom() {
+    const { stage, navigator } = this.parts;
+    const viewer = this.viewer;
+    const anchor = (event) => {
+      // Точка под пальцами в пикселях области просмотра; над мини-картой — центр препарата
+      const box = viewer.element.getBoundingClientRect();
+      const inside = event.clientX >= box.left && event.clientX <= box.right
+        && event.clientY >= box.top && event.clientY <= box.bottom && !navigator?.contains(event.target);
+      const pixel = inside ? new Point(event.clientX - box.left, event.clientY - box.top)
+        : new Point(box.width / 2, box.height / 2);
+      return viewer.viewport.pointFromPixel(pixel, true);
+    };
+
+    stage.addEventListener('wheel', (event) => {
+      if (!event.ctrlKey || !viewer.isOpen()) return;   // без Ctrl — колесо мыши, как раньше
+      event.preventDefault();       // иначе браузер масштабирует всю страницу
+      event.stopPropagation();      // и библиотека не делает свой грубый шаг
+      const lines = event.deltaMode === 1 ? 16 : 1;
+      const delta = Math.max(-PINCH_MAX_DELTA, Math.min(PINCH_MAX_DELTA, event.deltaY * lines));
+      viewer.viewport.zoomBy(Math.exp(-delta * PINCH_SENSITIVITY), anchor(event), false);
+      viewer.viewport.applyConstraints();
+    }, { capture: true, passive: false });
+
+    // Safari: жест приходит как gesturestart / gesturechange со масштабом относительно начала
+    let startZoom = null;
+    stage.addEventListener('gesturestart', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startZoom = viewer.isOpen() ? viewer.viewport.getZoom() : null;
+    }, { capture: true, passive: false });
+    stage.addEventListener('gesturechange', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (startZoom === null || !viewer.isOpen() || !(event.scale > 0)) return;
+      viewer.viewport.zoomTo(startZoom * event.scale, anchor(event), true);
+      viewer.viewport.applyConstraints(true);
+    }, { capture: true, passive: false });
+    stage.addEventListener('gestureend', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startZoom = null;
+    }, { capture: true, passive: false });
   }
 
   // Изображение скана в мире OpenSeadragon. Пересчёт координат и увеличения идёт
