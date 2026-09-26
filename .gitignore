@@ -4,3 +4,6 @@ __pycache__/
 data/
 config.yaml
 .env
+
+# Сборка настольной программы (desktop/app.spec)
+build/

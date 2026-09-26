@@ -1,0 +1,4 @@
+# Настольная программа (desktop/, docs/TOR-desktop.md): окно и сборка
+-r requirements.txt
+pywebview>=6.2,<7
+pyinstaller>=6.10
