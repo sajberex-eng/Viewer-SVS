@@ -12,10 +12,11 @@
     <img class="topbar-logo" src="/static/img/logo.svg" alt="">
     <h1 class="topbar-title" data-i18n="app.title"></h1>
     <nav class="topbar-actions">
-      <a class="btn" id="linkUsers" href="/admin" hidden data-i18n="catalog.users"></a>
+      <a class="btn no-desktop" id="linkUsers" href="/admin" hidden data-i18n="catalog.users"></a>
       <a class="btn" id="linkJournal" href="/admin#journal" hidden data-i18n="catalog.journal"></a>
+      <a class="btn only-desktop" id="linkSettings" href="/admin#settings" hidden data-i18n="catalog.settings"></a>
     </nav>
-    <div class="topbar-user">
+    <div class="topbar-user no-desktop">
       <span id="userName"></span>
       <button class="btn" id="btnProfile" data-i18n="common.profile"></button>
       <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
@@ -40,14 +41,14 @@
       <div class="catalog-toolbar">
         <nav class="crumbs" id="crumbs" aria-label="Путь"></nav>
         <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search">
-        <button class="btn" id="btnAccess" hidden data-i18n="catalog.access" data-i18n-tip="catalog.access.tip"></button>
+        <button class="btn no-desktop" id="btnAccess" hidden data-i18n="catalog.access" data-i18n-tip="catalog.access.tip"></button>
         <button class="btn btn-primary" id="btnUpload" hidden data-i18n="catalog.upload" data-i18n-tip="catalog.upload.tip"></button>
         <input type="file" id="fileInput" multiple hidden>
       </div>
       <p class="catalog-note" id="note" aria-live="polite"></p>
       <!-- Папка закрыта для пользователей: без этой строки администратор не
            узнает, что загруженные сканы никто, кроме него, не видит (ИН-8) -->
-      <div class="closed-note" id="closedNote" hidden>
+      <div class="closed-note no-desktop" id="closedNote" hidden>
         <span data-i18n="catalog.closedNote"></span>
         <button class="btn" id="btnOpenAccess" data-i18n="catalog.openAccess"></button>
       </div>

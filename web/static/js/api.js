@@ -1,5 +1,9 @@
 import { t } from './i18n.js';
 
+// Настольная программа (docs/TOR-desktop.md): сервер ставит отметку на страницу.
+// Один пользователь — нет входа, выхода, доступа и ссылок для пересылки (НП-3, НП-4).
+export const isDesktop = document.documentElement.hasAttribute('data-desktop');
+
 export class ApiError extends Error {
   constructor(status, message) {
     super(message);

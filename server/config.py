@@ -60,6 +60,7 @@ class Settings:
     data_dir: Path = BASE_DIR / "data"
     check_minutes: int = 30
     open_slides: int = 4
+    desktop: bool = False  # настольная программа: один пользователь, вход ключом запуска (docs/TOR-desktop.md)
 
     @property
     def db_path(self) -> Path:
@@ -106,6 +107,7 @@ def load_settings(path: str | os.PathLike | None = None) -> Settings:
         data_dir=data_dir,
         check_minutes=int(raw.get("check_minutes", 30)),
         open_slides=int(raw.get("open_slides", 4)),
+        desktop=bool(raw.get("desktop", False)),
     )
 
 

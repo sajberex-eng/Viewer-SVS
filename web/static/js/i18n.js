@@ -59,6 +59,9 @@ const STRINGS = {
     'catalog.spaceLow': 'Мало места: свободно {free}. Удалите ненужные сканы.',
     'catalog.users': 'Пользователи',
     'catalog.journal': 'Журнал',
+    'catalog.settings': 'Настройки',
+    'desktop.closed.heading': 'Сеанс завершён',
+    'desktop.closed.text': 'Закройте это окно и запустите программу HemCenterHistoDigital снова.',
     'catalog.edit': 'Изменить',
     'catalog.move': 'Переместить',
 

@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import annotations as annotationsvc
 from . import audit
@@ -40,6 +41,7 @@ from .catalog import Catalog, CatalogError, slide_title
 from .cellularity_runs import CellularityError, CellularityService
 from .config import BASE_DIR, load_secret_key, load_settings
 from .db import Database, utc_iso
+from .desktop import LOCAL_LOGIN, LaunchKeys, ensure_local_admin
 from .perms import PermissionCache
 from .slides import LABEL_IMAGE, SlidePool, render_thumbnail, thumbnail_path
 from .storage import StorageUnavailable, create_storage
@@ -218,14 +220,24 @@ def create_app() -> FastAPI:
     app.state.perms = perms
     app.state.warmer = warmer
     app.state.cellularity = cellularity  # для тестов фонового расчёта
+    app.state.desktop = settings.desktop
+    launch_keys = LaunchKeys()
+    app.state.launch_keys = launch_keys  # ключ выдаёт программа при запуске (desktop/launcher.py)
+    if settings.desktop:
+        ensure_local_admin(db)
     app.add_middleware(
         SessionMiddleware,
         secret_key=load_secret_key(settings),
         session_cookie="viewer_session",
-        max_age=settings.auth.session_hours * 3600,
+        # В программе сессия живёт до закрытия окна (НП-11)
+        max_age=None if settings.desktop else settings.auth.session_hours * 3600,
         same_site="lax",
         https_only=settings.auth.https_only,
     )
+    if settings.desktop:
+        # Только 127.0.0.1: страница чужого сайта с подменой DNS на наш адрес
+        # приходит с другим Host и получает отказ (НП-10)
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1"])
 
     @app.middleware("http")
     async def drop_permission_cache(request: Request, call_next):
@@ -344,6 +356,9 @@ def create_app() -> FastAPI:
     def page(name: str) -> Response:
         html = (WEB_DIR / "pages" / name).read_text(encoding="utf-8")
         html = STATIC_LINK.sub(lambda match: f"{match.group(1)}?v={assets_version}", html)
+        if settings.desktop:
+            # Отметка для стилей и скриптов: прятать вход, доступ и ссылки (НП-3, НП-4)
+            html = html.replace("<html ", "<html data-desktop ", 1)
         return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     def protected_page(request: Request, name: str):
@@ -354,7 +369,20 @@ def create_app() -> FastAPI:
 
     @app.get("/login")
     def login_page():
-        return page("login.html")
+        # В программе входа по паролю нет: без сессии остаётся только запустить её заново
+        return page("desktop-closed.html" if settings.desktop else "login.html")
+
+    @app.get("/desktop/enter")
+    def desktop_enter(request: Request, key: str = ""):
+        """Вход по одноразовому ключу запуска (НП-9)."""
+        if not settings.desktop or not launch_keys.consume(key):
+            raise HTTPException(404)
+        user = db.query_one("SELECT * FROM users WHERE login = ?", (LOCAL_LOGIN,)) or ensure_local_admin(db)
+        perms.invalidate()
+        start_session(request, user)
+        db.execute("UPDATE users SET last_login_at = CURRENT_TIMESTAMP WHERE id = ?", (user["id"],))
+        audit.log(db, request, audit.LOGIN_OK, user=user)
+        return RedirectResponse("/", status_code=303)
 
     @app.get("/favicon.ico")
     def favicon():
@@ -388,6 +416,8 @@ def create_app() -> FastAPI:
 
     @app.post("/api/login")
     def login(body: LoginRequest, request: Request):
+        if settings.desktop:
+            raise HTTPException(404)  # в программе вход только ключом запуска
         login_name = body.login.strip()
         key = f"{login_name.lower()}|{audit.client_ip(request)}"
         if throttle.blocked(key):
@@ -418,10 +448,12 @@ def create_app() -> FastAPI:
 
     @app.get("/api/me")
     def me(user=Depends(require_user)):
-        return {"login": user["login"], "role": user["role"], "name": user["name"]}
+        return {"login": user["login"], "role": user["role"], "name": user["name"], "desktop": settings.desktop}
 
     @app.post("/api/password")
     def change_password(body: PasswordRequest, request: Request, user=Depends(require_user)):
+        if settings.desktop:
+            raise HTTPException(404)  # пароля у учётной записи программы нет
         if not verify_password(body.current_password, user["password_hash"]):
             raise HTTPException(400, "Текущий пароль указан неверно")
         try:

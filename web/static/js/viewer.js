@@ -4,7 +4,7 @@
 import { isDefault } from './adjust.js';
 import { AdjustPanel } from './adjust-panel.js';
 import { AnnotationLayer } from './annotations.js';
-import { api, logout } from './api.js';
+import { api, isDesktop, logout } from './api.js';
 import { initCellularity, isContour } from './cellularity.js';
 import { chooseDialog, confirmDialog, formDialog, infoDialog } from './dialog.js';
 import { applyIcons } from './icons.js';
@@ -632,7 +632,7 @@ function initTopbar() {
   const button = $('btnLink');
   const popover = $('linkPopover');
   const refresh = () => { $('linkUrl').value = buildLink($('linkWithAdjust').checked); };
-  button.hidden = false;
+  button.hidden = isDesktop;  // адрес 127.0.0.1 вне программы бесполезен (НП-4)
   button.addEventListener('click', () => {
     popover.hidden = !popover.hidden;
     button.setAttribute('aria-expanded', String(!popover.hidden));
@@ -1215,7 +1215,8 @@ function annotationRow(item, number) {
 
   const actions = document.createElement('span');
   actions.className = 'annot-row-actions';
-  actions.append(rowButton(t('annot.copyLink'), () => copyAnnotationLink(item)));
+  // Адрес 127.0.0.1 вне программы бесполезен (НП-4)
+  if (!isDesktop) actions.append(rowButton(t('annot.copyLink'), () => copyAnnotationLink(item)));
   if (item.can_edit && !phone()) {
     actions.append(
       rowButton(t('annot.edit'), () => editComment(item)),

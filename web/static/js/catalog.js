@@ -1,5 +1,5 @@
 // Каталог: дерево папок, карточки сканов, загрузка и права доступа.
-import { api, logout } from './api.js';
+import { api, isDesktop, logout } from './api.js';
 import { chooseDialog, confirmDialog, formDialog, pickerDialog } from './dialog.js';
 import { applyI18n, formatDateTime, formatNumber, setLanguage, STAIN_CODES, stainFull, stainShort, t } from './i18n.js';
 import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile, sha256hex } from './upload.js';
@@ -27,7 +27,7 @@ async function main() {
   $('search').addEventListener('input', renderSlides);
 
   if (user.role === 'admin') {
-    for (const id of ['linkUsers', 'linkJournal', 'btnNewFolder', 'btnUpload', 'btnAccess']) $(id).hidden = false;
+    for (const id of ['linkUsers', 'linkJournal', 'linkSettings', 'btnNewFolder', 'btnUpload', 'btnAccess']) $(id).hidden = false;
     setUpAdmin();
   }
   await load();
@@ -135,7 +135,9 @@ function folderRow(folder, depth) {
 
   row.append(toggle, name);
   if (user.role === 'admin' && folder.id !== null) {
-    row.append(accessBadge(folder), folderActions(folder));
+    // В программе один пользователь, доступ не настраивается (НП-3)
+    if (!isDesktop) row.append(accessBadge(folder));
+    row.append(folderActions(folder));
   }
   return row;
 }
@@ -174,7 +176,7 @@ function toggleFolderMenu(folder, anchor) {
   menu.append(
     item(t('catalog.rename'), () => renameFolder(folder)),
     item(t('catalog.moveFolder'), () => moveFolder(folder)),
-    item(t('catalog.access'), () => editAccess({ folder })),
+    ...(isDesktop ? [] : [item(t('catalog.access'), () => editAccess({ folder }))]),
     item(t('catalog.deleteFolder'), () => deleteFolder(folder), 'is-danger'),
   );
   anchor.append(menu);
@@ -393,7 +395,7 @@ function slideMenu(slide) {
   menu.className = 'slide-actions';
   menu.append(
     actionButton(t('catalog.edit'), () => editSlide(slide)),
-    actionButton(t('catalog.access'), () => editAccess({ slide })),
+    ...(isDesktop ? [] : [actionButton(t('catalog.access'), () => editAccess({ slide }))]),
     actionButton(t('catalog.move'), () => moveSlide(slide)),
     actionButton(t('common.delete'), () => removeSlide(slide), 'is-danger'),
   );

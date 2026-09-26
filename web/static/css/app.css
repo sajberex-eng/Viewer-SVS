@@ -1116,3 +1116,9 @@ input[type="range"] { accent-color: var(--accent); }
   /* Линейка не должна уезжать под ряд увеличений */
   .scalebar { bottom: 52px; }
 }
+
+/* Настольная программа (docs/TOR-desktop.md): один пользователь — нет входа,
+   выхода, доступа и ссылок для пересылки (НП-3, НП-4). !important — потому что
+   скрипты показывают эти элементы снятием hidden по роли администратора. */
+[data-desktop] .no-desktop { display: none !important; }
+html:not([data-desktop]) .only-desktop { display: none !important; }

@@ -1,5 +1,5 @@
 // Экраны администратора: учётные записи, группы и журнал действий.
-import { api, logout } from './api.js';
+import { api, isDesktop, logout } from './api.js';
 import { confirmDialog, formDialog, passwordDialog, pickerDialog } from './dialog.js';
 import { applyI18n, formatDateTime, setLanguage, t } from './i18n.js';
 
@@ -44,7 +44,10 @@ async function main() {
   for (const [name, tab] of Object.entries(TABS)) {
     $(tab.button).addEventListener('click', () => openTab(name));
   }
-  openTab(location.hash === '#journal' ? 'journal' : 'users');
+  // В программе вкладок «Пользователи» и «Группы» нет (НП-3): по умолчанию — настройки
+  if (isDesktop) document.title = `${t('catalog.settings')} · ${t('app.title')}`;
+  const wanted = location.hash.slice(1);
+  openTab(TABS[wanted] && !(isDesktop && ['users', 'groups'].includes(wanted)) ? wanted : (isDesktop ? 'settings' : 'users'));
 }
 
 function openTab(name) {
