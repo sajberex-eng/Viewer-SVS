@@ -74,6 +74,8 @@ def catalog_ids(client: TestClient) -> tuple[set[int], set[str]]:
 
 
 def main() -> None:
+    check("веб-сервис: предел памяти расчёта клеточности прежний — 500 МБ, 30 минут",
+          (app.state.cellularity.memory_limit_mb, app.state.cellularity.time_limit_s) == (500, 1800))
     make_user("admin-test", "admin")
     make_user("user-a")
     make_user("user-b")

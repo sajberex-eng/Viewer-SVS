@@ -48,6 +48,9 @@ class CellularityConfig:
     ai_model: str = "claude-opus-5"     # модель для оценки «на глаз» (второй способ): обзор + два участка ×20
     gemini_model: str = "gemini-flash-latest"   # модель Gemini (решение заказчика 2026-09-25)
     ai_provider: str = "gemini"         # основной ИИ по умолчанию: gemini или anthropic; выбор в «Настройках» (data/ai.provider) главнее
+    # Пределы расчёта: пусто — сервер 500 МБ и 30 минут, программа — половина памяти компьютера и 2 часа
+    memory_limit_mb: float | None = None
+    time_limit_s: float | None = None
 
 
 @dataclass(frozen=True)

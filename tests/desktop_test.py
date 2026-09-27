@@ -49,6 +49,12 @@ def enter(client: TestClient, key: str):
 
 
 def main() -> None:
+    from server.cellularity_job import MEMORY_LIMIT_MB, physical_memory_mb
+    total = physical_memory_mb()
+    limit = app.state.cellularity.memory_limit_mb
+    check("предел памяти расчёта клеточности — половина памяти компьютера, а не 500 МБ сервера",
+          total is not None and abs(limit - max(MEMORY_LIMIT_MB, total / 2)) < 1 and limit > MEMORY_LIMIT_MB,
+          f"({limit:.0f} МБ при {total:.0f} МБ памяти)")
     users = db.query("SELECT login, role FROM users")
     check("при запуске заведена одна учётная запись программы",
           [(u["login"], u["role"]) for u in users] == [(LOCAL_LOGIN, "admin")], str([dict(u) for u in users]))

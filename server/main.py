@@ -20,6 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import annotations as annotationsvc
+from . import cellularity_job
 from . import audit
 from . import groups as groupsvc
 from .access import AccessIndex
@@ -204,6 +205,12 @@ def create_app() -> FastAPI:
     catalog.library = library
     cellularity = CellularityService(db, settings.storage, settings.data_dir, pool, settings.tiles,
                                      settings.cellularity)
+    if settings.desktop:
+        # Программа на компьютере врача: предел памяти — от его оперативной памяти, а не 500 МБ сервера
+        cellularity.memory_limit_mb, cellularity.time_limit_s = cellularity_job.limits_for(
+            True, settings.cellularity.memory_limit_mb, settings.cellularity.time_limit_s)
+        log.info("Предел расчёта клеточности: %.0f МБ, %.0f мин",
+                 cellularity.memory_limit_mb, cellularity.time_limit_s / 60)
     throttle = LoginThrottle()
     settings.thumbs_dir.mkdir(parents=True, exist_ok=True)
 

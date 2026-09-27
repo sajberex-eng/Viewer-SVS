@@ -28,8 +28,12 @@ from pathlib import Path
 from . import cellularity, cellularity_slide as cs
 from .config import StorageConfig
 
-MEMORY_LIMIT_MB = 500          # предел памяти процесса расчёта (критерий приёмки этапа 11)
-TIME_LIMIT_S = 1800            # предел времени одного расчёта
+MEMORY_LIMIT_MB = 500          # предел памяти процесса расчёта на сервере с 2 ГБ (критерий приёмки этапа 11)
+TIME_LIMIT_S = 1800            # предел времени одного расчёта на сервере
+# Настольная программа: компьютер врача не делит память с другими пользователями, поэтому
+# предел — доля его оперативной памяти (заказчик 2026-09-27: «ограничение в 500 МБ, хотя RAM 16 ГБ»)
+DESKTOP_MEMORY_SHARE = 0.5
+DESKTOP_TIME_LIMIT_S = 7200
 BASELINE_MB = 150.0            # библиотеки процесса (NumPy, OpenCV, Numba, OpenSlide) — замер 2026-09-22 на сервере
 POLL_S = 0.25
 
@@ -66,6 +70,38 @@ class Progress:
     stage: str
     fraction: float                # 0…1 по всему расчёту
     rss_mb: float = 0.0            # память процесса расчёта в начале стадии
+
+
+def physical_memory_mb() -> float | None:
+    """Оперативная память компьютера, МБ; None, если узнать не удалось."""
+    try:
+        if os.name == "nt":
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("dwLength", ctypes.c_uint32), ("dwMemoryLoad", ctypes.c_uint32),
+                            ("ullTotalPhys", ctypes.c_uint64), ("ullAvailPhys", ctypes.c_uint64),
+                            ("ullTotalPageFile", ctypes.c_uint64), ("ullAvailPageFile", ctypes.c_uint64),
+                            ("ullTotalVirtual", ctypes.c_uint64), ("ullAvailVirtual", ctypes.c_uint64),
+                            ("ullAvailExtendedVirtual", ctypes.c_uint64)]
+            status = MemoryStatus()
+            status.dwLength = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                return status.ullTotalPhys / 2 ** 20
+            return None
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 20
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def limits_for(desktop: bool, memory_mb: float | None = None, time_s: float | None = None) -> tuple[float, float]:
+    """Пределы расчёта: заданные в config.yaml (cellularity.memory_limit_mb, time_limit_s)
+    главнее; иначе сервер — 500 МБ и 30 минут, программа — половина памяти компьютера
+    (не меньше 500 МБ) и 2 часа."""
+    if not memory_mb:
+        total = physical_memory_mb() if desktop else None
+        memory_mb = max(MEMORY_LIMIT_MB, total * DESKTOP_MEMORY_SHARE) if total else MEMORY_LIMIT_MB
+    if not time_s:
+        time_s = DESKTOP_TIME_LIMIT_S if desktop else TIME_LIMIT_S
+    return float(memory_mb), float(time_s)
 
 
 def waiting() -> int:

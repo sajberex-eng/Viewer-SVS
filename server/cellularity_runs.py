@@ -81,6 +81,9 @@ class CellularityService:
         self._thread: threading.Thread | None = None
         self.data_dir = Path(data_dir)
         self.ai_ask = ai.ask_model          # подменяется в тестах, чтобы не ходить в сеть
+        # Пределы памяти и времени расчёта; программа выставляет свои (job.limits_for)
+        self.memory_limit_mb, self.time_limit_s = job.limits_for(
+            False, getattr(config, "memory_limit_mb", None), getattr(config, "time_limit_s", None))
 
     # ---------- жизненный цикл ----------
 
@@ -229,7 +232,8 @@ class CellularityService:
             raise CellularityError("Расчёт по этому скану уже идёт", 409)
         if method == "marrowquant":
             spec = job.JobSpec(self.storage_config, slide_row["key"], float(slide_row["mpp"]),
-                               RESOLUTIONS[resolution], fragments)
+                               RESOLUTIONS[resolution], fragments, memory_limit_mb=self.memory_limit_mb,
+                               time_limit_s=self.time_limit_s)
             try:
                 job.check_memory(spec)
             except job.JobError as exc:
@@ -335,7 +339,8 @@ class CellularityService:
             return
         masks_dir = self.root / slide["id"] / run_id
         spec = job.JobSpec(self.storage_config, slide["key"], float(slide["mpp"]),
-                           RESOLUTIONS[row["resolution"]], fragments, masks_dir=masks_dir)
+                           RESOLUTIONS[row["resolution"]], fragments, masks_dir=masks_dir,
+                           memory_limit_mb=self.memory_limit_mb, time_limit_s=self.time_limit_s)
 
         def on_progress(p: job.Progress) -> None:
             self._progress[run_id] = {"fragment": p.fragment, "of": p.of, "stage": p.stage,
