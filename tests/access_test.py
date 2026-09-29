@@ -168,6 +168,7 @@ def main() -> None:
             ("тайл", "/api/slides/bbbbbbbbbbbb/tiles/8/0_0.jpg"),
             ("миниатюра", "/api/slides/bbbbbbbbbbbb/thumbnail.jpg"),
             ("этикетка", "/api/slides/bbbbbbbbbbbb/label.jpg"),
+            ("таблица цвета", "/api/slides/bbbbbbbbbbbb/color-lut.png"),
         ):
             code = bob.get(path).status_code
             check(f"чужой скан, {name}: 404", code == 404, f"(получено {code})")

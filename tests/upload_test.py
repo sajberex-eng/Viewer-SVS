@@ -223,6 +223,15 @@ def main() -> None:
               tile.status_code == 200 and tile.content[:2] == b"\xff\xd8", f"({levels} px)")
         check("миниатюра строится", admin.get(f"/api/slides/{slide_id}/thumbnail.jpg").status_code == 200)
         check("у скана без этикетки её запрос даёт 404", admin.get(f"/api/slides/{slide_id}/label.jpg").status_code == 404)
+        # Синтетический SVS без ICC-профиля: таблицы цвета нет, повторный запрос отвечает по отметке, не открывая файл
+        check("у скана без профиля таблица цвета даёт 404",
+              admin.get(f"/api/slides/{slide_id}/color-lut.png").status_code == 404
+              and admin.get(f"/api/slides/{slide_id}/color-lut.png").status_code == 404)
+        from server.color_lut import build_color_lut, lut_grid  # noqa: PLC0415
+        from PIL import ImageCms  # noqa: PLC0415
+        identity = build_color_lut(ImageCms.createProfile("sRGB"))
+        check("таблица цвета для профиля sRGB — тождественная",
+              identity.size == lut_grid().size and identity.tobytes() == lut_grid().tobytes())
 
         # Новая папка закрыта для пользователей: загруженный скан им не виден
         check("загруженный скан пользователю не виден", alice.get(f"/api/slides/{slide_id}").status_code == 404)

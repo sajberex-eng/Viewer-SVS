@@ -666,6 +666,8 @@ input[type="range"] { accent-color: var(--accent); }
 .levels-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .levels-fields label { display: grid; gap: 2px; font-size: 12px; }
 .levels-fields input[type="number"] { width: 100%; height: 26px; padding: 0 4px; text-align: right; }
+.adjust-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.adjust-check input { margin: 0; accent-color: var(--accent); }
 .adjust-more { border-top: 1px solid var(--border); padding-top: 8px; }
 .adjust-more summary { cursor: pointer; font-size: 13px; color: var(--brand); margin-bottom: 10px; }
 .adjust-balance { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 8px; }

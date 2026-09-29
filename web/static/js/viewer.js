@@ -182,6 +182,7 @@ function addPane(slide) {
     onViewChange: onPaneChanged,
     onClose: closePane,
     onPickWhite: (pane, position) => (active === pane ? adjustPanel.pickWhite(position) : false),
+    onProfile: (pane) => { if (active === pane) adjustPanel.refreshProfile(); },
     onContextMenu: openStageMenu,
   });
   panes.push(view);

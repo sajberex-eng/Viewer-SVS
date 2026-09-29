@@ -1,7 +1,7 @@
 // Одна половина экрана: изображение, панель увеличений, мини-карта, линейка,
 // этикетка. В обычном режиме половина одна, в режиме сравнения их две, поэтому
 // элементы ищутся внутри своего контейнера, а не по идентификаторам страницы.
-import { ImageAdjuster } from './adjust.js';
+import { ImageAdjuster, loadImage } from './adjust.js';
 import { clampValues, loadSavedValues, saveValues } from './adjust-panel.js';
 import { applyI18n, formatNumber, t } from './i18n.js';
 
@@ -21,12 +21,13 @@ const { Point } = OpenSeadragon;
 export { FIXED_MAGNIFICATIONS, ZOOM_STEP };
 
 export class SlideView {
-  constructor({ slide, container, storageKey, onActivate, onViewChange, onClose, onPickWhite, onContextMenu }) {
+  constructor({ slide, container, storageKey, onActivate, onViewChange, onClose, onPickWhite, onContextMenu, onProfile }) {
     this.slide = slide;
     this.element = container;
     this.storageKey = storageKey;
     this.onViewChange = onViewChange;
     this.onPickWhite = onPickWhite;
+    this.onProfile = onProfile;
     this.parts = {};
     for (const node of container.querySelectorAll('[data-role]')) {
       this.parts[node.dataset.role] = node;
@@ -64,6 +65,7 @@ export class SlideView {
     this.adjuster = new ImageAdjuster(this.viewer);
     const saved = loadSavedValues(storageKey);
     if (saved) this.adjuster.setValues(saved);
+    this.#loadProfile();
     this.#initZoomReadout();
     this.#initScalebar();
     this.#initMinimap();
@@ -466,6 +468,47 @@ export class SlideView {
     }
   }
 
+  // Профиль сканера («Цвет как в сканере»): таблица цвета приходит с сервера,
+  // если в файле есть ICC-профиль; 404 значит, что профиля нет. По умолчанию
+  // включён; выключение запоминается в браузере отдельно от прочих настроек.
+  async #loadProfile() {
+    let image;
+    try {
+      image = await loadImage(`/api/slides/${encodeURIComponent(this.slide.id)}/color-lut.png`);
+    } catch {
+      return;
+    }
+    if (this.destroyed) return;
+    this.adjuster.setLut(image);
+    let enabled = true;
+    try {
+      enabled = localStorage.getItem(`${this.storageKey}:profile`) !== '0';
+    } catch {
+      // хранилище недоступно — профиль включён
+    }
+    this.adjuster.setProfile(enabled);
+    this.onProfile?.(this);
+  }
+
+  get profileAvailable() {
+    return this.adjuster.profileAvailable;
+  }
+
+  get profileEnabled() {
+    return this.adjuster.profileActive;
+  }
+
+  setProfile(on, { save = true } = {}) {
+    this.adjuster.setProfile(on);
+    if (!save) return;
+    try {
+      if (on) localStorage.removeItem(`${this.storageKey}:profile`);
+      else localStorage.setItem(`${this.storageKey}:profile`, '0');
+    } catch {
+      // приватный режим: выбор живёт до закрытия страницы
+    }
+  }
+
   // Настройки изображения этой половины (И-7). Хранятся у самой половины,
   // панель настройки одна и только показывает значения активной.
   get adjustValues() {
@@ -486,6 +529,7 @@ export class SlideView {
   }
 
   destroy() {
+    this.destroyed = true;
     this.adjuster.destroy?.();
     this.viewer.destroy();
     this.element.remove();

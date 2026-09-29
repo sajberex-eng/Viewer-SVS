@@ -39,6 +39,7 @@ from .auth import (
     verify_password,
 )
 from .catalog import Catalog, CatalogError, slide_title
+from .color_lut import lut_path, none_marker, render_color_lut, slide_profile
 from .cellularity_runs import CellularityError, CellularityService
 from .config import BASE_DIR, load_secret_key, load_settings
 from .db import Database, utc_iso
@@ -608,6 +609,28 @@ def create_app() -> FastAPI:
             with pool.acquire(slide_row["key"]) as handle:
                 render_thumbnail(handle.slide, path)
         return FileResponse(path, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+    @app.get("/api/slides/{slide_id}/color-lut.png")
+    def color_lut(slide_id: str, user=Depends(require_user)):
+        """Таблица цвета из ICC-профиля сканера («Цвет как в сканере»). 404, если профиля в файле нет."""
+        slide_row = require_slide(slide_id, user)
+        path = lut_path(settings.luts_dir, slide_row)
+        if not path.exists():
+            if none_marker(path).exists():
+                raise HTTPException(404, "В файле нет цветового профиля")
+            with pool.acquire(slide_row["key"]) as handle:
+                profile = slide_profile(handle.slide)
+                if profile is None:
+                    settings.luts_dir.mkdir(parents=True, exist_ok=True)
+                    none_marker(path).touch()
+                    raise HTTPException(404, "В файле нет цветового профиля")
+                try:
+                    render_color_lut(profile, path)
+                except Exception as exc:  # noqa: BLE001 — профиль есть, но littlecms его не принял
+                    log.warning("Профиль скана %s не применён: %s", slide_id, exc)
+                    none_marker(path).touch()
+                    raise HTTPException(404, "Цветовой профиль файла не читается") from exc
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private, max-age=86400"})
 
     @app.get("/api/slides/{slide_id}/label.jpg")
     def label(slide_id: str, request: Request, user=Depends(require_user)):

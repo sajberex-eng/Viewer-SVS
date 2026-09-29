@@ -82,6 +82,11 @@ class Settings:
     def thumbs_dir(self) -> Path:
         return self.data_dir / "cache" / "thumbs"
 
+    @property
+    def luts_dir(self) -> Path:
+        """Таблицы цвета из ICC-профилей сканеров (server/color_lut.py)."""
+        return self.data_dir / "cache" / "luts"
+
 
 def _section(cls, raw: dict, name: str):
     values = raw.get(name) or {}

@@ -1,5 +1,5 @@
 import {
-  DEFAULTS, LEGACY_ORDER, PARAMS, PRESETS, autoValues, balanceToGain, clampParam, gainToBalance, isDefault,
+  DEFAULTS, LEGACY_ORDER, PARAMS, PRESETS, autoValues, balanceToGain, clampParam, gainToBalance, isDefault, loadImage,
 } from './adjust.js';
 import { formatNumber, t } from './i18n.js';
 
@@ -8,6 +8,11 @@ const HISTOGRAM_INTERVAL_MS = 250; // гистограмма не чаще 4 р�
 const LEVELS = ['black', 'gamma', 'white']; // маркеры шкалы уровней слева направо
 const EXTRA = ['brightness', 'contrast', 'saturation', 'hue']; // блок «Дополнительно»
 const BALANCE = ['red', 'green', 'blue'];
+const LINK_ORDERS = { // число чисел в ссылке → порядок параметров (раздел 7.5 ТЗ)
+  [LEGACY_ORDER.length]: LEGACY_ORDER,
+  [PARAMS.length - 1]: PARAMS.slice(0, -1).map((p) => p.id), // до появления «окраски»
+  [PARAMS.length]: PARAMS.map((p) => p.id),
+};
 const byId = Object.fromEntries(PARAMS.map((p) => [p.id, p]));
 
 // Полный набор значений в допустимых пределах; недостающие берутся из base.
@@ -52,15 +57,6 @@ const fractionToGamma = (fraction) => (
   fraction <= 0.5 ? 3 ** ((0.5 - fraction) * 2) : 0.2 ** ((fraction - 0.5) * 2)
 );
 
-function loadImage(url) {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error('image'));
-    image.src = url;
-  });
-}
-
 // Панель настройки изображения (раздел 7 ТЗ). Она одна на странице и
 // переключается между половинами экрана: в режиме сравнения действует на
 // активную половину (С-4). Сами значения хранит половина (SlideView.adjustValues),
@@ -81,6 +77,8 @@ export class AdjustPanel {
     this.hint = panel.querySelector('#adjustHint');
     this.histogram = panel.querySelector('#adjustHistogram');
     this.balanceText = panel.querySelector('#adjustBalance');
+    this.profileCheck = panel.querySelector('#adjustProfile');
+    this.stainSelect = panel.querySelector('#adjustStain');
     this.histogramHandler = () => this._scheduleHistogram();
 
     this._buildLevels(panel.querySelector('#adjustLevels'), panel.querySelector('#adjustLevelFields'));
@@ -89,7 +87,17 @@ export class AdjustPanel {
     this._bindCompare(panel.querySelector('#adjustCompare'));
     this._bindPipette(panel.querySelector('#adjustPipette'));
     this._bindAuto(panel.querySelector('#adjustAuto'));
-    panel.querySelector('#adjustResetAll').addEventListener('click', () => this.setValues(DEFAULTS));
+    // «Сбросить всё» возвращает и профиль сканера: по умолчанию он включён, если есть в файле
+    panel.querySelector('#adjustResetAll').addEventListener('click', () => {
+      this.setValues(DEFAULTS);
+      if (this.pane?.profileAvailable) this.pane.setProfile(true);
+      this.refreshProfile();
+    });
+    this.profileCheck.addEventListener('change', () => {
+      this.pane?.setProfile(this.profileCheck.checked);
+      this._drawHistogram();
+    });
+    this.stainSelect.addEventListener('change', () => this.setValues({ stain: Number(this.stainSelect.value) }));
     panel.querySelector('#adjustBalanceReset').addEventListener('click', () => {
       this.setValues(Object.fromEntries(BALANCE.map((id) => [id, 0])));
     });
@@ -115,7 +123,17 @@ export class AdjustPanel {
       el.disabled = unsupported;
     });
     for (const marker of Object.values(this.markers)) marker.tabIndex = unsupported ? -1 : 0;
+    this.refreshProfile();
     this._drawHistogram();
+  }
+
+  // Отметка «Цвет как в сканере»: доступна, когда в файле есть профиль (таблица
+  // приходит с сервера после открытия скана, половина сообщает через onProfile).
+  refreshProfile() {
+    const available = Boolean(this.pane?.profileAvailable) && Boolean(this.adjuster?.supported);
+    this.profileCheck.disabled = !available;
+    this.profileCheck.checked = available && this.pane.profileEnabled;
+    this.profileCheck.parentElement.title = t(available ? 'adjust.profile.tip' : 'adjust.profile.none');
   }
 
   // Гистограмма считается только при открытой панели (И-12).
@@ -140,8 +158,7 @@ export class AdjustPanel {
   static deserialize(text) {
     const numbers = text.split(',').map(Number);
     if (numbers.some(Number.isNaN)) return null;
-    const order = numbers.length === PARAMS.length ? PARAMS.map((p) => p.id)
-      : numbers.length === LEGACY_ORDER.length ? LEGACY_ORDER : null;
+    const order = LINK_ORDERS[numbers.length];
     return order ? clampValues(Object.fromEntries(order.map((id, i) => [id, numbers[i]]))) : null;
   }
 
@@ -153,6 +170,7 @@ export class AdjustPanel {
       number.value = v[id];
     }
     for (const id of LEVELS) this.fields[id].value = v[id];
+    this.stainSelect.value = String(v.stain);
 
     const left = v.black / 255;
     const right = v.white / 255;
@@ -292,8 +310,9 @@ export class AdjustPanel {
   }
 
   // Пипетка белого (И-9): баланс белого выравнивает цвет пустого фона до
-  // нейтрального, белая точка встаёт на его яркость. Щелчок ловится на уровне
-  // страницы, поэтому пипетка работает и после переключения на другую половину.
+  // нейтрального, белая точка встаёт на его яркость. Цвет берётся после профиля
+  // сканера, как его видит шейдер. Щелчок ловится на уровне страницы, поэтому
+  // пипетка работает и после переключения на другую половину.
   _bindPipette(button) {
     this.pipetteButton = button;
     button.addEventListener('click', () => {
@@ -311,7 +330,8 @@ export class AdjustPanel {
   // Вызывается половиной экрана при щелчке по изображению.
   pickWhite(position) {
     if (!this.picking) return false;
-    const color = this.adjuster.sampleSource(position);
+    const raw = this.adjuster.sampleSource(position);
+    const color = raw && this.adjuster.profileColor(raw);
     if (!color || Math.max(...color) < BACKGROUND_MIN_LEVEL) {
       this.hint.textContent = t('adjust.pipette.dark');
       return true;
@@ -330,8 +350,9 @@ export class AdjustPanel {
     this.hint.textContent = '';
   }
 
-  // «Авто» (И-13): чёрная и белая точки и баланс белого по миниатюре всего
-  // препарата (раздел 7.6 ТЗ), поэтому результат не зависит от поля зрения.
+  // «Авто» (И-13): как в сканере — баланс белого и белая точка по фону стекла
+  // на миниатюре всего препарата (раздел 7.6 ТЗ), поэтому результат не зависит
+  // от поля зрения; чёрная точка не трогается.
   _bindAuto(button) {
     button.addEventListener('click', async () => {
       if (!this.pane || button.disabled) return;
@@ -344,7 +365,8 @@ export class AdjustPanel {
         canvas.height = image.naturalHeight;
         const context = canvas.getContext('2d', { willReadFrequently: true });
         context.drawImage(image, 0, 0);
-        const values = autoValues(context.getImageData(0, 0, canvas.width, canvas.height));
+        const lut = pane.adjuster.profileActive ? (rgb) => pane.adjuster.profileColor(rgb) : null;
+        const values = autoValues(context.getImageData(0, 0, canvas.width, canvas.height), lut);
         if (!values) throw new Error('empty');
         if (this.pane === pane) this.setValues(values); // пока грузилась миниатюра, половину могли сменить
         else pane.setAdjust(values);

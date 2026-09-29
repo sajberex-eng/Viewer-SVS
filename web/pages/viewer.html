@@ -240,8 +240,12 @@
           <option value="original" data-i18n="adjust.preset.original"></option>
           <option value="pale" data-i18n="adjust.preset.pale"></option>
           <option value="overstained" data-i18n="adjust.preset.overstained"></option>
+          <option value="hematoxylin" data-i18n="adjust.preset.hematoxylin"></option>
+          <option value="eosin" data-i18n="adjust.preset.eosin"></option>
         </select>
       </div>
+      <!-- Профиль сканера из файла: по умолчанию включён, если он есть (решение заказчика 2026-09-29) -->
+      <label class="adjust-check"><input type="checkbox" id="adjustProfile" disabled><span data-i18n="adjust.profile"></span></label>
       <!-- Гистограмма и уровни (раздел 7.1 ТЗ, этап 12): маркеры и поля строит adjust-panel.js -->
       <canvas class="adjust-histogram" id="adjustHistogram" width="276" height="80" data-i18n-tip="adjust.histogram.tip"></canvas>
       <div class="levels" id="adjustLevels" role="group"></div>
@@ -258,6 +262,14 @@
       <details class="adjust-more">
         <summary data-i18n="adjust.more"></summary>
         <div id="adjustSliders"></div>
+        <div class="adjust-row adjust-row-preset">
+          <label for="adjustStain" data-i18n="adjust.stain"></label>
+          <select id="adjustStain">
+            <option value="0" data-i18n="adjust.stain.all"></option>
+            <option value="1" data-i18n="adjust.stain.h"></option>
+            <option value="2" data-i18n="adjust.stain.e"></option>
+          </select>
+        </div>
         <div class="adjust-balance">
           <span data-i18n="adjust.balance"></span>
           <span id="adjustBalance"></span>
