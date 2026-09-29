@@ -581,6 +581,7 @@ function initTopbar() {
   const toggleAdjust = (open = panel.hidden) => {
     panel.hidden = !open;
     $('btnAdjust').setAttribute('aria-expanded', String(open));
+    adjustPanel.setOpen(open); // гистограмма считается только при открытой панели (И-12)
   };
   $('btnAdjust').addEventListener('click', () => toggleAdjust());
   $('adjustClose').addEventListener('click', () => toggleAdjust(false));

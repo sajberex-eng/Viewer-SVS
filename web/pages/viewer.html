@@ -242,15 +242,29 @@
           <option value="overstained" data-i18n="adjust.preset.overstained"></option>
         </select>
       </div>
-      <div id="adjustSliders"></div>
+      <!-- Гистограмма и уровни (раздел 7.1 ТЗ, этап 12): маркеры и поля строит adjust-panel.js -->
+      <canvas class="adjust-histogram" id="adjustHistogram" width="276" height="80" data-i18n-tip="adjust.histogram.tip"></canvas>
+      <div class="levels" id="adjustLevels" role="group"></div>
+      <div class="levels-fields" id="adjustLevelFields"></div>
       <div class="adjust-actions">
+        <button class="btn" id="adjustAuto" data-i18n="adjust.auto" data-i18n-tip="adjust.auto.tip"></button>
+        <!-- Пипетка — значком (просьба заказчика 2026-09-29), название в подсказке -->
+        <button class="btn btn-icon" id="adjustPipette" data-icon="pipette" data-i18n-label="adjust.pipette" data-i18n-tip="adjust.pipette.tip"></button>
         <button class="btn" id="adjustCompare" data-i18n="adjust.compare" data-i18n-tip="adjust.compare.tip"></button>
-        <button class="btn" id="adjustPipette" data-i18n="adjust.pipette" data-i18n-tip="adjust.pipette.tip"></button>
         <button class="btn" id="adjustResetAll" data-i18n="adjust.resetAll" data-i18n-tip="adjust.resetAll.tip"></button>
         <button class="btn" id="adjustBoth" hidden data-i18n="adjust.applyBoth" data-i18n-tip="adjust.applyBoth.tip"></button>
       </div>
       <p class="adjust-hint" id="adjustHint" aria-live="polite"></p>
-      <p class="muted" data-i18n="adjust.order"></p>
+      <details class="adjust-more">
+        <summary data-i18n="adjust.more"></summary>
+        <div id="adjustSliders"></div>
+        <div class="adjust-balance">
+          <span data-i18n="adjust.balance"></span>
+          <span id="adjustBalance"></span>
+          <button class="icon-btn" id="adjustBalanceReset" data-i18n-tip="adjust.balance.reset.tip">×</button>
+        </div>
+        <p class="muted" data-i18n="adjust.order"></p>
+      </details>
     </aside>
   </div>
 

@@ -625,6 +625,46 @@ input[type="range"] { accent-color: var(--accent); }
 .adjust-row-preset { grid-template-columns: auto 1fr; margin-bottom: 0; }
 .adjust-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .adjust-hint { margin: 0; min-height: 18px; font-size: 13px; color: var(--accent); }
+/* Гистограмма и шкала уровней (раздел 7.1 ТЗ) */
+.adjust-histogram {
+  display: block;
+  width: 100%;
+  height: 80px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.levels { position: relative; height: 28px; margin: 0 7px; }
+.levels-bar {
+  position: absolute;
+  inset: 3px 0 auto;
+  height: 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: linear-gradient(to right, #000, #fff);
+}
+.levels-marker {
+  position: absolute;
+  top: 12px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border: 1.5px solid var(--text);
+  border-radius: 2px;
+  transform: rotate(45deg);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.levels-marker.is-black { background: #000; }
+.levels-marker.is-gamma { background: #8a8a8a; }
+.levels-marker.is-white { background: #fff; }
+.adjust-panel.is-disabled .levels-marker { pointer-events: none; opacity: 0.45; }
+.levels-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.levels-fields label { display: grid; gap: 2px; font-size: 12px; }
+.levels-fields input[type="number"] { width: 100%; height: 26px; padding: 0 4px; text-align: right; }
+.adjust-more summary { cursor: pointer; font-size: 13px; color: var(--brand); margin-bottom: 8px; }
+.adjust-balance { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-bottom: 8px; }
+.adjust-balance #adjustBalance { flex: 1; }
 
 /* Нижней строки состояния больше нет (замечание патолога 2026-09-24): увеличение
    в шапке, сообщения — всплывашкой над препаратом */
