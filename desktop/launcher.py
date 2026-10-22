@@ -29,6 +29,7 @@ from pathlib import Path
 APP_NAME = "HemCenterHistoDigital"
 WINDOW_TITLE = APP_NAME
 MUTEX_NAME = f"Local\\{APP_NAME}-single-instance"
+BUNDLE_ID = "kz.hemcenter.histodigital"  # тот же, что в desktop/app.spec (macOS)
 
 log = logging.getLogger("desktop")
 
@@ -66,19 +67,40 @@ def ensure_config(home: Path) -> Path:
 # ---------- одна копия программы ----------
 
 _mutex = None
+_lock_file = None
 
 
 def claim_single_instance() -> bool:
-    """Именованный мьютекс Windows: его держит первая копия, пока работает."""
-    global _mutex
-    if sys.platform != "win32":
-        return True
-    kernel32 = ctypes.windll.kernel32
-    _mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
-    return kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+    """Первая копия держит замок, пока работает. Windows — именованный мьютекс;
+    macOS и прочие — файл-замок в служебной папке (flock снимается сам, когда
+    процесс умирает, в том числе упав)."""
+    global _mutex, _lock_file
+    if sys.platform == "win32":
+        kernel32 = ctypes.windll.kernel32
+        _mutex = kernel32.CreateMutexW(None, False, MUTEX_NAME)
+        return kernel32.GetLastError() != 183  # ERROR_ALREADY_EXISTS
+    import fcntl
+
+    home = service_dir()
+    home.mkdir(parents=True, exist_ok=True)
+    _lock_file = open(home / "instance.lock", "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
 
 
 def focus_running_window() -> None:
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSApplicationActivateIgnoringOtherApps, NSRunningApplication
+
+            for running in NSRunningApplication.runningApplicationsWithBundleIdentifier_(BUNDLE_ID):
+                running.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+        except Exception:  # без AppKit (запуск из исходников без pyobjc) просто выходим
+            pass
+        return
     if sys.platform != "win32":
         return
     user32 = ctypes.windll.user32
@@ -86,6 +108,18 @@ def focus_running_window() -> None:
     if handle:
         user32.ShowWindow(handle, 9)  # SW_RESTORE: свёрнутое окно разворачивается
         user32.SetForegroundWindow(handle)
+
+
+def stop_child_processes() -> None:
+    """Выход идёт через os._exit без ожидания, поэтому процесс расчёта клеточности
+    (spawn-потомок) сам не завершится. Windows закрыло бы его заданием
+    (kill_children_on_exit), macOS — нет: завершаем явно. Окно и WebView/WebKit
+    система закрывает вместе с программой."""
+    for child in multiprocessing.active_children():
+        try:
+            child.kill()
+        except Exception:
+            pass
 
 
 def kill_children_on_exit() -> None:
@@ -220,6 +254,7 @@ def main() -> int:
 
 if __name__ == "__main__":
     code = main()
+    stop_child_processes()
     # Выход без ожидания рабочих потоков: поток расчёта клеточности дожидается конца
     # своего расчёта, и после закрытия окна процесс висел больше минуты — а пока он
     # жив, повторный запуск упирается в «одну копию» и ничего не показывает

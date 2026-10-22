@@ -1,0 +1,309 @@
+# Сборка настольной программы HemCenterHistoDigital (docs/TOR-desktop.md).
+#
+#   Выпуск:    git tag desktop-v1.0 && git push origin desktop-v1.0
+#   Проба:     вкладка Actions → «Настольная программа» → Run workflow (без выпуска, только архивы-артефакты)
+#
+# Windows и macOS собираются из одного кода (server/, web/, desktop/). Подписи кода нет ни там,
+# ни там (решение заказчика): macOS-сборку PyInstaller подписывает ad-hoc сам, иначе arm64 не запустится.
+# Сканы и данные заказчика в сборку не попадают: тесты работают на синтетических сканах tests/synthetic_svs.py.
+name: Настольная программа
+
+on:
+  push:
+    tags: ['desktop-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: '1'          # кириллица в выводе тестов и дочерних процессов расчёта
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+
+jobs:
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия из тега
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
+            version="${GITHUB_REF_NAME#desktop-v}"
+          else
+            version="dev-${GITHUB_SHA::7}"
+          fi
+          if [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then bundle="$version"; else bundle="0.0.0"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "bundle_version=$bundle" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+
+      - name: Зависимости
+        run: python -m pip install -r requirements-desktop.txt
+
+      - name: Тесты
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($name in 'desktop', 'library', 'access', 'upload', 'smoke', 'cellularity') {
+            Write-Host "=== $name"
+            python -X utf8 "tests/${name}_test.py"
+            if ($LASTEXITCODE -ne 0) { throw "Тест $name не прошёл (код $LASTEXITCODE)" }
+          }
+
+      - name: Сборка PyInstaller
+        shell: pwsh
+        env:
+          HCHD_VERSION: ${{ steps.ver.outputs.bundle_version }}
+        run: |
+          python -m PyInstaller --noconfirm --distpath build/dist --workpath build/work desktop/app.spec
+          if ($LASTEXITCODE -ne 0) { throw "PyInstaller завершился с кодом $LASTEXITCODE" }
+          if (-not (Test-Path build/dist/HemCenterHistoDigital/HemCenterHistoDigital.exe)) { throw "exe не собран" }
+
+      - name: Архив
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist-out | Out-Null
+          $zip = "dist-out/HemCenterHistoDigital-${{ steps.ver.outputs.version }}-Windows.zip"
+          Compress-Archive -Path build/dist/HemCenterHistoDigital -DestinationPath $zip -CompressionLevel Optimal
+          Get-Item $zip | Select-Object Name, @{n='МБ';e={[math]::Round($_.Length / 1MB, 1)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist-out/*.zip
+          if-no-files-found: error
+          compression-level: 0    # архив уже сжат
+
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-15           # arm64
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия из тега
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/desktop-v* ]]; then
+            version="${GITHUB_REF_NAME#desktop-v}"
+          else
+            version="dev-${GITHUB_SHA::7}"
+          fi
+          if [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then bundle="$version"; else bundle="0.0.0"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "bundle_version=$bundle" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-desktop.txt
+
+      - name: Зависимости
+        run: |
+          python -c "import platform; print(platform.machine(), platform.mac_ver()[0])"
+          python -m pip install -r requirements-desktop.txt
+
+      - name: Тесты
+        run: |
+          set -e
+          for name in desktop library access upload smoke cellularity; do
+            echo "=== $name"
+            python -X utf8 "tests/${name}_test.py"
+          done
+
+      - name: Сборка PyInstaller
+        env:
+          HCHD_VERSION: ${{ steps.ver.outputs.bundle_version }}
+        run: |
+          python -m PyInstaller --noconfirm --distpath build/dist --workpath build/work desktop/app.spec
+          test -x build/dist/HemCenterHistoDigital.app/Contents/MacOS/HemCenterHistoDigital
+          du -sh build/dist/HemCenterHistoDigital.app
+          # Подпись ad-hoc ставит сам PyInstaller; здесь только показываем результат
+          codesign --verify --deep --strict --verbose=2 build/dist/HemCenterHistoDigital.app || echo "::warning::codesign --verify не прошла"
+          codesign -dv build/dist/HemCenterHistoDigital.app 2>&1 | head -n 8 || true
+
+      # Запуск собранной программы: сервер поднялся, чужой Host и неверный ключ отклоняются,
+      # окно нарисовано (снимок экрана в артефакт). Системные окна и Gatekeeper на runner не проверить.
+      - name: Проба собранного .app
+        run: |
+          set -u
+          APP="$PWD/build/dist/HemCenterHistoDigital.app"
+          HOME_DIR="$RUNNER_TEMP/hchd-home"
+          rm -rf "$HOME_DIR"; mkdir -p "$HOME_DIR"
+          export HCHD_HOME="$HOME_DIR"
+          "$APP/Contents/MacOS/HemCenterHistoDigital" > "$RUNNER_TEMP/app-stdout.log" 2>&1 &
+          PID=$!
+          echo "$PID" > "$RUNNER_TEMP/app.pid"
+
+          cat > "$RUNNER_TEMP/find_port.py" <<'PORT_PY'
+          import re, sys
+          try:
+              text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+          except OSError:
+              text = ""
+          found = re.findall(r"Программа запущена: порт (\d+)", text)
+          print(found[-1] if found else "")
+          PORT_PY
+
+          PORT=""
+          for i in $(seq 1 120); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "::error::Программа завершилась до запуска сервера"
+              cat "$RUNNER_TEMP/app-stdout.log" || true
+              cat "$HOME_DIR/logs/app.log" 2>/dev/null || true
+              exit 1
+            fi
+            PORT=$(python "$RUNNER_TEMP/find_port.py" "$HOME_DIR/logs/app.log")
+            [ -n "$PORT" ] && break
+            sleep 1
+          done
+          if [ -z "$PORT" ]; then
+            echo "::error::За 120 с в logs/app.log не появилась строка «Программа запущена: порт N»"
+            cat "$RUNNER_TEMP/app-stdout.log" || true
+            cat "$HOME_DIR/logs/app.log" 2>/dev/null || true
+            exit 1
+          fi
+          echo "Порт программы: $PORT"
+
+          # Без сессии /login в настольном режиме — страница «Сеанс завершён»
+          curl -fsS --max-time 20 -H "Host: 127.0.0.1:$PORT" "http://127.0.0.1:$PORT/login" | grep -q 'desktop.closed.heading'
+          # Чужой Host (подмена DNS) отклоняется (НП-10)
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -H "Host: evil.example" "http://127.0.0.1:$PORT/login")
+          [ "$code" = "400" ] || { echo "::error::Чужой Host вернул $code, ожидался 400"; exit 1; }
+          # Неверный одноразовый ключ входа не пускает (НП-9)
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 "http://127.0.0.1:$PORT/desktop/enter?key=wrong")
+          [ "$code" = "404" ] || { echo "::error::Неверный ключ вернул $code, ожидался 404"; exit 1; }
+          # Окно живо
+          kill -0 "$PID"
+          sleep 5
+          screencapture -x "$RUNNER_TEMP/macos-window.png" || echo "::warning::screencapture не сработал"
+          echo "Проба пройдена"
+
+      - name: Закрытие и проверка, что процессов не осталось
+        if: always()
+        run: |
+          PID=$(cat "$RUNNER_TEMP/app.pid" 2>/dev/null || true)
+          [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
+          for i in $(seq 1 15); do
+            pgrep -f "HemCenterHistoDigital.app/Contents/MacOS" > /dev/null || break
+            sleep 1
+          done
+          if pgrep -fl "HemCenterHistoDigital.app/Contents/MacOS"; then
+            echo "::error::После закрытия остались процессы программы"
+            pkill -9 -f "HemCenterHistoDigital.app/Contents/MacOS" || true
+            exit 1
+          fi
+          echo "Процессов программы нет"
+
+      - name: Журнал и снимок окна
+        if: always()
+        run: |
+          mkdir -p diag
+          cp "$RUNNER_TEMP/hchd-home/logs/app.log" diag/app.log 2>/dev/null || true
+          cp "$RUNNER_TEMP/app-stdout.log" diag/app-stdout.log 2>/dev/null || true
+          cp "$RUNNER_TEMP/macos-window.png" diag/macos-window.png 2>/dev/null || true
+          ls -l diag
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-diagnostics
+          path: diag/
+          if-no-files-found: warn
+
+      # ditto, а не zip: обычный zip теряет символические ссылки и бит исполнения внутри .app
+      - name: Архив
+        run: |
+          set -e
+          mkdir -p dist-out
+          ZIP="dist-out/HemCenterHistoDigital-${{ steps.ver.outputs.version }}-macOS-AppleSilicon.zip"
+          ditto -c -k --keepParent build/dist/HemCenterHistoDigital.app "$ZIP"
+          ls -l "$ZIP"
+
+      - name: Проверка архива (ссылки и исполняемый файл целы)
+        run: |
+          set -e
+          rm -rf verify; mkdir verify
+          ditto -x -k dist-out/*.zip verify
+          APP=verify/HemCenterHistoDigital.app
+          test -x "$APP/Contents/MacOS/HemCenterHistoDigital"
+          before=$(find build/dist/HemCenterHistoDigital.app -type l | wc -l | tr -d ' ')
+          after=$(find "$APP" -type l | wc -l | tr -d ' ')
+          echo "Символических ссылок: в сборке $before, в архиве $after"
+          [ "$before" = "$after" ]
+          ls -l "$APP/Contents" | head -n 20
+          codesign --verify --deep --strict "$APP" || echo "::warning::после распаковки codesign --verify не прошла"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist-out/*.zip
+          if-no-files-found: error
+          compression-level: 0    # архив уже сжат; ditto-zip внутри остаётся как есть
+
+  release:
+    name: Выпуск на GitHub
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '{windows,macos}'
+          path: release-files
+          merge-multiple: true
+
+      - name: Состав выпуска
+        run: ls -l release-files
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: HemCenterHistoDigital ${{ needs.windows.outputs.version }}
+          files: release-files/*.zip
+          fail_on_unmatched_files: true
+          draft: false
+          prerelease: false
+          body: |
+            Настольная программа HemCenterHistoDigital ${{ needs.windows.outputs.version }}: тот же вьювер, что и веб-сервис, в окне на одном компьютере. Без сервера, без интернета, без логина. Сканы открываются из папок компьютера, программа их не копирует и не меняет.
+
+            Программа не подписана цифровой подписью: при первом запуске система покажет предупреждение, это ожидаемо.
+
+            **Windows 10/11**
+            1. Скачать архив `…-Windows.zip` и распаковать папку `HemCenterHistoDigital` куда удобно, например в `C:\Программы\`. Установщика нет, права администратора не нужны.
+            2. Запустить `HemCenterHistoDigital.exe`. Если Windows пишет «Windows защитила ваш компьютер», нажать «Подробнее», затем «Выполнить в любом случае».
+            3. В каталоге нажать «Добавить папку» и выбрать папку со сканами.
+            4. Сканы KFB открываются, если на компьютере установлена программа KFSlideOS: наша программа берёт у неё библиотеку KFBio.
+
+            **macOS (Apple Silicon: M1 и новее)**
+            1. Скачать архив `…-macOS-AppleSilicon.zip`, распаковать, перенести `HemCenterHistoDigital.app` в «Программы».
+            2. Первый запуск: macOS напишет, что не может проверить программу. Открыть «Системные настройки», раздел «Конфиденциальность и безопасность», внизу нажать «Всё равно открыть» рядом с названием программы и подтвердить.
+            3. В каталоге нажать «Добавить папку» и выбрать папку со сканами.
+            4. Сканы KFB на macOS пока не открываются; остальные форматы (SVS, NDPI, TIFF и другие, которые читает OpenSlide) работают.
+
+            Где программа хранит своё: Windows — `%LOCALAPPDATA%\HemCenterHistoDigital`; macOS — `~/Library/Application Support/HemCenterHistoDigital`. Там база (аннотации, расчёты, названия), кэш изображений и журнал. Сканов там нет. Обновление: заменить папку или `.app` новой, служебная папка не трогается.

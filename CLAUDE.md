@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Веб-сервис хранения и просмотра сканов Aperio SVS: администратор загружает сканы через браузер, раскладывает по папкам, выдаёт логины и доступ; пользователи только смотрят. Тайл-сервер на FastAPI и OpenSlide, клиент на чистом HTML/JS с OpenSeadragon, без сборки.
 
-Репозиторий: `github.com/sajberex-eng/Viewer-SVS`, публичный, ветка `main`. В него не должны попадать сканы, `data/`, `config.yaml`, `.env` (исключены в `.gitignore`). Push только вторым токеном по правилам из глобального `CLAUDE.md` пользователя; `github.com:443` с этого компьютера отвечает нестабильно, push при тайм-ауте повторять.
+Репозиторий: `github.com/sajberex-eng/Viewer-SVS`, публичный, ветка `main`. В него не должны попадать сканы, `data/`, `config.yaml`, `.env` (исключены в `.gitignore`). Push — по правилам из глобального `CLAUDE.md` пользователя (на компьютере `QQQQ1234` разрешены оба токена, обычный `git push` через Git Credential Manager работает; на других компьютерах — только второй токен); `github.com:443` с этого компьютера отвечает нестабильно, push при тайм-ауте повторять.
 
 ## Решения заказчика
 
@@ -62,7 +62,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Выкладка на рабочий сервер** (`ssh viewer-svs`; адрес и состояние сервера — в приватной памяти Claude, не здесь): копия базы `systemctl start viewer-backup.service`, копия кода `tar czf /opt/backups/code-before-<коммит>.tgz --exclude=.git --exclude=data .` в `/opt/viewer-svs`, затем код архивом `git archive --format=tar.gz -o <файл> <коммит>` → `scp` в `/tmp/viewer.tar.gz` → `tar xzf` поверх (удалённые из репозитория файлы стирать руками), `nohup docker compose up -d --build > /opt/backups/deploy-<коммит>.log 2>&1 < /dev/null &`, ждать `docker compose ps` со статусом «Up N seconds» (не «minutes» — это старый контейнер), проверить журнал («Хранилище проверено»), `PRAGMA user_version` и счётчики таблиц. `curl` с `api.github.com` на сервере бывает очень медленным — архив по `scp` надёжнее. Многострочные команды на сервер — Bash-инструментом (`ssh viewer-svs 'bash -s' <<'EOF'`), PowerShell 5.1 теряет кавычки; `docker compose exec -T … < /dev/null`, иначе остаток heredoc съедается.
 
-**Push** — только вторым токеном по правилам глобального `CLAUDE.md` (запись `github-temp-token`, права `repo`); `github.com:443` отвечает через раз — повторять.
+**Push** — по правилам глобального `CLAUDE.md`: на `QQQQ1234` обычный `git push` (первый токен через Git Credential Manager) или второй токен `github-temp-token` (права `repo, workflow, admin:org`); на других компьютерах только второй. `github.com:443` отвечает через раз — повторять.
 
 ## Текущее состояние (2026-10-22)
 

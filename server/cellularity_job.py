@@ -87,6 +87,12 @@ def physical_memory_mb() -> float | None:
             if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
                 return status.ullTotalPhys / 2 ** 20
             return None
+        if sys.platform == "darwin":  # SC_PHYS_PAGES в macOS нет
+            memsize, length = ctypes.c_uint64(0), ctypes.c_size_t(8)
+            libc = ctypes.CDLL("/usr/lib/libSystem.dylib")
+            if libc.sysctlbyname(b"hw.memsize", ctypes.byref(memsize), ctypes.byref(length), None, 0) == 0:
+                return memsize.value / 2 ** 20
+            return None
         return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 2 ** 20
     except (OSError, ValueError, AttributeError):
         return None
@@ -184,7 +190,25 @@ def _tune_malloc() -> None:
         pass
 
 
+def _exit_with_parent() -> None:
+    """Расчёт не должен пережить программу: если родитель убит (macOS: нет «задания»
+    Windows, программа закрывается через os._exit), процесс-сирота выходит сам.
+    В Windows родителя закрывает задание, getppid там не меняется."""
+    if os.name == "nt":
+        return
+    parent = os.getppid()
+
+    def watch() -> None:
+        while True:
+            time.sleep(2)
+            if os.getppid() != parent:
+                os._exit(0)
+
+    threading.Thread(target=watch, name="parent-watch", daemon=True).start()
+
+
 def _worker(conn, spec: JobSpec) -> None:
+    _exit_with_parent()
     _lower_priority()
     _tune_malloc()
     _limit_data_segment(spec.memory_limit_mb)
@@ -236,6 +260,37 @@ if os.name == "nt":
             return pmc.WorkingSetSize / 2 ** 20, pmc.PeakWorkingSetSize / 2 ** 20
         finally:
             _k32.CloseHandle(handle)
+elif sys.platform == "darwin":
+    # В macOS нет /proc: резидентная память берётся из libproc (proc_pidinfo, PROC_PIDTASKINFO).
+    # Пик система не отдаёт — его копит сам наблюдатель (max по опросам).
+    class _TaskInfo(ctypes.Structure):
+        _fields_ = [("virtual_size", ctypes.c_uint64), ("resident_size", ctypes.c_uint64),
+                    ("total_user", ctypes.c_uint64), ("total_system", ctypes.c_uint64),
+                    ("threads_user", ctypes.c_uint64), ("threads_system", ctypes.c_uint64),
+                    ("policy", ctypes.c_int32), ("faults", ctypes.c_int32), ("pageins", ctypes.c_int32),
+                    ("cow_faults", ctypes.c_int32), ("messages_sent", ctypes.c_int32),
+                    ("messages_received", ctypes.c_int32), ("syscalls_mach", ctypes.c_int32),
+                    ("syscalls_unix", ctypes.c_int32), ("csw", ctypes.c_int32),
+                    ("threadnum", ctypes.c_int32), ("numrunning", ctypes.c_int32),
+                    ("priority", ctypes.c_int32)]
+
+    try:
+        _libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        _libproc.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                          ctypes.c_void_p, ctypes.c_int]
+        _libproc.proc_pidinfo.restype = ctypes.c_int
+    except OSError:
+        _libproc = None
+
+    def rss_mb(pid: int) -> tuple[float, float]:
+        if _libproc is None:
+            return 0.0, 0.0
+        info = _TaskInfo()
+        size = ctypes.sizeof(info)
+        if _libproc.proc_pidinfo(pid, 4, 0, ctypes.byref(info), size) != size:  # 4 = PROC_PIDTASKINFO
+            return 0.0, 0.0
+        resident = info.resident_size / 2 ** 20
+        return resident, resident
 else:
     def rss_mb(pid: int) -> tuple[float, float]:
         current = peak = 0.0

@@ -59,6 +59,12 @@ def synthetic_marrow(h: int = 600, w: int = 900, seed: int = 1) -> tuple[np.ndar
 
 
 def main() -> None:
+    # ---------- наблюдатель за памятью расчёта читает память процесса на любой системе ----------
+    import os
+    current, peak = job.rss_mb(os.getpid())
+    check("память процесса читается (иначе предел памяти расчёта не сработает)",
+          current > 5 and peak >= 0, f"({current:.1f} МБ)")
+
     # ---------- правила ImageJ на простых фигурах ----------
     square = np.ones((6, 6), np.uint8)
     check("периметр квадрата 6×6 как у ImageJ (24 − 4·(2 − √2))",
