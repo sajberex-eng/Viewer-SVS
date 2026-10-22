@@ -773,9 +773,11 @@ input[type="range"] { accent-color: var(--accent); }
 .adjust-row input[type="range"].is-blue { accent-color: #1e88e5; }
 /* Резкость High Pass: отделена линией, при выключенной галочке ползунки бледные */
 .adjust-sharpen { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
-.adjust-sharpen-head { margin-bottom: 8px; font-weight: 600; }
+.adjust-sharpen-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.adjust-sharpen-head .adjust-check { font-weight: 600; }
+#adjustSharpenAuto { height: 26px; padding: 0 10px; }
 .adjust-sharpen.is-off .adjust-row { opacity: 0.55; }
-.adjust-sharpen.is-inactive .adjust-sharpen-head { opacity: 0.6; }
+.adjust-sharpen.is-inactive .adjust-check { opacity: 0.6; }
 
 /* Нижней строки состояния больше нет (замечание патолога 2026-09-24): увеличение
    в шапке, сообщения — всплывашкой над препаратом */

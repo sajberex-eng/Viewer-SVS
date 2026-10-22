@@ -270,14 +270,15 @@
           <!-- Резкость High Pass (документ заказчика 2026-10-22): как в Photoshop —
                копия с выделенными границами накладывается на кадр -->
           <div class="adjust-sharpen" id="adjustSharpenBlock">
-            <label class="adjust-check adjust-sharpen-head" data-i18n-tip="adjust.sharpen.tip">
-              <input type="checkbox" id="adjustSharpen">
-              <span data-i18n="adjust.sharpen"></span>
-            </label>
-            <div id="adjustSharpenRows"></div>
-            <div class="adjust-actions">
-              <button class="btn" id="adjustSharpenAuto" data-i18n="adjust.sharpen.auto" data-i18n-tip="adjust.sharpen.auto.tip"></button>
+            <!-- «Авто» в той же строке, активна при включённой резкости (заказчик 2026-10-22) -->
+            <div class="adjust-sharpen-head">
+              <label class="adjust-check" data-i18n-tip="adjust.sharpen.tip">
+                <input type="checkbox" id="adjustSharpen">
+                <span data-i18n="adjust.sharpen"></span>
+              </label>
+              <button class="btn" id="adjustSharpenAuto" disabled data-i18n="adjust.sharpen.auto" data-i18n-tip="adjust.sharpen.auto.tip"></button>
             </div>
+            <div id="adjustSharpenRows"></div>
             <div class="adjust-row adjust-row-preset">
               <label for="adjustSharpMode" data-i18n="adjust.sharpMode"></label>
               <select id="adjustSharpMode">

@@ -82,6 +82,7 @@ export class AdjustPanel {
     this.sharpenCheck = panel.querySelector('#adjustSharpen');
     this.sharpenBlock = panel.querySelector('#adjustSharpenBlock');
     this.sharpModeSelect = panel.querySelector('#adjustSharpMode');
+    this.sharpenAuto = panel.querySelector('#adjustSharpenAuto');
     this.profileCheck = panel.querySelector('#adjustProfile');
     this.stainSelect = panel.querySelector('#adjustStain');
     this.histogramHandler = () => this._scheduleHistogram();
@@ -125,7 +126,7 @@ export class AdjustPanel {
     const unsupported = !this.adjuster.supported;
     this.hint.textContent = unsupported ? t('adjust.noWebgl') : '';
     this.panel.classList.toggle('is-disabled', unsupported);
-    this.panel.querySelectorAll('input, select, button:not(#adjustClose)').forEach((el) => {
+    this.panel.querySelectorAll('input, select, button:not(#adjustClose):not(#adjustSharpenAuto)').forEach((el) => {
       el.disabled = unsupported;
     });
     for (const marker of Object.values(this.markers)) marker.tabIndex = unsupported ? -1 : 0;
@@ -177,6 +178,7 @@ export class AdjustPanel {
     }
     this.sharpenCheck.checked = v.sharpen > 0;
     this.sharpenBlock.classList.toggle('is-off', !(v.sharpen > 0));
+    this.sharpenAuto.disabled = !(v.sharpen > 0) || !this.adjuster?.supported;
     this.sharpModeSelect.value = String(v.sharpMode);
     for (const id of LEVELS) this.fields[id].value = v[id];
     this.stainSelect.value = String(v.stain);
@@ -369,7 +371,7 @@ export class AdjustPanel {
         return;
       }
       const amount = autoSharpenAmount(metric);
-      this.setValues({ sharpen: 1, sharpAmount: amount });
+      this.setValues({ sharpAmount: amount });
       this._flashHint(t('adjust.sharpen.auto.done', { amount, metric: formatNumber(metric, 2) }));
     });
   }
@@ -422,7 +424,7 @@ export class AdjustPanel {
     // Ниже 10× резкость не применяется: блок бледнеет, подсказка говорит почему
     const applies = this.adjuster.sharpenApplies;
     this.sharpenBlock.classList.toggle('is-inactive', !applies);
-    this.sharpenBlock.querySelector('.adjust-sharpen-head').title = t(applies ? 'adjust.sharpen.tip' : 'adjust.sharpen.lowMag');
+    this.sharpenBlock.querySelector('.adjust-check').title = t(applies ? 'adjust.sharpen.tip' : 'adjust.sharpen.lowMag');
     const canvas = this.histogram;
     const ratio = window.devicePixelRatio || 1;
     const width = Math.round(canvas.clientWidth * ratio) || canvas.width;
