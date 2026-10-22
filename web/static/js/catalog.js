@@ -4,6 +4,7 @@ import { chooseDialog, confirmDialog, formDialog, pickerDialog } from './dialog.
 import { applyI18n, formatDateTime, formatNumber, setLanguage, STAIN_CODES, stainFull, stainShort, t } from './i18n.js';
 import { SLIDE_EXTENSIONS, UploadQueue, isSlideFile, sha256hex } from './upload.js';
 import { canRemember, forget, keepOnly, recall } from './filestore.js';
+import { applyIcons } from './icons.js';
 
 const $ = (id) => document.getElementById(id);
 const MODES = ['admins', 'all', 'selected'];
@@ -15,9 +16,34 @@ let space = null;
 let problems = [];  // программа: файлы, которые не открылись (НП-17)
 let currentFolder = null; // null означает «все папки»
 const expanded = new Set();
+let folderIndex = new Map(); // id → папка: дерево ищется часто
+let subtreeCounts = new Map(); // id → число сканов в папке с подпапками
+
+// Этап 15 (2026-10-22): каталог под много случаев. Порядок, вид и порция
+// запоминаются в браузере; поиск идёт по всем случаям сразу.
+const PAGE_SIZE = 60;
+const SORTS = ['newest', 'oldest', 'name'];
+let sortBy = readPref('catalog.sort', SORTS, 'newest');
+let viewMode = readPref('catalog.view', ['cards', 'list'], 'cards');
+let shownLimit = PAGE_SIZE;
+let searchTimer = null;
+
+function readPref(key, allowed, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return allowed.includes(value) ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function savePref(key, value) {
+  try { localStorage.setItem(key, value); } catch { /* хранилище закрыто */ }
+}
 
 setLanguage('ru');
 applyI18n();
+applyIcons();
 main();
 
 async function main() {
@@ -25,7 +51,33 @@ async function main() {
   $('userName').textContent = user.name || user.login;
   $('btnLogout').addEventListener('click', logout);
   $('btnProfile').addEventListener('click', changePassword);
-  $('search').addEventListener('input', renderSlides);
+  // Поиск ждёт паузу в наборе: иначе каждая буква перестраивает сетку
+  $('search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      shownLimit = PAGE_SIZE;
+      renderSlides();
+    }, 150);
+  });
+  $('treeFilter').addEventListener('input', renderTree);
+  const sortSelect = $('sortSelect');
+  sortSelect.value = sortBy;
+  sortSelect.addEventListener('change', () => {
+    sortBy = sortSelect.value;
+    savePref('catalog.sort', sortBy);
+    shownLimit = PAGE_SIZE;
+    renderSlides();
+  });
+  $('viewToggle').addEventListener('click', () => {
+    viewMode = viewMode === 'cards' ? 'list' : 'cards';
+    savePref('catalog.view', viewMode);
+    renderSlides();
+  });
+  // «Назад» и «Вперёд» ходят по папкам: адрес несёт текущую папку
+  window.addEventListener('popstate', () => {
+    const id = Number(new URLSearchParams(location.search).get('folder')) || null;
+    openFolder(id && folderById(id) ? id : null, { history: 'none' });
+  });
 
   if (user.role === 'admin' && isDesktop) {
     for (const id of ['linkJournal', 'linkSettings', 'btnAddFolder', 'btnRefresh']) $(id).hidden = false;
@@ -37,12 +89,7 @@ async function main() {
   await load();
   // Ссылка из вьювера открывает папку скана (ИН-3)
   const wanted = Number(new URLSearchParams(location.search).get('folder'));
-  if (wanted && folderById(wanted)) {
-    currentFolder = wanted;
-    for (const folder of pathOf(wanted)) expanded.add(folder.id);
-    renderTree();
-    renderSlides();
-  }
+  if (wanted && folderById(wanted)) openFolder(wanted, { history: 'replace' });
   // После каталога: прерванным загрузкам нужны названия папок
   if (user.role === 'admin' && !isDesktop) await loadPending();
 }
@@ -55,6 +102,8 @@ async function load({ silent = false } = {}) {
     const data = await api('/api/catalog');
     folders = data.folders;
     slides = data.slides;
+    folderIndex = new Map(folders.map((folder) => [folder.id, folder]));
+    subtreeCounts = countSubtrees();
     space = data.space;
     problems = data.problems ?? [];
     if (currentFolder !== null && !folders.some((f) => f.id === currentFolder)) currentFolder = null;
@@ -70,7 +119,33 @@ async function load({ silent = false } = {}) {
 
 const childrenOf = (parentId) => folders.filter((f) => f.parent_id === parentId).sort(byName);
 const byName = (a, b) => a.name.localeCompare(b.name, 'ru');
-const folderById = (id) => folders.find((f) => f.id === id) ?? null;
+const folderById = (id) => folderIndex.get(id) ?? null;
+
+// Число сканов в каждой папке вместе с подпапками: один проход по сканам
+function countSubtrees() {
+  const counts = new Map();
+  for (const slide of slides) {
+    for (const folder of pathOf(slide.folder_id)) counts.set(folder.id, (counts.get(folder.id) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// Переход в папку — один путь для дерева, крошек, карточек случаев и адреса.
+// history: 'push' — щелчок пользователя, 'replace' — открытие по ссылке, 'none' — «Назад»
+function openFolder(folderId, { history = 'push' } = {}) {
+  currentFolder = folderId;
+  shownLimit = PAGE_SIZE;
+  if (folderId !== null) for (const folder of pathOf(folderId)) expanded.add(folder.id);
+  const url = folderId === null ? location.pathname : `${location.pathname}?folder=${folderId}`;
+  if (history === 'push' && location.search !== (folderId === null ? '' : `?folder=${folderId}`)) {
+    window.history.pushState({ folder: folderId }, '', url);
+  } else if (history === 'replace') {
+    window.history.replaceState({ folder: folderId }, '', url);
+  }
+  renderTree();
+  renderSlides();
+  $('dropZone').scrollTop = 0;
+}
 
 function pathOf(folderId) {
   const chain = [];
@@ -85,7 +160,16 @@ function pathOf(folderId) {
 function renderTree() {
   const root = document.createElement('li');
   root.append(folderRow({ id: null, name: t('catalog.root') }, 0));
-  const list = [root, ...childrenOf(null).flatMap((folder) => branch(folder, 1))];
+  // Фильтр папок: остаются совпавшие по названию и их предки, путь раскрыт
+  const needle = $('treeFilter').value.trim().toLowerCase();
+  let keep = null;
+  if (needle) {
+    keep = new Set();
+    for (const folder of folders) {
+      if (folder.name.toLowerCase().includes(needle)) for (const step of pathOf(folder.id)) keep.add(step.id);
+    }
+  }
+  const list = [root, ...childrenOf(null).flatMap((folder) => branch(folder, 1, keep))];
   $('tree').replaceChildren(...list);
   if (user.role === 'admin' && !isDesktop) updateFolderButtons();
 }
@@ -100,12 +184,13 @@ function updateFolderButtons() {
   $('btnAccess').title = t(inRoot ? 'catalog.selectFolderAccess' : 'catalog.access.tip');
 }
 
-function branch(folder, depth) {
+function branch(folder, depth, keep = null) {
+  if (keep && !keep.has(folder.id)) return [];
   const item = document.createElement('li');
   item.append(folderRow(folder, depth));
   const kids = childrenOf(folder.id);
-  if (!kids.length || !expanded.has(folder.id)) return [item];
-  return [item, ...kids.flatMap((kid) => branch(kid, depth + 1))];
+  if (!kids.length || (!keep && !expanded.has(folder.id))) return [item];
+  return [item, ...kids.flatMap((kid) => branch(kid, depth + 1, keep))];
 }
 
 function folderRow(folder, depth) {
@@ -133,15 +218,12 @@ function folderRow(folder, depth) {
   name.textContent = folder.name;
   if (folder.path) name.title = folder.path;  // программа: папка на диске
   name.addEventListener('click', () => {
-    currentFolder = folder.id;
-    if (folder.id !== null) expanded.add(folder.id);
-    renderTree();
-    renderSlides();
+    openFolder(folder.id);
     // Программа сверяет папку с диском при открытии (НП-14); сервер не чаще раза в 10 с
     if (isDesktop && folder.id !== null && user.role === 'admin') syncFolder(folder.id);
   });
 
-  row.append(toggle, name);
+  row.append(toggle, name, countBadge(folder.id));
   if (user.role === 'admin' && folder.id !== null && isDesktop) {
     // В программе дерево повторяет диск: меню есть только у добавленной папки (НП-12)
     if (folder.is_source) row.append(folderActions(folder));
@@ -251,6 +333,16 @@ function iconAction(glyph, tip, handler, extraClass = '') {
   return button;
 }
 
+// Число сканов в папке с подпапками; у корня — всего
+function countBadge(folderId) {
+  const badge = document.createElement('span');
+  badge.className = 'badge badge-count';
+  const count = folderId === null ? slides.length : (subtreeCounts.get(folderId) ?? 0);
+  badge.textContent = count ? formatNumber(count) : '';
+  badge.title = t('catalog.count.tip', { n: formatNumber(count) });
+  return badge;
+}
+
 function accessBadge(item) {
   const badge = document.createElement('span');
   badge.className = 'badge';
@@ -268,12 +360,10 @@ function accessBadge(item) {
 
 // ---------- сканы ----------
 
-function visibleSlides() {
-  const needle = $('search').value.trim().toLowerCase();
-  const inFolder = currentFolder === null
-    ? slides
-    : slides.filter((slide) => descendants(currentFolder).has(slide.folder_id));
-  return inFolder.filter((slide) => slide.title.toLowerCase().includes(needle));
+// Текст, по которому ищется скан: название, окраска, маркер, заметка, путь папок
+function searchText(slide) {
+  return [slide.title, stainShort(slide), stainFull(slide), slide.ihc_marker, slide.note,
+    ...pathOf(slide.folder_id).map((folder) => folder.name)].filter(Boolean).join(' ').toLowerCase();
 }
 
 function descendants(folderId) {
@@ -288,27 +378,200 @@ function descendants(folderId) {
   return result;
 }
 
+const slideTime = (slide) => (slide.added_at ? Date.parse(slide.added_at) : 0);
+
+function sortSlides(list) {
+  const sorted = [...list];
+  if (sortBy === 'name') sorted.sort((a, b) => a.title.localeCompare(b.title, 'ru') || slideTime(b) - slideTime(a));
+  else if (sortBy === 'oldest') sorted.sort((a, b) => slideTime(a) - slideTime(b));
+  else sorted.sort((a, b) => slideTime(b) - slideTime(a));
+  return sorted;
+}
+
+// Сводка папки для карточки случая: сканы поддерева, окраски, последний скан
+function folderSummary(folderId) {
+  const inside = descendants(folderId);
+  const own = slides.filter((slide) => inside.has(slide.folder_id));
+  const latest = own.reduce((best, slide) => (!best || slideTime(slide) > slideTime(best) ? slide : best), null);
+  const stains = [...new Set(own.map(stainShort).filter(Boolean))];
+  return { count: own.length, latest, stains, cover: latest };
+}
+
+function sortFolders(list) {
+  const sorted = [...list];
+  if (sortBy === 'name') sorted.sort(byName);
+  else {
+    const time = (folder) => slideTime(folderSummary(folder.id).latest ?? {});
+    sorted.sort((a, b) => (sortBy === 'oldest' ? time(a) - time(b) : time(b) - time(a)) || byName(a, b));
+  }
+  return sorted;
+}
+
 let shownSignature = '';
 
+// Что показывать: в корне — случаи (папки верхнего уровня), в папке — подпапки
+// и сканы, при поиске — сканы всех случаев группами по папке и совпавшие папки.
 function renderSlides() {
-  const list = visibleSlides();
-  // Карточки пересоздаются, только если список действительно изменился: иначе
-  // миниатюры перезапрашиваются и заметно мигают при каждом обновлении.
-  // Путь показывается там, где папка не очевидна: в корне и в поиске (ИН-2)
-  const showPath = currentFolder === null || Boolean($('search').value.trim());
-  const signature = `${showPath}|${list.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}:${slide.missing ?? ''}`).join('|')}`;
+  const needle = $('search').value.trim().toLowerCase();
+  const grid = $('grid');
+  grid.classList.toggle('is-list', viewMode === 'list');
+  $('viewToggle').dataset.label = t(viewMode === 'list' ? 'catalog.view.cards' : 'catalog.view.list');
+  $('viewToggle').title = $('viewToggle').dataset.label;
+
+  const items = []; // [{key, node}] в порядке показа
+  let folderCards = [];
+  let slideList = [];
+  if (needle) {
+    folderCards = sortFolders(folders.filter((folder) => folder.name.toLowerCase().includes(needle)));
+    slideList = sortSlides(slides.filter((slide) => searchText(slide).includes(needle)));
+    // Группы по папке: порядок групп — по первому скану в отсортированном списке
+    const groups = new Map();
+    for (const slide of slideList) {
+      if (!groups.has(slide.folder_id)) groups.set(slide.folder_id, []);
+      groups.get(slide.folder_id).push(slide);
+    }
+    for (const folder of folderCards) items.push({ key: `f${folder.id}`, make: () => caseCard(folder) });
+    for (const [folderId, group] of groups) {
+      items.push({ key: `g${folderId}`, make: () => groupHead(folderId, group.length) });
+      for (const slide of group) items.push({ key: `s${slide.id}`, make: () => card(slide, false) });
+    }
+  } else {
+    folderCards = sortFolders(childrenOf(currentFolder));
+    for (const folder of folderCards) items.push({ key: `f${folder.id}`, make: () => caseCard(folder) });
+    if (currentFolder !== null) {
+      const inside = descendants(currentFolder);
+      slideList = sortSlides(slides.filter((slide) => inside.has(slide.folder_id)));
+      for (const slide of slideList) {
+        items.push({ key: `s${slide.id}`, make: () => card(slide, slide.folder_id !== currentFolder) });
+      }
+    }
+  }
+
+  // Порция: первые shownLimit, дальше кнопка «Показать ещё»
+  const shown = items.slice(0, shownLimit);
+  const signature = `${viewMode}|${sortBy}|${needle}|${currentFolder}|${shown.map((item) => item.key).join(',')}`
+    + `|${slides.map((slide) => `${slide.id}:${slide.title}:${slide.stain ?? ''}:${slide.missing ?? ''}`).join('|')}`;
   if (signature !== shownSignature) {
     shownSignature = signature;
-    $('grid').replaceChildren(...list.map((slide) => card(slide, showPath)));
+    const nodes = shown.map((item) => item.make());
+    if (items.length > shown.length) nodes.push(showMore(items.length - shown.length));
+    grid.replaceChildren(...nodes);
   }
   renderCrumbs();
   renderClosedNote();
   renderProblems();
-  if (list.length) setNote('');
-  else if ($('search').value.trim()) setNote(t('catalog.nothingFound'));
+  renderSummary(folderCards.length, slideList.length, shown.length, items.length, needle);
+  if (items.length) setNote('');
+  else if (needle) setNote(t('catalog.nothingFound'));
   else if (!slides.length && isDesktop) setNote(t('catalog.emptyDesktop'));
   else if (!slides.length) setNote(user.role === 'admin' ? t('catalog.emptyAdmin') : t('catalog.empty'));
   else setNote(t('catalog.emptyFolder'));
+}
+
+function renderSummary(cases, count, shownCount, total, needle) {
+  const parts = [];
+  if (needle) parts.push(t('catalog.summary.found', { cases: formatNumber(cases), slides: formatNumber(count) }));
+  else if (currentFolder === null) parts.push(t('catalog.summary.root', { cases: formatNumber(cases), slides: formatNumber(slides.length) }));
+  else parts.push(t('catalog.summary.folder', { cases: formatNumber(cases), slides: formatNumber(count) }));
+  if (total > shownCount) parts.push(t('catalog.shown', { shown: formatNumber(shownCount), total: formatNumber(total) }));
+  $('gridSummary').textContent = total ? parts.join(' · ') : '';
+}
+
+function showMore(rest) {
+  const item = document.createElement('li');
+  item.className = 'show-more';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn';
+  button.textContent = t('catalog.showMore', { n: formatNumber(Math.min(rest, PAGE_SIZE)) });
+  button.addEventListener('click', () => {
+    shownLimit += PAGE_SIZE;
+    renderSlides();
+  });
+  item.append(button);
+  return item;
+}
+
+// Заголовок группы в результатах поиска: путь папки, щелчок открывает её
+function groupHead(folderId, count) {
+  const item = document.createElement('li');
+  item.className = 'catalog-group-head';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'link-btn';
+  button.textContent = pathOf(folderId).map((folder) => folder.name).join(' › ');
+  button.addEventListener('click', () => {
+    $('search').value = '';
+    openFolder(folderId);
+  });
+  const note = document.createElement('span');
+  note.className = 'muted';
+  note.textContent = t('catalog.group.count', { n: formatNumber(count) });
+  item.append(button, note);
+  return item;
+}
+
+// Карточка случая (папки): миниатюра последнего скана, число сканов, окраски, дата
+function caseCard(folder) {
+  const summary = folderSummary(folder.id);
+  const item = document.createElement('li');
+  item.className = 'slide-item case-item';
+  const link = document.createElement('a');
+  link.className = 'slide-card case-card';
+  link.href = `/?folder=${folder.id}`;
+  link.addEventListener('click', (event) => {
+    event.preventDefault();
+    $('search').value = '';
+    openFolder(folder.id);
+  });
+  if (summary.cover && !summary.cover.missing) {
+    const image = document.createElement('img');
+    image.src = `/api/slides/${encodeURIComponent(summary.cover.id)}/thumbnail.jpg`;
+    image.alt = '';
+    image.loading = 'lazy';
+    link.append(image);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'case-empty';
+    empty.textContent = t('catalog.case.empty');
+    link.append(empty);
+  }
+  const title = document.createElement('span');
+  title.className = 'slide-card-title';
+  title.textContent = folder.name;
+  const chips = document.createElement('span');
+  chips.className = 'case-chips';
+  for (const stain of summary.stains.slice(0, 6)) {
+    const chip = document.createElement('span');
+    chip.className = 'stain-chip';
+    chip.textContent = stain;
+    chips.append(chip);
+  }
+  if (summary.stains.length > 6) {
+    const more = document.createElement('span');
+    more.className = 'muted';
+    more.textContent = `+${summary.stains.length - 6}`;
+    chips.append(more);
+  }
+  const details = document.createElement('span');
+  details.className = 'muted';
+  const last = summary.latest?.added_at ? t('catalog.case.last', { date: formatDateTime(summary.latest.added_at).split(',')[0] }) : '';
+  const subfolders = childrenOf(folder.id).length;
+  details.textContent = [
+    t('catalog.case.count', { n: formatNumber(summary.count) }),
+    subfolders ? t('catalog.case.subfolders', { n: formatNumber(subfolders) }) : '',
+    last,
+    user.role === 'admin' && folder.access_mode ? t(`access.badge.${folder.access_mode}`) : '',
+  ].filter(Boolean).join(' · ');
+  if (currentFolder !== null && folder.parent_id !== currentFolder) {
+    const path = document.createElement('span');
+    path.className = 'slide-card-path muted';
+    path.textContent = pathOf(folder.id).map((step) => step.name).join(' › ');
+    link.append(path);
+  }
+  link.append(title, chips, details);
+  item.append(link);
+  return item;
 }
 
 // Действующий режим доступа папки: свой либо унаследованный от папки выше.
@@ -359,11 +622,7 @@ function crumb(text, folderId) {
   button.className = 'crumb';
   button.textContent = text;
   if (folderId === currentFolder) button.setAttribute('aria-current', 'true');
-  button.addEventListener('click', () => {
-    currentFolder = folderId;
-    renderTree();
-    renderSlides();
-  });
+  button.addEventListener('click', () => openFolder(folderId));
   return button;
 }
 

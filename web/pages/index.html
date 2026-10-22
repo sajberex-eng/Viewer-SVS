@@ -33,6 +33,8 @@
         <!-- Программа: сканы открываются из папок компьютера (docs/TOR-desktop.md, НП-12) -->
         <button class="btn only-desktop" id="btnAddFolder" hidden data-i18n="catalog.addFolder" data-i18n-tip="catalog.addFolder.tip"></button>
       </div>
+      <!-- Фильтр папок по названию: при сотнях случаев дерево иначе не пролистать -->
+      <input type="search" class="tree-filter" id="treeFilter" data-i18n-placeholder="catalog.treeFilter" data-i18n-tip="catalog.treeFilter">
       <ul class="tree" id="tree"></ul>
       <div class="tree-space no-desktop" hidden id="spaceBox">
         <p class="muted" id="space"></p>
@@ -44,13 +46,20 @@
     <section class="catalog-main" id="dropZone">
       <div class="catalog-toolbar">
         <nav class="crumbs" id="crumbs" aria-label="Путь"></nav>
-        <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search">
+        <input type="search" id="search" data-i18n-placeholder="catalog.search" data-i18n-tip="catalog.search.tip">
+        <select id="sortSelect" data-i18n-tip="catalog.sort.tip">
+          <option value="newest" data-i18n="catalog.sort.newest"></option>
+          <option value="oldest" data-i18n="catalog.sort.oldest"></option>
+          <option value="name" data-i18n="catalog.sort.name"></option>
+        </select>
+        <button class="btn btn-icon" type="button" id="viewToggle" data-icon="list"></button>
         <button class="btn only-desktop" id="btnRefresh" hidden data-i18n="catalog.refresh" data-i18n-tip="catalog.refresh.tip"></button>
         <button class="btn no-desktop" id="btnAccess" hidden data-i18n="catalog.access" data-i18n-tip="catalog.access.tip"></button>
         <button class="btn btn-primary no-desktop" id="btnUpload" hidden data-i18n="catalog.upload" data-i18n-tip="catalog.upload.tip"></button>
         <input type="file" id="fileInput" multiple hidden>
       </div>
       <p class="catalog-note" id="note" aria-live="polite"></p>
+      <p class="catalog-note catalog-summary" id="gridSummary"></p>
       <!-- Папка закрыта для пользователей: без этой строки администратор не
            узнает, что загруженные сканы никто, кроме него, не видит (ИН-8) -->
       <div class="closed-note no-desktop" id="closedNote" hidden>

@@ -884,6 +884,8 @@ input[type="range"] { accent-color: var(--accent); }
 }
 .tree-row:hover .badge { display: none; }  /* уступает место кнопкам действий */
 .badge-admins { color: var(--brand-accent); }
+.badge-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+.tree-filter { margin: 0 10px 6px; height: 28px; font-size: 13px; }
 
 .crumbs { display: flex; align-items: center; gap: 4px; margin-right: auto; flex: 1 1 180px; flex-wrap: wrap; min-width: 0; }
 .crumb {
@@ -902,7 +904,26 @@ input[type="range"] { accent-color: var(--accent); }
 .catalog-main { position: relative; padding: 16px; overflow-y: auto; min-width: 0; }
 .catalog-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 16px; }
 .catalog-toolbar h2 { font-size: 18px; margin-right: auto; }
-.catalog-toolbar input[type="search"] { width: 220px; flex: none; }
+.catalog-toolbar input[type="search"] { width: 260px; flex: none; }
+.catalog-toolbar select { height: 32px; }
+.catalog-summary { margin-top: -8px; }
+/* Карточка случая: миниатюра последнего скана, плашки окрасок */
+.case-card img { height: 110px; }
+.case-empty { height: 110px; display: grid; place-content: center; color: var(--muted); font-size: 12px; background: var(--thumb-bg); }
+.case-chips { display: flex; flex-wrap: wrap; gap: 4px; font-size: 12px; min-height: 17px; }
+/* Заголовок группы в поиске и кнопка «Показать ещё» — на всю ширину сетки */
+.catalog-group-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; margin-top: 6px; font-size: 13px; }
+.catalog-group-head .link-btn { font-size: 14px; font-weight: 600; text-decoration: none; }
+.catalog-group-head .link-btn:hover { text-decoration: underline; }
+.show-more { grid-column: 1 / -1; display: flex; justify-content: center; padding: 6px 0; }
+/* Список: строка с маленькой миниатюрой вместо карточки */
+.catalog-grid.is-list { grid-template-columns: 1fr; gap: 6px; }
+.catalog-grid.is-list .slide-item { grid-template-columns: 1fr auto; align-items: center; column-gap: 12px; }
+.catalog-grid.is-list .slide-card { display: grid; grid-template-columns: 64px 1fr; grid-auto-rows: auto; column-gap: 12px; row-gap: 2px; padding: 6px 10px; }
+.catalog-grid.is-list .slide-card img, .catalog-grid.is-list .case-empty { grid-row: 1 / span 3; width: 64px; height: 44px; }
+.catalog-grid.is-list .slide-card-title { grid-column: 2; }
+.catalog-grid.is-list .slide-card > .muted, .catalog-grid.is-list .case-chips { grid-column: 2; }
+.catalog-grid.is-list .slide-actions { padding: 0; }
 
 .drop-hint {
   position: absolute;
