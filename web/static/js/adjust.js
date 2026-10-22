@@ -47,8 +47,6 @@ export const PRESETS = {
   original: { ...DEFAULTS },
   pale: { ...DEFAULTS, black: 20, white: 250, saturation: 35 },
   overstained: { ...DEFAULTS, gamma: 1.4, white: 245 },
-  hematoxylin: { ...DEFAULTS, stain: 1 },
-  eosin: { ...DEFAULTS, stain: 2 },
 };
 
 // Автокоррекция «как в сканере» (раздел 7.6 ТЗ, решение заказчика 2026-09-29):

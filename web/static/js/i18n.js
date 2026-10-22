@@ -567,8 +567,6 @@ const STRINGS = {
     'adjust.preset.original': 'Исходное',
     'adjust.preset.pale': 'Бледная окраска',
     'adjust.preset.overstained': 'Перекрашенный препарат',
-    'adjust.preset.hematoxylin': 'Только ядра (гематоксилин)',
-    'adjust.preset.eosin': 'Только эозин',
     'adjust.profile': 'Цвет как в сканере',
     'adjust.profile.tip': 'Применить цветовой профиль сканера, записанный в файле',
     'adjust.profile.none': 'В файле этого скана нет цветового профиля',
