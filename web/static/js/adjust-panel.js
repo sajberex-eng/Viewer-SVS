@@ -1,5 +1,6 @@
 import {
-  DEFAULTS, LEGACY_ORDER, ORDER_11, PARAMS, PRESETS, autoValues, clampParam, gainToBalance, isDefault, loadImage,
+  DEFAULTS, LEGACY_ORDER, ORDER_11, PARAMS, PRESETS, autoSharpenAmount, autoValues, clampParam, gainToBalance, isDefault,
+  loadImage, sharpnessMetric,
 } from './adjust.js';
 import { formatNumber, t } from './i18n.js';
 
@@ -92,6 +93,7 @@ export class AdjustPanel {
     this._bindCompare(panel.querySelector('#adjustCompare'));
     this._bindPipette(panel.querySelector('#adjustPipette'));
     this._bindAuto(panel.querySelector('#adjustAuto'));
+    this._bindSharpenAuto(panel.querySelector('#adjustSharpenAuto'));
     // «Сбросить всё» возвращает и профиль сканера: по умолчанию он включён, если есть в файле
     panel.querySelector('#adjustResetAll').addEventListener('click', () => {
       this.setValues(DEFAULTS);
@@ -356,6 +358,31 @@ export class AdjustPanel {
   // «Авто» (И-13): как в сканере — баланс белого и белая точка по фону стекла
   // на миниатюре всего препарата (раздел 7.6 ТЗ), поэтому результат не зависит
   // от поля зрения; чёрная точка не трогается.
+  // «Авто» резкости: сила по размытости центра видимого поля, радиус и режим
+  // не меняются. Ниже 10× и без ткани в кадре — подсказка вместо значений.
+  _bindSharpenAuto(button) {
+    button.addEventListener('click', () => {
+      if (!this.adjuster) return;
+      const sample = this.adjuster.sharpenApplies ? this.adjuster.centerSample() : null;
+      const metric = sample ? sharpnessMetric(sample) : null;
+      if (metric === null) {
+        this._flashHint(t('adjust.sharpen.auto.none'));
+        return;
+      }
+      const amount = autoSharpenAmount(metric);
+      this.setValues({ sharpen: 1, sharpAmount: amount });
+      this._flashHint(t('adjust.sharpen.auto.done', { amount, metric: formatNumber(metric, 2) }));
+    });
+  }
+
+  _flashHint(text) {
+    this.hint.textContent = text;
+    clearTimeout(this.hintTimer);
+    this.hintTimer = setTimeout(() => {
+      if (this.hint.textContent === text) this.hint.textContent = '';
+    }, 5000);
+  }
+
   _bindAuto(button) {
     button.addEventListener('click', async () => {
       if (!this.pane || button.disabled) return;

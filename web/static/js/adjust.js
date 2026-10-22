@@ -54,6 +54,67 @@ export const PRESETS = {
 // зернистость. Радиус задан в пикселях скана и пересчитывается в пиксели
 // холста по текущему увеличению, так что на 20× и 40× он значит одно и то же.
 export const SHARPEN_MIN_MAGNIFICATION = 10;
+
+// «Авто» для резкости (просьба заказчика 2026-10-22): сила подбирается по
+// размытости видимого поля. Мера — разброс лапласиана яркости, делённый на
+// разброс самой яркости по пикселям ткани (без фона стекла): у резкого кадра
+// около sharp, у мягкого — около soft. Калибровка 2026-10-22 по снимку
+// настоящего H&E на 23,7×: без фильтра 0,81, с резкостью 50 % — 0,93,
+// 100 % Overlay — 1,12, Multiply — 1,36. Пороги уточняются на настоящих сканах.
+export const AUTO_SHARPEN = {
+  soft: 0.5,          // такой кадр считается мягким: сила maxAmount
+  sharp: 1.1,         // такой — уже резким: сила minAmount
+  minAmount: 10,
+  maxAmount: 90,
+  tissueBelow: 235,   // яркость, ниже которой пиксель считается тканью
+  minTissueShare: 0.05, // меньше ткани в кадре — оценивать нечего
+  sample: 384,        // сторона центрального участка кадра, пикселей холста
+};
+
+// Сила резкости по мере размытости: линейно между soft и sharp
+export function autoSharpenAmount(metric) {
+  const { soft, sharp, minAmount, maxAmount } = AUTO_SHARPEN;
+  const fraction = Math.min(1, Math.max(0, (sharp - metric) / (sharp - soft)));
+  return Math.round(minAmount + (maxAmount - minAmount) * fraction);
+}
+
+// Мера размытости по участку кадра (ImageData): std(лапласиан) / std(яркость)
+// по пикселям ткани; null — ткани мало.
+export function sharpnessMetric(imageData) {
+  const { data, width, height } = imageData;
+  const luma = new Float32Array(width * height);
+  const tissue = new Uint8Array(width * height);
+  let count = 0;
+  for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
+    const y = luminance(data[i], data[i + 1], data[i + 2]);
+    luma[p] = y;
+    if (data[i + 3] === 255 && y < AUTO_SHARPEN.tissueBelow) {
+      tissue[p] = 1;
+      count += 1;
+    }
+  }
+  if (count < AUTO_SHARPEN.minTissueShare * width * height) return null;
+  let sum = 0;
+  let sumSq = 0;
+  let lapSq = 0;
+  let lapCount = 0;
+  for (let y = 1; y < height - 1; y += 1) {
+    for (let x = 1; x < width - 1; x += 1) {
+      const p = y * width + x;
+      if (!tissue[p]) continue;
+      sum += luma[p];
+      sumSq += luma[p] * luma[p];
+      const lap = 4 * luma[p] - luma[p - 1] - luma[p + 1] - luma[p - width] - luma[p + width];
+      lapSq += lap * lap;
+      lapCount += 1;
+    }
+  }
+  if (lapCount < 16) return null;
+  const mean = sum / lapCount;
+  const std = Math.sqrt(Math.max(0, sumSq / lapCount - mean * mean));
+  if (std < 1) return null; // однотонный участок: мерить нечего
+  return Math.sqrt(lapSq / lapCount) / std;
+}
 const SIGMA_MIN = 0.3;
 const SIGMA_MAX = 3;
 
@@ -578,6 +639,16 @@ export class ImageAdjuster {
     context.clearRect(0, 0, width, height);
     context.drawImage(source, 0, 0, width, height);
     return context.getImageData(0, 0, width, height);
+  }
+
+  // Участок кадра для «Авто» резкости: центр холста OpenSeadragon, исходные пиксели
+  centerSample() {
+    const source = this.viewer.drawer.canvas;
+    if (!source.width || !source.height) return null;
+    const size = Math.min(AUTO_SHARPEN.sample, source.width, source.height);
+    const x = Math.round((source.width - size) / 2);
+    const y = Math.round((source.height - size) / 2);
+    return source.getContext('2d').getImageData(x, y, size, size);
   }
 
   _uploadLut() {
