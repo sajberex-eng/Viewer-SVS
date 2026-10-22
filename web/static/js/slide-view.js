@@ -1,6 +1,7 @@
 // Одна половина экрана: изображение, панель увеличений, мини-карта, линейка,
 // этикетка. В обычном режиме половина одна, в режиме сравнения их две, поэтому
 // элементы ищутся внутри своего контейнера, а не по идентификаторам страницы.
+import { makeDraggable } from './drag.js';
 import { ImageAdjuster, loadImage } from './adjust.js';
 import { clampValues, loadSavedValues, saveValues } from './adjust-panel.js';
 import { applyI18n, formatNumber, t } from './i18n.js';
@@ -260,24 +261,7 @@ export class SlideView {
     // За заголовок мини-карту можно утащить в любое место поля (просьба
     // заказчика 2026-10-22). Положение не запоминается: при каждом открытии
     // она снова в правом верхнем углу.
-    let drag = null;
-    minimapHead.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0 || event.target === minimapToggle) return;
-      const box = minimap.getBoundingClientRect();
-      const field = stage.getBoundingClientRect();
-      drag = { dx: event.clientX - box.left, dy: event.clientY - box.top, field, w: box.width, h: box.height };
-      minimapHead.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    });
-    minimapHead.addEventListener('pointermove', (event) => {
-      if (!drag) return;
-      const left = Math.min(Math.max(event.clientX - drag.dx - drag.field.left, 0), drag.field.width - drag.w);
-      const top = Math.min(Math.max(event.clientY - drag.dy - drag.field.top, 0), drag.field.height - drag.h);
-      minimap.style.left = `${Math.round(left)}px`;
-      minimap.style.top = `${Math.round(top)}px`;
-      minimap.style.right = 'auto';
-    });
-    for (const name of ['pointerup', 'pointercancel']) minimapHead.addEventListener(name, () => { drag = null; });
+    makeDraggable(minimap, minimapHead, stage);
     // На телефоне мини-карта закрывала бы половину экрана: сворачиваем сразу,
     // развернуть можно той же кнопкой.
     if (matchMedia('(max-width: 700px)').matches) {
@@ -299,8 +283,9 @@ export class SlideView {
   // На этикетке бывают персональные данные, поэтому панель закрыта по умолчанию,
   // изображение запрашивается только по нажатию, а сервер отдаёт его без кэша.
   #initLabel() {
-    const { paneLabel, labelPanel, labelFrame, labelImage, labelError, labelClose, labelRotate } = this.parts;
+    const { paneLabel, labelPanel, labelHead, labelFrame, labelImage, labelError, labelClose, labelRotate, stage } = this.parts;
     paneLabel.hidden = false;
+    makeDraggable(labelPanel, labelHead, stage);  // этикетка тянется за заголовок, как мини-карта
     if (!this.slide.has_label) {
       paneLabel.disabled = true;
       paneLabel.title = t('top.label.none');

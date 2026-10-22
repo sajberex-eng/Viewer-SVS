@@ -5,11 +5,13 @@
 //
 // Порядок применения (И-5, раздел 7.3 ТЗ):
 //   профиль сканера → разделение окрасок → баланс белого → чёрная и белая точки →
-//   яркость и контраст → гамма → насыщенность и оттенок.
+//   яркость и контраст → гамма → насыщенность и оттенок → резкость (High Pass).
+// Резкость — соседний фильтр (размытие и наложение), поэтому в applyValues
+// (цепочка для одной точки) её нет; считается только шейдером, на текущем кадре.
 
 // Порядок списка — это и порядок чисел в ссылке на поле зрения (раздел 7.5 ТЗ):
-// одиннадцать чисел; ссылки прежних форматов несут восемь (LEGACY_ORDER) или
-// десять (без последнего, «окраска»).
+// пятнадцать чисел; ссылки прежних форматов несут восемь (LEGACY_ORDER), десять
+// (без «окраски») или одиннадцать (ORDER_11, без резкости).
 export const PARAMS = [
   { id: 'black', label: 'adjust.black', min: 0, max: 254, step: 1, def: 0, digits: 0 },
   { id: 'white', label: 'adjust.white', min: 1, max: 255, step: 1, def: 255, digits: 0 },
@@ -21,13 +23,22 @@ export const PARAMS = [
   // Баланс белого хранится и передаётся в прежних единицах −100…+100
   // (коэффициент 2^(b/100)), чтобы сохранённые настройки и ссылки прежнего
   // формата читались без преобразования; в панели показан коэффициентами.
-  { id: 'red', label: 'adjust.balance', min: -100, max: 100, step: 1, def: 0, digits: 2 },
-  { id: 'green', label: 'adjust.balance', min: -100, max: 100, step: 1, def: 0, digits: 2 },
-  { id: 'blue', label: 'adjust.balance', min: -100, max: 100, step: 1, def: 0, digits: 2 },
+  { id: 'red', label: 'adjust.red', min: -100, max: 100, step: 1, def: 0, digits: 0 },
+  { id: 'green', label: 'adjust.green', min: -100, max: 100, step: 1, def: 0, digits: 0 },
+  { id: 'blue', label: 'adjust.blue', min: -100, max: 100, step: 1, def: 0, digits: 0 },
   // Разделение окрасок: 0 — вся, 1 — только гематоксилин (ядра), 2 — только эозин
   { id: 'stain', label: 'adjust.stain', min: 0, max: 2, step: 1, def: 0, digits: 0 },
+  // Резкость High Pass (документ заказчика 2026-10-22): включена ли, сила в
+  // процентах, радиус размытия в пикселях экрана, режим наложения
+  // (0 Overlay, 1 Soft Light, 2 Multiply)
+  { id: 'sharpen', label: 'adjust.sharpen', min: 0, max: 1, step: 1, def: 0, digits: 0 },
+  { id: 'sharpAmount', label: 'adjust.sharpAmount', min: 0, max: 100, step: 1, def: 50, digits: 0 },
+  { id: 'sharpRadius', label: 'adjust.sharpRadius', min: 0.3, max: 3, step: 0.1, def: 0.8, digits: 1 },
+  { id: 'sharpMode', label: 'adjust.sharpMode', min: 0, max: 2, step: 1, def: 0, digits: 0 },
 ];
 export const LEGACY_ORDER = ['brightness', 'contrast', 'gamma', 'saturation', 'hue', 'red', 'green', 'blue'];
+// Ссылки этапа 12 (до резкости): одиннадцать чисел
+export const ORDER_11 = PARAMS.slice(0, 11).map((p) => p.id);
 
 export const DEFAULTS = Object.fromEntries(PARAMS.map((p) => [p.id, p.def]));
 
@@ -164,6 +175,55 @@ void main() {
   c = mix(vec3(dot(c, LUMA)), c, uSaturation);
   c = c * uHue.x + cross(GRAY_AXIS, c) * uHue.y + GRAY_AXIS * dot(GRAY_AXIS, c) * (1.0 - uHue.x);
   gl_FragColor = vec4(clamp(c, 0.0, 1.0), pixel.a);
+}`;
+
+// Размытие Гаусса по одной оси: два прохода (по x и по y) дают размытую копию
+// кадра для High Pass. Сигма равна радиусу в пикселях, окно ±3σ, не больше 10 точек.
+const BLUR_SHADER = `
+precision mediump float;
+varying vec2 vUv;
+uniform sampler2D uImage;
+uniform vec2 uStep;    // шаг на одну точку по оси размытия
+uniform float uSigma;
+void main() {
+  vec3 sum = vec3(0.0);
+  float total = 0.0;
+  for (int i = -10; i <= 10; i++) {
+    float d = float(i);
+    if (abs(d) > uSigma * 3.0 + 0.5) continue;
+    float w = exp(-d * d / (2.0 * uSigma * uSigma));
+    sum += texture2D(uImage, vUv + uStep * d).rgb * w;
+    total += w;
+  }
+  gl_FragColor = vec4(sum / total, 1.0);
+}`;
+
+// Наложение High Pass на скорректированный кадр, как в Photoshop: копия с
+// выделенными перепадами (исходное минус размытое, вокруг среднего серого)
+// накладывается в режиме Overlay, Soft Light или Multiply; сила — доля смеси.
+// Multiply взят с удвоенным High Pass: средний серый тогда не затемняет кадр.
+const SHARPEN_SHADER = `
+precision mediump float;
+varying vec2 vUv;
+uniform sampler2D uBase;
+uniform sampler2D uBlur;
+uniform float uAmount;
+uniform float uMode;   // 0 Overlay, 1 Soft Light, 2 Multiply
+vec3 overlay(vec3 b, vec3 s) {
+  return mix(2.0 * b * s, 1.0 - 2.0 * (1.0 - b) * (1.0 - s), step(0.5, b));
+}
+vec3 softLight(vec3 b, vec3 s) {
+  vec3 d = mix(((16.0 * b - 12.0) * b + 4.0) * b, sqrt(b), step(0.25, b));
+  vec3 dark = b - (1.0 - 2.0 * s) * b * (1.0 - b);
+  vec3 light = b + (2.0 * s - 1.0) * (d - b);
+  return mix(dark, light, step(0.5, s));
+}
+void main() {
+  vec4 pixel = texture2D(uBase, vUv);
+  vec3 b = pixel.rgb;
+  vec3 hp = clamp(b - texture2D(uBlur, vUv).rgb + 0.5, 0.0, 1.0);
+  vec3 blended = uMode < 0.5 ? overlay(b, hp) : (uMode < 1.5 ? softLight(b, hp) : b * hp * 2.0);
+  gl_FragColor = vec4(clamp(mix(b, blended, uAmount), 0.0, 1.0), pixel.a);
 }`;
 
 // Разделение окрасок на JS, цвет в долях 0…1.
@@ -357,6 +417,10 @@ export class ImageAdjuster {
     return this.supported && this.ready && !this.bypass && (!isDefault(this.values) || this.profileActive);
   }
 
+  get sharpenActive() {
+    return this.values.sharpen > 0 && this.values.sharpAmount > 0;
+  }
+
   render() {
     if (!this.supported) return;
     // Без коррекций слой скрыт, и OpenSeadragon работает без накладных расходов.
@@ -366,15 +430,23 @@ export class ImageAdjuster {
     const source = this.viewer.drawer.canvas;
     if (!source.width || !source.height) return;
     const gl = this.gl;
-    if (this.canvas.width !== source.width || this.canvas.height !== source.height) {
-      this.canvas.width = source.width;
-      this.canvas.height = source.height;
+    const { width, height } = source;
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+      this._resizeTargets(width, height);
     }
-    gl.viewport(0, 0, source.width, source.height);
+    gl.viewport(0, 0, width, height);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
 
     const v = this.values;
     const hue = (v.hue * Math.PI) / 180;
+    const sharpen = this.sharpenActive;
+    // Цветовая цепочка: на экран, а при резкости — в промежуточную текстуру
+    this._use(this.color);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, sharpen ? this.targets[0].fbo : null);
     gl.uniform1f(this.uniforms.uLutSize, this.profileActive ? this.lutSize : 0);
     gl.uniform1f(this.uniforms.uStain, v.stain);
     gl.uniform3f(this.uniforms.uGain, balanceToGain(v.red), balanceToGain(v.green), balanceToGain(v.blue));
@@ -386,6 +458,64 @@ export class ImageAdjuster {
     gl.uniform1f(this.uniforms.uSaturation, 1 + v.saturation / 100);
     gl.uniform2f(this.uniforms.uHue, Math.cos(hue), Math.sin(hue));
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    if (!sharpen) return;
+
+    // Размытие: targets[0] → [1] по x → [2] по y; блоки текстур 2, 3, 4
+    this._use(this.blur);
+    gl.uniform1f(this.blur.uniforms.uSigma, v.sharpRadius);
+    gl.uniform1i(this.blur.uniforms.uImage, 2);
+    gl.uniform2f(this.blur.uniforms.uStep, 1 / width, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets[1].fbo);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.uniform1i(this.blur.uniforms.uImage, 3);
+    gl.uniform2f(this.blur.uniforms.uStep, 0, 1 / height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets[2].fbo);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+    // Наложение на экран
+    this._use(this.sharp);
+    gl.uniform1i(this.sharp.uniforms.uBase, 2);
+    gl.uniform1i(this.sharp.uniforms.uBlur, 4);
+    gl.uniform1f(this.sharp.uniforms.uAmount, v.sharpAmount / 100);
+    gl.uniform1f(this.sharp.uniforms.uMode, v.sharpMode);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  _use(program) {
+    const gl = this.gl;
+    gl.useProgram(program.program);
+    gl.enableVertexAttribArray(program.position);
+    gl.vertexAttribPointer(program.position, 2, gl.FLOAT, false, 0, 0);
+  }
+
+  // Промежуточные текстуры резкости: размер кадра, блоки 2–4
+  _resizeTargets(width, height) {
+    const gl = this.gl;
+    this.targets.forEach((target, i) => {
+      gl.activeTexture(gl.TEXTURE2 + i);
+      gl.bindTexture(gl.TEXTURE_2D, target.texture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    });
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  // Гистограмма яркости видимого поля после коррекций (документ заказчика
+  // 2026-10-22): уменьшенный кадр пропускается через ту же цепочку на JS.
+  // Резкость — соседний фильтр, в гистограмму не входит.
+  outputHistogram() {
+    const sample = this._sampleFrame();
+    if (!sample) return null;
+    if (!this.active) return histogramOf(sample);
+    const lut = this.profileActive ? (rgb) => this.profileColor(rgb) : null;
+    const { data } = sample;
+    const bins = new Uint32Array(256);
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] < 255) continue;
+      const [r, g, b] = applyValues(this.values, [data[i], data[i + 1], data[i + 2]], lut);
+      bins[Math.min(255, Math.round(luminance(r, g, b)))] += 1;
+    }
+    return bins;
   }
 
   // Средний исходный (без коррекций) цвет вокруг точки в координатах элемента вьювера.
@@ -411,6 +541,11 @@ export class ImageAdjuster {
   // Гистограмма яркости видимого поля до коррекций (И-4, И-12): кадр
   // уменьшается до HISTOGRAM_SAMPLE_WIDTH точек по ширине и читается с 2D-canvas.
   sourceHistogram() {
+    const sample = this._sampleFrame();
+    return sample ? histogramOf(sample) : null;
+  }
+
+  _sampleFrame() {
     const source = this.viewer.drawer.canvas;
     if (!source.width || !source.height) return null;
     if (!this.sampleCanvas) this.sampleCanvas = document.createElement('canvas');
@@ -424,7 +559,7 @@ export class ImageAdjuster {
     const context = sample.getContext('2d', { willReadFrequently: true });
     context.clearRect(0, 0, width, height);
     context.drawImage(source, 0, 0, width, height);
-    return histogramOf(context.getImageData(0, 0, width, height));
+    return context.getImageData(0, 0, width, height);
   }
 
   _uploadLut() {
@@ -440,26 +575,32 @@ export class ImageAdjuster {
 
   _init() {
     const gl = this.gl;
-    const program = gl.createProgram();
-    for (const [type, source] of [[gl.VERTEX_SHADER, VERTEX_SHADER], [gl.FRAGMENT_SHADER, FRAGMENT_SHADER]]) {
-      const shader = gl.createShader(type);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        console.error('Шейдер коррекции не собран:', gl.getShaderInfoLog(shader));
-        return false;
+    const build = (fragment, names) => {
+      const program = gl.createProgram();
+      for (const [type, source] of [[gl.VERTEX_SHADER, VERTEX_SHADER], [gl.FRAGMENT_SHADER, fragment]]) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error('Шейдер коррекции не собран:', gl.getShaderInfoLog(shader));
+          return null;
+        }
+        gl.attachShader(program, shader);
       }
-      gl.attachShader(program, shader);
-    }
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return false;
-    gl.useProgram(program);
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null;
+      const uniforms = Object.fromEntries(names.map((name) => [name, gl.getUniformLocation(program, name)]));
+      return { program, uniforms, position: gl.getAttribLocation(program, 'aPosition') };
+    };
+    this.color = build(FRAGMENT_SHADER, ['uImage', 'uLut', 'uLutSize', 'uStain', 'uStainMat', 'uStainInv', 'uGain',
+      'uBlack', 'uInvRange', 'uBrightness', 'uContrast', 'uInvGamma', 'uSaturation', 'uHue']);
+    this.blur = build(BLUR_SHADER, ['uImage', 'uStep', 'uSigma']);
+    this.sharp = build(SHARPEN_SHADER, ['uBase', 'uBlur', 'uAmount', 'uMode']);
+    if (!this.color || !this.blur || !this.sharp) return false;
+    this.uniforms = this.color.uniforms;
 
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-    const position = gl.getAttribLocation(program, 'aPosition');
-    gl.enableVertexAttribArray(position);
-    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
 
     const textureSetup = (filter) => {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
@@ -467,22 +608,31 @@ export class ImageAdjuster {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     };
-    // Блок 1 — таблица цвета (линейная интерполяция по красному и зелёному),
-    // блок 0 — кадр; он остаётся активным, и render() пишет в него
+    // Блок 0 — кадр, блок 1 — таблица цвета (линейная интерполяция по красному
+    // и зелёному), блоки 2–4 — промежуточные текстуры резкости
     gl.activeTexture(gl.TEXTURE1);
     this.lutTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.lutTexture);
     textureSetup(gl.LINEAR);
+    this.targets = [0, 1, 2].map((i) => {
+      gl.activeTexture(gl.TEXTURE2 + i);
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      textureSetup(gl.NEAREST);
+      const fbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+      return { texture, fbo };
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+    this.frameTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.frameTexture);
     textureSetup(gl.NEAREST);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    if (this.canvas.width && this.canvas.height) this._resizeTargets(this.canvas.width, this.canvas.height);
 
-    this.uniforms = {};
-    for (const name of ['uImage', 'uLut', 'uLutSize', 'uStain', 'uStainMat', 'uStainInv', 'uGain', 'uBlack',
-      'uInvRange', 'uBrightness', 'uContrast', 'uInvGamma', 'uSaturation', 'uHue']) {
-      this.uniforms[name] = gl.getUniformLocation(program, name);
-    }
+    this._use(this.color);
     gl.uniform1i(this.uniforms.uImage, 0);
     gl.uniform1i(this.uniforms.uLut, 1);
     gl.uniformMatrix3fv(this.uniforms.uStainMat, false, STAIN_MATRIX);

@@ -5,6 +5,7 @@
 // скана, поэтому держатся за те же клетки при любом увеличении, повороте и
 // отражении; длина считается по размеру пикселя из файла и от угла не зависит.
 // Аннотации (этап 9) живут отдельно, в annotations.js: они постоянные.
+// Здесь же рамка снимка участка (2026-10-22): тянется мышью, в точках экрана.
 import { formatNumber, t } from './i18n.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -12,12 +13,14 @@ const TICK = 7;       // половина длины засечки на кон�
 const CROSS = 11;     // половина перекрестия общего курсора (С-8)
 
 export class OverlayLayer {
-  constructor({ view, onChange, onLandmark }) {
+  constructor({ view, onChange, onLandmark, onRegion }) {
     this.view = view;
     this.viewer = view.viewer;
     this.onChange = onChange;
     this.onLandmark = onLandmark;
-    this.tool = null;       // null | 'ruler' | 'landmarks'
+    this.onRegion = onRegion;
+    this.region = null;     // рамка снимка: начало и текущий угол, в точках элемента
+    this.tool = null;       // null | 'ruler' | 'landmarks' | 'snapshot'
     this.points = [];       // концы измерения, в координатах скана
     this.hover = null;      // куда указывает мышь, пока вторая точка не поставлена
     this.landmarks = [];    // отмеченные ориентиры, в координатах скана
@@ -43,12 +46,37 @@ export class OverlayLayer {
     this.label.setAttribute('text-anchor', 'middle');
     this.ruler.append(this.line, this.ticks, this.label);
 
-    svg.append(this.ruler, this.marks, this.cross);
+    this.regionRect = document.createElementNS(SVG_NS, 'rect');
+    this.regionRect.setAttribute('class', 'overlay-region');
+    this.regionRect.setAttribute('hidden', '');
+    svg.append(this.ruler, this.marks, this.cross, this.regionRect);
     this.svg = svg;
     this.view.parts.stage.append(svg);
 
     this.viewer.addHandler('update-viewport', () => this.draw());
     this.viewer.addHandler('canvas-click', (event) => this.#onClick(event));
+    // Рамка снимка: нажатие, протяжка (панорамирование на это время выключено), отпускание
+    this.viewer.addHandler('canvas-press', (event) => {
+      if (this.tool !== 'snapshot') return;
+      event.preventDefaultAction = true;
+      this.region = { x0: event.position.x, y0: event.position.y, x1: event.position.x, y1: event.position.y };
+      this.#drawRegion();
+    });
+    this.viewer.addHandler('canvas-drag', (event) => {
+      if (this.tool !== 'snapshot' || !this.region) return;
+      event.preventDefaultAction = true;
+      this.region.x1 = event.position.x;
+      this.region.y1 = event.position.y;
+      this.#drawRegion();
+    });
+    this.viewer.addHandler('canvas-release', (event) => {
+      if (this.tool !== 'snapshot' || !this.region) return;
+      event.preventDefaultAction = true;
+      const rect = this.regionBox;
+      this.region = null;
+      this.#drawRegion();
+      if (rect.w >= 4 && rect.h >= 4) this.onRegion?.(this.view, rect);
+    });
     // Отрезок тянется за указателем, пока вторая точка не поставлена
     this.view.parts.stage.addEventListener('pointermove', (event) => {
       if (this.tool !== 'ruler' || this.points.length !== 1) return;
@@ -69,12 +97,36 @@ export class OverlayLayer {
   }
 
   setTool(tool) {
-    this.tool = this.available ? tool : null;
+    // Снимку размер пикселя не нужен: он работает и на сканах без него
+    this.tool = tool === 'snapshot' || this.available ? tool : null;
+    if (this.tool !== 'snapshot') {
+      this.region = null;
+      this.#drawRegion();
+    }
     this.view.parts.stage.classList.toggle('is-marking', Boolean(this.tool));
     // Законченное измерение остаётся на препарате и после выхода из режима:
     // его стирают Esc или новое измерение (Т-4). Недорисованное убирается сразу.
     if (this.tool !== 'ruler' && !this.done) this.clearMeasure();
     if (this.tool !== 'landmarks') this.setLandmarks([]);
+  }
+
+  // Рамка снимка как прямоугольник {x, y, w, h} в точках элемента
+  get regionBox() {
+    const r = this.region;
+    return { x: Math.min(r.x0, r.x1), y: Math.min(r.y0, r.y1), w: Math.abs(r.x1 - r.x0), h: Math.abs(r.y1 - r.y0) };
+  }
+
+  #drawRegion() {
+    if (!this.region) {
+      this.regionRect.setAttribute('hidden', '');
+      return;
+    }
+    const { x, y, w, h } = this.regionBox;
+    this.regionRect.removeAttribute('hidden');
+    this.regionRect.setAttribute('x', x);
+    this.regionRect.setAttribute('y', y);
+    this.regionRect.setAttribute('width', w);
+    this.regionRect.setAttribute('height', h);
   }
 
   // ---------- рулетка (Т-4) ----------

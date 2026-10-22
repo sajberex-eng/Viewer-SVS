@@ -15,6 +15,8 @@ import * as link from './link.js';
 import { bindFromViews, normalizeAngle } from './link.js';
 import { OverlayLayer } from './overlay.js';
 import { FIXED_MAGNIFICATIONS, SlideView, ZOOM_STEP } from './slide-view.js';
+import { makeDraggable, resetPosition } from './drag.js';
+import { captureRegion, deliverSnapshot } from './snapshot.js';
 
 const PAN_STEP = 0.2; // доля видимой области на одно нажатие стрелки
 // Телефон: тот же порог, что в стилях. Список сканов лежит поверх изображения,
@@ -39,6 +41,20 @@ let split = 50;
 let annotationsShown = localStorage.getItem('viewer.annotations') !== 'off';
 let activeTool = null;
 let cellularity = null;  // панель клеточности (этап 11), см. cellularity.js
+
+// Плавающие панели («Изображение», «Аннотации», «Клеточность») открываются по
+// одной: открытие одной закрывает остальные (решение заказчика 2026-10-22).
+// Каждая панель регистрирует, как её закрыть.
+const panelClosers = new Map();
+function registerPanel(id, close) {
+  const panel = $(id);
+  panelClosers.set(id, close);
+  makeDraggable(panel, panel.querySelector('.adjust-head'), panel.parentElement);
+}
+function openSidePanel(id) {
+  for (const [other, close] of panelClosers) if (other !== id && !$(other).hidden) close();
+  resetPosition($(id));
+}
 
 setLanguage('ru');
 applyIcons();  // значки вставляются до подписей: подпись в кнопке остаётся своя (В-1)
@@ -87,6 +103,8 @@ async function main() {
     focusAnnotation,
     removeAnnotation,
     showNote,
+    registerPanel,
+    openSidePanel,
   });
   initZoomPanel();
   initRotatePanel();
@@ -188,7 +206,7 @@ function addPane(slide) {
   panes.push(view);
   attachAnnotations(view);
   cellularity?.onPaneAdded(view);
-  view.overlay = new OverlayLayer({ view, onLandmark: updateBindBar });
+  view.overlay = new OverlayLayer({ view, onLandmark: updateBindBar, onRegion: takeSnapshot });
   // Общий курсор: перекрестие в соседней половине идёт за мышью (С-8)
   element.addEventListener('pointermove', (event) => showCrosshairFrom(view, event));
   element.addEventListener('pointerleave', () => updateCrosshair(null));
@@ -565,10 +583,12 @@ function bindPopover(button, popover, { onOpen } = {}) {
 function initTopbar() {
   const panel = $('adjustPanel');
   const toggleAdjust = (open = panel.hidden) => {
+    if (open) openSidePanel('adjustPanel');
     panel.hidden = !open;
     $('btnAdjust').setAttribute('aria-expanded', String(open));
     adjustPanel.setOpen(open); // гистограмма считается только при открытой панели (И-12)
   };
+  registerPanel('adjustPanel', () => toggleAdjust(false));
   $('btnAdjust').addEventListener('click', () => toggleAdjust());
   $('adjustClose').addEventListener('click', () => toggleAdjust(false));
   $('btnLabel').addEventListener('click', () => active?.toggleLabel?.());
@@ -851,6 +871,11 @@ function initRuler() {
     setTool('polygon');
     pane.annotations.startDraft(point);
   }));
+  $('menuSnapshot').addEventListener('click', () => withMenuPoint((pane) => {
+    setActive(pane);
+    setTool('snapshot');
+  }));
+  $('btnSnapshot').addEventListener('click', () => takeSnapshot(active));
   document.addEventListener('pointerdown', (event) => {
     if (!menu.hidden && !menu.contains(event.target)) closeStageMenu();
   });
@@ -1021,10 +1046,12 @@ function initShiftAdjust() {
 function initAnnotations() {
   const panel = $('annotPanel');
   const toggle = (open = panel.hidden) => {
+    if (open) openSidePanel('annotPanel');
     panel.hidden = !open;
     $('btnAnnotations').setAttribute('aria-expanded', String(open));
     if (open) renderAnnotationList();
   };
+  registerPanel('annotPanel', () => toggle(false));
   $('btnAnnotations').addEventListener('click', () => toggle());
   $('annotClose').addEventListener('click', () => toggle(false));
 
@@ -1045,17 +1072,21 @@ function canDraw() {
 
 // Рулетка доступна всем, инструменты разметки — только патологам (Т-4, А-3).
 // Инструмент принадлежит активной половине: в соседней он выключен.
+// Инструменты временного слоя (overlay.js): им не нужно право на аннотации
+const OVERLAY_TOOLS = ['ruler', 'snapshot'];
+
 function setTool(tool) {
   if (tool === 'ruler') activeTool = active?.overlay?.available ? 'ruler' : null;
+  else if (tool === 'snapshot') activeTool = 'snapshot';
   else activeTool = canDraw() ? tool : null;
   if (activeTool) stopBinding();  // разметка ориентиров и инструменты не совмещаются
   for (const pane of panes) {
     const mine = pane === active;
-    pane.annotations?.setTool(mine && activeTool !== 'ruler' ? activeTool : null);
+    pane.annotations?.setTool(mine && !OVERLAY_TOOLS.includes(activeTool) ? activeTool : null);
     // Разметка ориентиров идёт сразу в обеих половинах и не сбивается при
     // переходе к соседней: именно им и отмечают пары точек (С-10)
     if (binding) pane.overlay?.setTool('landmarks');
-    else pane.overlay?.setTool(mine && activeTool === 'ruler' ? 'ruler' : null);
+    else pane.overlay?.setTool(mine && OVERLAY_TOOLS.includes(activeTool) ? activeTool : null);
   }
   $('toolPoint').classList.toggle('is-active', activeTool === 'point');
   $('toolPolygon').classList.toggle('is-active', activeTool === 'polygon');
@@ -1063,6 +1094,24 @@ function setTool(tool) {
   updateRulerButton();
   updateAnnotationHint();
   if (activeTool === 'ruler') showNote(t('ruler.hint'), { error: false });
+  if (activeTool === 'snapshot') showNote(t('snapshot.hint'), { error: false });
+}
+
+// Снимок поля зрения (кнопка) или участка (рамка из меню по правой кнопке):
+// в буфер обмена, а где его нет — файлом
+async function takeSnapshot(pane = active, rect = null) {
+  if (!pane) return;
+  if (activeTool === 'snapshot') setTool(null);
+  try {
+    const blob = await captureRegion(pane, rect);
+    if (!blob) throw new Error('empty');
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    const where = await deliverSnapshot(blob, `snapshot-${pane.slide.id}-${stamp}.png`);
+    showNote(t(where === 'clipboard' ? 'snapshot.copied' : 'snapshot.saved'), { error: false });
+  } catch (error) {
+    console.error('Снимок не сделан:', error);
+    showNote(t('snapshot.failed'));
+  }
 }
 
 function updateAnnotationHint() {

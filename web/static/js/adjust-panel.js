@@ -1,16 +1,18 @@
 import {
-  DEFAULTS, LEGACY_ORDER, PARAMS, PRESETS, autoValues, balanceToGain, clampParam, gainToBalance, isDefault, loadImage,
+  DEFAULTS, LEGACY_ORDER, ORDER_11, PARAMS, PRESETS, autoValues, clampParam, gainToBalance, isDefault, loadImage,
 } from './adjust.js';
 import { formatNumber, t } from './i18n.js';
 
 const BACKGROUND_MIN_LEVEL = 140; // темнее этого участок фоном стекла не считается
 const HISTOGRAM_INTERVAL_MS = 250; // гистограмма не чаще 4 раз в секунду (И-12)
 const LEVELS = ['black', 'gamma', 'white']; // маркеры шкалы уровней слева направо
-const EXTRA = ['brightness', 'contrast', 'saturation', 'hue']; // блок «Дополнительно»
-const BALANCE = ['red', 'green', 'blue'];
+// Блок «Дополнительно»: каналы наверху (документ заказчика 2026-10-22), затем остальное
+const EXTRA = ['red', 'green', 'blue', 'brightness', 'contrast', 'saturation', 'hue'];
+const SHARPEN = ['sharpAmount', 'sharpRadius'];
 const LINK_ORDERS = { // число чисел в ссылке → порядок параметров (раздел 7.5 ТЗ)
-  [LEGACY_ORDER.length]: LEGACY_ORDER,
-  [PARAMS.length - 1]: PARAMS.slice(0, -1).map((p) => p.id), // до появления «окраски»
+  8: LEGACY_ORDER,
+  10: ORDER_11.slice(0, -1), // до появления «окраски»
+  11: ORDER_11, // этап 12, до резкости
   [PARAMS.length]: PARAMS.map((p) => p.id),
 };
 const byId = Object.fromEntries(PARAMS.map((p) => [p.id, p]));
@@ -76,13 +78,17 @@ export class AdjustPanel {
     this.presetSelect = panel.querySelector('#adjustPreset');
     this.hint = panel.querySelector('#adjustHint');
     this.histogram = panel.querySelector('#adjustHistogram');
-    this.balanceText = panel.querySelector('#adjustBalance');
+    this.sharpenCheck = panel.querySelector('#adjustSharpen');
+    this.sharpenState = panel.querySelector('#adjustSharpenState');
+    this.sharpenBlock = panel.querySelector('#adjustSharpenBlock');
+    this.sharpModeSelect = panel.querySelector('#adjustSharpMode');
     this.profileCheck = panel.querySelector('#adjustProfile');
     this.stainSelect = panel.querySelector('#adjustStain');
     this.histogramHandler = () => this._scheduleHistogram();
 
     this._buildLevels(panel.querySelector('#adjustLevels'), panel.querySelector('#adjustLevelFields'));
-    this._buildSliders(panel.querySelector('#adjustSliders'));
+    this._buildSliders(panel.querySelector('#adjustSliders'), EXTRA);
+    this._buildSliders(panel.querySelector('#adjustSharpenRows'), SHARPEN);
     this._bindPresets();
     this._bindCompare(panel.querySelector('#adjustCompare'));
     this._bindPipette(panel.querySelector('#adjustPipette'));
@@ -98,9 +104,8 @@ export class AdjustPanel {
       this._drawHistogram();
     });
     this.stainSelect.addEventListener('change', () => this.setValues({ stain: Number(this.stainSelect.value) }));
-    panel.querySelector('#adjustBalanceReset').addEventListener('click', () => {
-      this.setValues(Object.fromEntries(BALANCE.map((id) => [id, 0])));
-    });
+    this.sharpenCheck.addEventListener('change', () => this.setValues({ sharpen: this.sharpenCheck.checked ? 1 : 0 }));
+    this.sharpModeSelect.addEventListener('change', () => this.setValues({ sharpMode: Number(this.sharpModeSelect.value) }));
     this._refresh();
   }
 
@@ -164,11 +169,15 @@ export class AdjustPanel {
 
   _refresh() {
     const v = this.values;
-    for (const id of EXTRA) {
+    for (const id of [...EXTRA, ...SHARPEN]) {
       const { range, number } = this.controls[id];
       range.value = v[id];
       number.value = v[id];
     }
+    this.sharpenCheck.checked = v.sharpen > 0;
+    this.sharpenState.textContent = t(v.sharpen > 0 ? 'adjust.sharpen.on' : 'adjust.sharpen.off');
+    this.sharpenBlock.classList.toggle('is-off', !(v.sharpen > 0));
+    this.sharpModeSelect.value = String(v.sharpMode);
     for (const id of LEVELS) this.fields[id].value = v[id];
     this.stainSelect.value = String(v.stain);
 
@@ -181,11 +190,6 @@ export class AdjustPanel {
       marker.setAttribute('aria-valuenow', v[id]);
       marker.setAttribute('aria-valuetext', formatNumber(v[id], byId[id].digits));
     }
-    const gains = BALANCE.map((id) => balanceToGain(v[id]));
-    this.balanceText.textContent = BALANCE.every((id) => v[id] === 0)
-      ? t('adjust.balance.none')
-      : gains.map((gain) => formatNumber(gain, 2)).join(' · ');
-
     const preset = Object.keys(PRESETS).find((name) => PARAMS.every((p) => PRESETS[name][p.id] === v[p.id]));
     this.presetSelect.value = preset ?? 'custom';
     this._drawHistogram();
@@ -257,8 +261,8 @@ export class AdjustPanel {
     return fractionToGamma(inner);
   }
 
-  _buildSliders(container) {
-    for (const id of EXTRA) {
+  _buildSliders(container, ids) {
+    for (const id of ids) {
       const param = byId[id];
       const row = document.createElement('div');
       row.className = 'adjust-row';
@@ -269,6 +273,7 @@ export class AdjustPanel {
       const range = document.createElement('input');
       Object.assign(range, { type: 'range', id: `adj-${id}`, min: param.min, max: param.max, step: param.step });
       range.title = t('adjust.slider.tip');
+      if (['red', 'green', 'blue'].includes(id)) range.classList.add(`is-${id}`); // цветная дорожка, как в образце
 
       const number = document.createElement('input');
       Object.assign(number, { type: 'number', min: param.min, max: param.max, step: param.step });
@@ -386,7 +391,7 @@ export class AdjustPanel {
     }, HISTOGRAM_INTERVAL_MS);
   }
 
-  // Гистограмма яркости видимого поля до коррекций: корневая ось, чтобы пик
+  // Гистограмма яркости видимого поля после коррекций: корневая ось, чтобы пик
   // фона стекла не скрывал ткань; участки за чёрной и белой точками затенены.
   _drawHistogram() {
     if (!this.open || !this.adjuster?.supported) return;
@@ -401,10 +406,10 @@ export class AdjustPanel {
     const context = canvas.getContext('2d');
     context.clearRect(0, 0, width, height);
 
-    const bins = this.adjuster.sourceHistogram();
+    const bins = this.adjuster.outputHistogram();
     if (bins) {
       const peak = Math.sqrt(Math.max(...bins)) || 1;
-      context.fillStyle = '#7a7f8c';
+      context.fillStyle = '#8a8f9c';
       const step = width / 256;
       for (let level = 0; level < 256; level += 1) {
         const bar = (Math.sqrt(bins[level]) / peak) * (height - 2);

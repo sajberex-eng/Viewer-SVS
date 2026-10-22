@@ -24,7 +24,7 @@ export function isContour(item) {
 
 export function initCellularity(host) {
   // host: getActive, getPanes, canDraw, setTool, activeTool, reloadAnnotations,
-  //       focusAnnotation, removeAnnotation, showNote
+  //       focusAnnotation, removeAnnotation, showNote, registerPanel, openSidePanel
   const panel = $('cellPanel');
   let masksShown = localStorage.getItem('viewer.cellMasks') !== 'off';
   let contoursShown = localStorage.getItem('viewer.cellContours') !== 'off';
@@ -32,6 +32,7 @@ export function initCellularity(host) {
   if (!(opacity >= 0 && opacity <= 1)) opacity = 0.6;
 
   const toggle = (open = panel.hidden) => {
+    if (open) host.openSidePanel('cellPanel');
     panel.hidden = !open;
     $('btnCellularity').setAttribute('aria-expanded', String(open));
     $('btnCellularity').classList.toggle('is-active', open);
@@ -44,6 +45,7 @@ export function initCellularity(host) {
     }
   };
   $('btnCellularity').addEventListener('click', () => toggle());
+  host.registerPanel('cellPanel', () => toggle(false));
   $('cellClose').addEventListener('click', () => toggle(false));
   $('cellToolTissue').addEventListener('click', () => host.setTool(host.activeTool() === 'tissue' ? null : 'tissue'));
   $('cellToolArtifact').addEventListener('click', () => host.setTool(host.activeTool() === 'artifact' ? null : 'artifact'));

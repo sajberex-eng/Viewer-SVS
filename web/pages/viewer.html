@@ -72,7 +72,9 @@
           </div>
         </div>
       </div>
-      <button class="btn btn-icon btn-with-text" id="btnCompare" data-icon="compare" data-i18n-tip="top.compare.tip"><span data-i18n="top.compare"></span></button>
+      <!-- Снимок поля зрения в буфер обмена (2026-10-22); участок — из меню по правой кнопке -->
+      <button class="btn btn-icon no-phone" id="btnSnapshot" data-icon="camera" data-i18n-label="top.snapshot" data-i18n-tip="top.snapshot.tip"></button>
+      <button class="btn btn-icon" id="btnCompare" data-icon="compare" data-i18n-label="top.compare" data-i18n-tip="top.compare.tip"></button>
       <button class="btn btn-icon" id="btnLink2" hidden data-icon="linkPanes" data-i18n-label="compare.link" data-i18n-tip="compare.link.tip"></button>
       <button class="btn btn-icon" id="btnSwap" hidden data-icon="swap" data-i18n-label="compare.swap" data-i18n-tip="compare.swap.tip"></button>
       <button class="btn btn-icon" id="btnSingle" hidden data-icon="single" data-i18n-label="compare.single" data-i18n-tip="compare.single.tip"></button>
@@ -85,10 +87,6 @@
       </div>
     </nav>
     <div class="topbar-user">
-      <div class="popover-anchor">
-        <button class="btn" type="button" id="btnScale" aria-expanded="false" aria-controls="scaleMenu"></button>
-        <div class="popover popover-menu" id="scaleMenu" hidden></div>
-      </div>
       <button class="btn btn-icon" type="button" data-theme-toggle></button>
       <!-- Увеличение и пометка «отражено» живут здесь, а не в нижней строке:
            нижняя строка крала поле зрения (замечание патолога 2026-09-24) -->
@@ -127,6 +125,7 @@
         <button class="btn" id="menuRuler" data-i18n="ruler.title"></button>
         <button class="btn" id="menuPoint" data-i18n="annot.tool.point"></button>
         <button class="btn" id="menuPolygon" data-i18n="annot.tool.polygon"></button>
+        <button class="btn" id="menuSnapshot" data-i18n="snapshot.menu"></button>
       </div>
       <!-- Привязка по ориентирам: подсказка и кнопки на время разметки (С-10) -->
       <div class="bind-bar" id="bindBar" hidden>
@@ -135,153 +134,169 @@
         <button class="btn" id="bindCancel" data-i18n="common.cancel"></button>
         <button class="btn btn-primary" id="bindApply" data-i18n="bind.apply"></button>
       </div>
+
+      <!-- Плавающие панели лежат поверх препарата и не сдвигают его
+           (замечание заказчика 2026-10-22); тянутся за заголовок -->
+      <aside class="annot-panel" id="annotPanel" hidden>
+        <div class="adjust-head">
+          <h2 data-i18n="annot.heading"></h2>
+          <button class="icon-btn" id="annotClose" data-i18n-tip="adjust.close.tip">×</button>
+        </div>
+        <label class="check annot-show">
+          <input type="checkbox" id="annotVisible" checked>
+          <span data-i18n="annot.show"></span>
+        </label>
+        <div class="annot-tools" id="annotTools" hidden>
+          <button class="btn" id="toolPoint" data-i18n="annot.tool.point" data-i18n-tip="annot.tool.point.tip"></button>
+          <button class="btn" id="toolPolygon" data-i18n="annot.tool.polygon" data-i18n-tip="annot.tool.polygon.tip"></button>
+        </div>
+        <p class="annot-hint muted" id="annotHint" aria-live="polite"></p>
+        <ul class="annot-list" id="annotList"></ul>
+        <p class="muted" id="annotEmpty" data-i18n="annot.empty"></p>
+      </aside>
+      <aside class="annot-panel cell-panel" id="cellPanel" hidden>
+        <div class="adjust-head">
+          <h2 data-i18n="cell.title"></h2>
+          <button class="icon-btn" id="cellClose" data-i18n-tip="adjust.close.tip">×</button>
+        </div>
+        <div class="cell-headline">
+          <div class="cell-method-label" data-i18n="cell.method.algorithm"></div>
+          <div class="cell-big" id="cellBig">—</div>
+          <div class="cell-sub" id="cellSub"></div>
+          <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
+          <p class="cell-state" id="cellState" aria-live="polite"></p>
+          <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
+          <ul class="cell-warnings" id="cellWarnings" hidden></ul>
+          <div class="annot-tools cell-edit">
+            <button class="btn btn-primary" id="cellRun" data-i18n="cell.run" data-i18n-tip="cell.run.tip"></button>
+            <button class="btn" id="cellCancel" hidden data-i18n="common.cancel"></button>
+          </div>
+          <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
+          <label class="check cell-masks-toggle" id="cellContoursRow" hidden><input type="checkbox" id="cellContours" checked> <span data-i18n="cell.contours.show"></span></label>
+          <label class="check cell-masks-toggle" id="cellMasksRow" hidden><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
+          <!-- Второй способ: оценка моделью с картинкой по обзору фрагмента и двум участкам ×20 (решение и промт заказчика 2026-09-24) -->
+          <div class="cell-ai" id="cellAi" hidden>
+            <div class="cell-method-label" data-i18n="cell.method.ai"></div>
+            <div class="cell-big cell-big-ai" id="cellAiBig">—</div>
+            <div class="cell-sub" id="cellAiSub"></div>
+            <div class="cell-progress" id="cellAiProgress" hidden><div class="cell-progress-bar" id="cellAiProgressBar"></div></div>
+            <p class="cell-state" id="cellAiState" aria-live="polite"></p>
+            <div class="cell-ai-text" id="cellAiText" hidden></div>
+            <p class="cell-stale" id="cellAiStale" hidden data-i18n="cell.stale"></p>
+            <div class="annot-tools cell-edit">
+              <button class="btn" id="cellAiRun" data-i18n="cell.ai.run" data-i18n-tip="cell.ai.run.tip"></button>
+              <button class="btn" id="cellAiCancel" hidden data-i18n="common.cancel"></button>
+            </div>
+          </div>
+          <p class="muted cell-note" data-i18n="cell.note"></p>
+        </div>
+
+        <details class="cell-details" id="cellDetails">
+          <summary data-i18n="cell.details"></summary>
+          <h3 class="cell-h" data-i18n="cell.contours"></h3>
+          <div class="annot-tools cell-edit">
+            <button class="btn" id="cellToolTissue" data-i18n="cell.contour.tissue" data-i18n-tip="cell.tool.tissue.tip"></button>
+            <button class="btn" id="cellToolArtifact" data-i18n="cell.contour.artifact" data-i18n-tip="cell.tool.artifact.tip"></button>
+          </div>
+          <div class="annot-tools cell-edit">
+            <button class="btn" id="cellPropose" data-i18n="cell.propose" data-i18n-tip="cell.propose.tip"></button>
+            <button class="btn" id="cellClearContours" hidden data-i18n="cell.clear" data-i18n-tip="cell.clear.tip"></button>
+          </div>
+          <ul class="annot-list" id="cellContours"></ul>
+          <p class="muted" id="cellContoursEmpty" data-i18n="cell.contours.empty"></p>
+
+          <div id="cellRunBlock" hidden>
+            <h3 class="cell-h" data-i18n="cell.run.heading"></h3>
+            <p class="muted" id="cellRunMeta"></p>
+            <div id="cellResult" hidden>
+              <label class="cell-opacity"><span data-i18n="cell.opacity"></span>
+                <input type="range" id="cellOpacity" min="10" max="100" step="5"></label>
+              <div class="cell-legend" id="cellLegend"></div>
+              <table class="cell-table" id="cellTable"></table>
+              <button class="btn cell-edit" id="cellDelete" data-i18n="cell.delete" data-i18n-tip="cell.delete.tip"></button>
+            </div>
+            <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
+          </div>
+
+          <div id="cellAiBlock" hidden>
+            <h3 class="cell-h" data-i18n="cell.ai.heading"></h3>
+            <p class="muted" id="cellAiMeta"></p>
+            <ul class="annot-list" id="cellAiFields"></ul>
+            <button class="btn cell-edit" id="cellAiDelete" data-i18n="cell.ai.delete" data-i18n-tip="cell.delete.tip"></button>
+          </div>
+        </details>
+      </aside>
+      <aside class="adjust-panel" id="adjustPanel" hidden>
+        <div class="adjust-head">
+          <h2 data-i18n="adjust.heading"></h2>
+          <span class="muted" id="adjustTarget" hidden></span>
+          <button class="icon-btn" id="adjustClose" data-i18n-tip="adjust.close.tip">×</button>
+        </div>
+        <div class="adjust-row adjust-row-preset">
+          <label for="adjustPreset" data-i18n="adjust.preset"></label>
+          <select id="adjustPreset">
+            <option value="custom" data-i18n="adjust.preset.custom" hidden></option>
+            <option value="original" data-i18n="adjust.preset.original"></option>
+            <option value="pale" data-i18n="adjust.preset.pale"></option>
+            <option value="overstained" data-i18n="adjust.preset.overstained"></option>
+            <option value="hematoxylin" data-i18n="adjust.preset.hematoxylin"></option>
+            <option value="eosin" data-i18n="adjust.preset.eosin"></option>
+          </select>
+        </div>
+        <!-- Профиль сканера из файла: по умолчанию включён, если он есть (решение заказчика 2026-09-29) -->
+        <label class="adjust-check"><input type="checkbox" id="adjustProfile" disabled><span data-i18n="adjust.profile"></span></label>
+        <!-- Гистограмма и уровни (раздел 7.1 ТЗ, этап 12): маркеры и поля строит adjust-panel.js -->
+        <canvas class="adjust-histogram" id="adjustHistogram" width="276" height="80" data-i18n-tip="adjust.histogram.tip"></canvas>
+        <div class="levels" id="adjustLevels" role="group"></div>
+        <div class="levels-fields" id="adjustLevelFields"></div>
+        <div class="adjust-actions">
+          <button class="btn" id="adjustAuto" data-i18n="adjust.auto" data-i18n-tip="adjust.auto.tip"></button>
+          <!-- Пипетка — значком (просьба заказчика 2026-09-29), название в подсказке -->
+          <button class="btn btn-icon" id="adjustPipette" data-icon="pipette" data-i18n-label="adjust.pipette" data-i18n-tip="adjust.pipette.tip"></button>
+          <button class="btn" id="adjustCompare" data-i18n="adjust.compare" data-i18n-tip="adjust.compare.tip"></button>
+          <button class="btn" id="adjustResetAll" data-i18n="adjust.resetAll" data-i18n-tip="adjust.resetAll.tip"></button>
+          <button class="btn" id="adjustBoth" hidden data-i18n="adjust.applyBoth" data-i18n-tip="adjust.applyBoth.tip"></button>
+        </div>
+        <p class="adjust-hint" id="adjustHint" aria-live="polite"></p>
+        <details class="adjust-more" open>
+          <summary data-i18n="adjust.more"></summary>
+          <div id="adjustSliders"></div>
+          <div class="adjust-row adjust-row-preset">
+            <label for="adjustStain" data-i18n="adjust.stain"></label>
+            <select id="adjustStain">
+              <option value="0" data-i18n="adjust.stain.all"></option>
+              <option value="1" data-i18n="adjust.stain.h"></option>
+              <option value="2" data-i18n="adjust.stain.e"></option>
+            </select>
+          </div>
+          <!-- Резкость High Pass (документ заказчика 2026-10-22): как в Photoshop —
+               копия с выделенными границами накладывается на кадр -->
+          <div class="adjust-sharpen" id="adjustSharpenBlock">
+            <label class="adjust-check adjust-sharpen-head" data-i18n-tip="adjust.sharpen.tip">
+              <input type="checkbox" id="adjustSharpen">
+              <span data-i18n="adjust.sharpen"></span>
+              <span class="adjust-sharpen-state" id="adjustSharpenState"></span>
+            </label>
+            <div id="adjustSharpenRows"></div>
+            <div class="adjust-row adjust-row-preset">
+              <label for="adjustSharpMode" data-i18n="adjust.sharpMode"></label>
+              <select id="adjustSharpMode">
+                <option value="0">Overlay</option>
+                <option value="1">Soft Light</option>
+                <option value="2">Multiply</option>
+              </select>
+            </div>
+          </div>
+          <p class="muted" data-i18n="adjust.order"></p>
+        </details>
+      </aside>
     </div>
 
     <!-- Аннотации: показ, инструменты (только патологам) и список (этап 9) -->
-    <aside class="annot-panel" id="annotPanel" hidden>
-      <div class="adjust-head">
-        <h2 data-i18n="annot.heading"></h2>
-        <button class="icon-btn" id="annotClose" data-i18n-tip="adjust.close.tip">×</button>
-      </div>
-      <label class="check annot-show">
-        <input type="checkbox" id="annotVisible" checked>
-        <span data-i18n="annot.show"></span>
-      </label>
-      <div class="annot-tools" id="annotTools" hidden>
-        <button class="btn" id="toolPoint" data-i18n="annot.tool.point" data-i18n-tip="annot.tool.point.tip"></button>
-        <button class="btn" id="toolPolygon" data-i18n="annot.tool.polygon" data-i18n-tip="annot.tool.polygon.tip"></button>
-      </div>
-      <p class="annot-hint muted" id="annotHint" aria-live="polite"></p>
-      <ul class="annot-list" id="annotList"></ul>
-      <p class="muted" id="annotEmpty" data-i18n="annot.empty"></p>
-    </aside>
 
     <!-- Клеточность (этап 11): сверху одно число, всё остальное под «Подробнее»
          (замечания патолога 2026-09-24: «нажал кнопку — получил результат») -->
-    <aside class="annot-panel cell-panel" id="cellPanel" hidden>
-      <div class="adjust-head">
-        <h2 data-i18n="cell.title"></h2>
-        <button class="icon-btn" id="cellClose" data-i18n-tip="adjust.close.tip">×</button>
-      </div>
-      <div class="cell-headline">
-        <div class="cell-method-label" data-i18n="cell.method.algorithm"></div>
-        <div class="cell-big" id="cellBig">—</div>
-        <div class="cell-sub" id="cellSub"></div>
-        <div class="cell-progress" id="cellProgress" hidden><div class="cell-progress-bar" id="cellProgressBar"></div></div>
-        <p class="cell-state" id="cellState" aria-live="polite"></p>
-        <p class="cell-stale" id="cellStale" hidden data-i18n="cell.stale"></p>
-        <ul class="cell-warnings" id="cellWarnings" hidden></ul>
-        <div class="annot-tools cell-edit">
-          <button class="btn btn-primary" id="cellRun" data-i18n="cell.run" data-i18n-tip="cell.run.tip"></button>
-          <button class="btn" id="cellCancel" hidden data-i18n="common.cancel"></button>
-        </div>
-        <p class="muted" id="cellNoRights" hidden data-i18n="cell.noRights"></p>
-        <label class="check cell-masks-toggle" id="cellContoursRow" hidden><input type="checkbox" id="cellContours" checked> <span data-i18n="cell.contours.show"></span></label>
-        <label class="check cell-masks-toggle" id="cellMasksRow" hidden><input type="checkbox" id="cellMasks" checked> <span data-i18n="cell.masks"></span></label>
-        <!-- Второй способ: оценка моделью с картинкой по обзору фрагмента и двум участкам ×20 (решение и промт заказчика 2026-09-24) -->
-        <div class="cell-ai" id="cellAi" hidden>
-          <div class="cell-method-label" data-i18n="cell.method.ai"></div>
-          <div class="cell-big cell-big-ai" id="cellAiBig">—</div>
-          <div class="cell-sub" id="cellAiSub"></div>
-          <div class="cell-progress" id="cellAiProgress" hidden><div class="cell-progress-bar" id="cellAiProgressBar"></div></div>
-          <p class="cell-state" id="cellAiState" aria-live="polite"></p>
-          <div class="cell-ai-text" id="cellAiText" hidden></div>
-          <p class="cell-stale" id="cellAiStale" hidden data-i18n="cell.stale"></p>
-          <div class="annot-tools cell-edit">
-            <button class="btn" id="cellAiRun" data-i18n="cell.ai.run" data-i18n-tip="cell.ai.run.tip"></button>
-            <button class="btn" id="cellAiCancel" hidden data-i18n="common.cancel"></button>
-          </div>
-        </div>
-        <p class="muted cell-note" data-i18n="cell.note"></p>
-      </div>
 
-      <details class="cell-details" id="cellDetails">
-        <summary data-i18n="cell.details"></summary>
-        <h3 class="cell-h" data-i18n="cell.contours"></h3>
-        <div class="annot-tools cell-edit">
-          <button class="btn" id="cellToolTissue" data-i18n="cell.contour.tissue" data-i18n-tip="cell.tool.tissue.tip"></button>
-          <button class="btn" id="cellToolArtifact" data-i18n="cell.contour.artifact" data-i18n-tip="cell.tool.artifact.tip"></button>
-        </div>
-        <div class="annot-tools cell-edit">
-          <button class="btn" id="cellPropose" data-i18n="cell.propose" data-i18n-tip="cell.propose.tip"></button>
-          <button class="btn" id="cellClearContours" hidden data-i18n="cell.clear" data-i18n-tip="cell.clear.tip"></button>
-        </div>
-        <ul class="annot-list" id="cellContours"></ul>
-        <p class="muted" id="cellContoursEmpty" data-i18n="cell.contours.empty"></p>
-
-        <div id="cellRunBlock" hidden>
-          <h3 class="cell-h" data-i18n="cell.run.heading"></h3>
-          <p class="muted" id="cellRunMeta"></p>
-          <div id="cellResult" hidden>
-            <label class="cell-opacity"><span data-i18n="cell.opacity"></span>
-              <input type="range" id="cellOpacity" min="10" max="100" step="5"></label>
-            <div class="cell-legend" id="cellLegend"></div>
-            <table class="cell-table" id="cellTable"></table>
-            <button class="btn cell-edit" id="cellDelete" data-i18n="cell.delete" data-i18n-tip="cell.delete.tip"></button>
-          </div>
-          <button class="btn" id="cellExport" hidden data-i18n="cell.export" data-i18n-tip="cell.export.tip"></button>
-        </div>
-
-        <div id="cellAiBlock" hidden>
-          <h3 class="cell-h" data-i18n="cell.ai.heading"></h3>
-          <p class="muted" id="cellAiMeta"></p>
-          <ul class="annot-list" id="cellAiFields"></ul>
-          <button class="btn cell-edit" id="cellAiDelete" data-i18n="cell.ai.delete" data-i18n-tip="cell.delete.tip"></button>
-        </div>
-      </details>
-    </aside>
-
-    <aside class="adjust-panel" id="adjustPanel" hidden>
-      <div class="adjust-head">
-        <h2 data-i18n="adjust.heading"></h2>
-        <span class="muted" id="adjustTarget" hidden></span>
-        <button class="icon-btn" id="adjustClose" data-i18n-tip="adjust.close.tip">×</button>
-      </div>
-      <div class="adjust-row adjust-row-preset">
-        <label for="adjustPreset" data-i18n="adjust.preset"></label>
-        <select id="adjustPreset">
-          <option value="custom" data-i18n="adjust.preset.custom" hidden></option>
-          <option value="original" data-i18n="adjust.preset.original"></option>
-          <option value="pale" data-i18n="adjust.preset.pale"></option>
-          <option value="overstained" data-i18n="adjust.preset.overstained"></option>
-          <option value="hematoxylin" data-i18n="adjust.preset.hematoxylin"></option>
-          <option value="eosin" data-i18n="adjust.preset.eosin"></option>
-        </select>
-      </div>
-      <!-- Профиль сканера из файла: по умолчанию включён, если он есть (решение заказчика 2026-09-29) -->
-      <label class="adjust-check"><input type="checkbox" id="adjustProfile" disabled><span data-i18n="adjust.profile"></span></label>
-      <!-- Гистограмма и уровни (раздел 7.1 ТЗ, этап 12): маркеры и поля строит adjust-panel.js -->
-      <canvas class="adjust-histogram" id="adjustHistogram" width="276" height="80" data-i18n-tip="adjust.histogram.tip"></canvas>
-      <div class="levels" id="adjustLevels" role="group"></div>
-      <div class="levels-fields" id="adjustLevelFields"></div>
-      <div class="adjust-actions">
-        <button class="btn" id="adjustAuto" data-i18n="adjust.auto" data-i18n-tip="adjust.auto.tip"></button>
-        <!-- Пипетка — значком (просьба заказчика 2026-09-29), название в подсказке -->
-        <button class="btn btn-icon" id="adjustPipette" data-icon="pipette" data-i18n-label="adjust.pipette" data-i18n-tip="adjust.pipette.tip"></button>
-        <button class="btn" id="adjustCompare" data-i18n="adjust.compare" data-i18n-tip="adjust.compare.tip"></button>
-        <button class="btn" id="adjustResetAll" data-i18n="adjust.resetAll" data-i18n-tip="adjust.resetAll.tip"></button>
-        <button class="btn" id="adjustBoth" hidden data-i18n="adjust.applyBoth" data-i18n-tip="adjust.applyBoth.tip"></button>
-      </div>
-      <p class="adjust-hint" id="adjustHint" aria-live="polite"></p>
-      <details class="adjust-more">
-        <summary data-i18n="adjust.more"></summary>
-        <div id="adjustSliders"></div>
-        <div class="adjust-row adjust-row-preset">
-          <label for="adjustStain" data-i18n="adjust.stain"></label>
-          <select id="adjustStain">
-            <option value="0" data-i18n="adjust.stain.all"></option>
-            <option value="1" data-i18n="adjust.stain.h"></option>
-            <option value="2" data-i18n="adjust.stain.e"></option>
-          </select>
-        </div>
-        <div class="adjust-balance">
-          <span data-i18n="adjust.balance"></span>
-          <span id="adjustBalance"></span>
-          <button class="icon-btn" id="adjustBalanceReset" data-i18n-tip="adjust.balance.reset.tip">×</button>
-        </div>
-        <p class="muted" data-i18n="adjust.order"></p>
-      </details>
-    </aside>
   </div>
 
 
@@ -309,7 +324,7 @@
         </div>
 
         <aside class="label-panel" data-role="labelPanel" hidden>
-          <div class="label-head">
+          <div class="label-head" data-role="labelHead">
             <span data-i18n="label.heading"></span>
             <button class="icon-btn" data-role="labelRotate" data-i18n-tip="label.rotate.tip">⟳</button>
             <button class="icon-btn" data-role="labelClose" data-i18n-tip="label.close.tip">×</button>
@@ -335,7 +350,6 @@
 
   <script src="/static/vendor/openseadragon.min.js"></script>
   <script type="module" src="/static/js/theme.js"></script>
-  <script type="module" src="/static/js/ui-scale.js"></script>
   <script type="module" src="/static/js/viewer.js"></script>
 </body>
 </html>
