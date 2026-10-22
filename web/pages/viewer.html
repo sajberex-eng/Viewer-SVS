@@ -5,30 +5,62 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HemCenterHistoDigital</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <script src="/static/js/theme-init.js"></script>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="viewer-page">
   <header class="topbar">
     <a href="/" class="topbar-logo-link" data-i18n-tip="top.catalog.tip"><img class="topbar-logo" src="/static/img/logo.svg" alt=""></a>
+    <!-- Паспорт открытого скана: случай (папка), скан, окраска, увеличение,
+         размер пикселя. Щелчок по случаю открывает папку в каталоге (ИН-3) -->
     <div class="topbar-slide">
-      <h1 class="topbar-title" id="slideTitle"></h1>
-      <!-- Путь до папки скана: щелчок открывает её в каталоге (ИН-3) -->
-      <a class="topbar-path" id="slidePath" hidden data-i18n-tip="top.path.tip"></a>
+      <a class="topbar-case" id="slidePath" hidden data-i18n-tip="top.path.tip"></a>
+      <h1 class="topbar-title"><span class="topbar-label" data-i18n="top.scan"></span> <span id="slideTitle"></span></h1>
+      <span class="topbar-meta" id="slideMeta"></span>
+    </div>
+    <!-- Увеличения в шапке (замечание заказчика 2026-10-22: поле просмотра не
+         загромождать). Одни на весь экран: при сравнении задают масштаб обеим
+         половинам. На телефоне этот блок опускается в ряд внизу (М-2) -->
+    <div class="topbar-zoom" id="topbarZoom" role="toolbar">
+      <output class="topbar-mag" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
+      <div class="zoom-buttons" id="zoomButtons"></div>
     </div>
     <nav class="topbar-actions" id="topbarActions">
       <!-- Кнопки идут значками (В-1); полное название остаётся в подсказке и в
            aria-label (В-5). Те, что не поместились, уходят в меню «ещё» (В-4) -->
-      <a class="btn btn-icon" href="/" data-icon="catalog" data-i18n-label="top.catalog" data-i18n-tip="top.catalog.tip"></a>
-      <button class="btn btn-icon btn-with-text" id="btnCompare" data-icon="compare" data-i18n-tip="top.compare.tip"><span data-i18n="top.compare"></span></button>
-      <button class="btn btn-icon" id="btnLink2" hidden data-icon="linkPanes" data-i18n-label="compare.link" data-i18n-tip="compare.link.tip"></button>
-      <button class="btn btn-icon" id="btnSwap" hidden data-icon="swap" data-i18n-label="compare.swap" data-i18n-tip="compare.swap.tip"></button>
-      <button class="btn btn-icon" id="btnSingle" hidden data-icon="single" data-i18n-label="compare.single" data-i18n-tip="compare.single.tip"></button>
-      <button class="btn btn-icon" id="btnLabel" data-icon="label" data-i18n-label="top.label" data-i18n-tip="top.label.tip"></button>
+      <button class="btn btn-icon" id="btnRuler" data-icon="ruler" data-i18n-label="ruler.title" data-i18n-tip="ruler.tip"></button>
+      <div class="popover-anchor" id="rotateAnchor">
+        <button class="btn btn-icon" id="btnRotate" aria-expanded="false" aria-controls="rotatePopover"
+                data-icon="rotate" data-i18n-label="rotate.title" data-i18n-tip="rotate.tip"></button>
+        <div class="popover rotate-popover" id="rotatePopover" hidden>
+          <div class="rotate-row">
+            <label for="rotateNumber" data-i18n="rotate.angle"></label>
+            <input type="number" id="rotateNumber" min="-180" max="180" step="1">
+            <span>°</span>
+          </div>
+          <input type="range" id="rotateSlider" min="-180" max="180" step="1" data-i18n-tip="rotate.slider.tip">
+          <div class="rotate-row rotate-steps">
+            <button class="btn" id="rotateMinus90">−90°</button>
+            <button class="btn" id="rotateZero">0°</button>
+            <button class="btn" id="rotatePlus90">+90°</button>
+          </div>
+          <label class="check"><input type="checkbox" id="rotateFlip"> <span data-i18n="rotate.flip"></span></label>
+          <p class="muted" data-i18n="rotate.flipHint"></p>
+        </div>
+      </div>
+      <button class="btn btn-icon" id="btnAnnotations" aria-expanded="false" aria-controls="annotPanel" data-icon="annotations" data-i18n-label="top.annotations" data-i18n-tip="top.annotations.tip">
+        <span class="annot-count" id="annotCount" hidden></span>
+      </button>
       <button class="btn btn-icon" id="btnAdjust" aria-expanded="false" aria-controls="adjustPanel" data-icon="adjust" data-i18n-label="top.adjust" data-i18n-tip="top.adjust.tip">
         <span class="saved-dot" id="adjustSavedDot" hidden data-i18n-tip="top.adjust.saved"></span>
       </button>
+      <!-- Клеточность костного мозга (КЛ-1): только у сканов H&E (ОК-4) -->
+      <button class="btn btn-icon" id="btnCellularity" hidden aria-expanded="false" aria-controls="cellPanel"
+              data-icon="cellularity" data-i18n-label="cell.title" data-i18n-tip="cell.tip"></button>
+      <!-- Привязка по ориентирам нужна только при сравнении (С-10) -->
+      <button class="btn btn-icon" id="btnBind" hidden data-icon="bind" data-i18n-label="bind.title" data-i18n-tip="bind.tip"></button>
+      <button class="btn btn-icon" id="btnLabel" data-icon="label" data-i18n-label="top.label" data-i18n-tip="top.label.tip"></button>
       <button class="btn btn-icon" id="btnReset" data-icon="reset" data-i18n-label="top.reset" data-i18n-tip="top.reset.tip"></button>
-      <button class="btn btn-icon" id="btnFullscreen" data-icon="fullscreen" data-i18n-label="top.fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
       <div class="popover-anchor" id="linkAnchor">
         <button class="btn btn-icon" id="btnLink" hidden aria-expanded="false" aria-controls="linkPopover" data-icon="share" data-i18n-label="top.link" data-i18n-tip="top.link.tip"></button>
         <div class="popover" id="linkPopover" hidden>
@@ -40,9 +72,10 @@
           </div>
         </div>
       </div>
-      <button class="btn btn-icon" id="btnAnnotations" aria-expanded="false" aria-controls="annotPanel" data-icon="annotations" data-i18n-label="top.annotations" data-i18n-tip="top.annotations.tip">
-        <span class="annot-count" id="annotCount" hidden></span>
-      </button>
+      <button class="btn btn-icon btn-with-text" id="btnCompare" data-icon="compare" data-i18n-tip="top.compare.tip"><span data-i18n="top.compare"></span></button>
+      <button class="btn btn-icon" id="btnLink2" hidden data-icon="linkPanes" data-i18n-label="compare.link" data-i18n-tip="compare.link.tip"></button>
+      <button class="btn btn-icon" id="btnSwap" hidden data-icon="swap" data-i18n-label="compare.swap" data-i18n-tip="compare.swap.tip"></button>
+      <button class="btn btn-icon" id="btnSingle" hidden data-icon="single" data-i18n-label="compare.single" data-i18n-tip="compare.single.tip"></button>
       <button class="btn btn-icon" id="btnInfo" data-icon="info" data-i18n-label="top.info" data-i18n-tip="top.info.tip"></button>
       <button class="btn btn-icon" id="btnHelp" data-icon="help" data-i18n-label="top.help" data-i18n-tip="top.help.tip"></button>
       <!-- Кнопки, которым не хватило ширины, переезжают сюда (В-4) -->
@@ -52,67 +85,38 @@
       </div>
     </nav>
     <div class="topbar-user">
+      <div class="popover-anchor">
+        <button class="btn" type="button" id="btnScale" aria-expanded="false" aria-controls="scaleMenu"></button>
+        <div class="popover popover-menu" id="scaleMenu" hidden></div>
+      </div>
+      <button class="btn btn-icon" type="button" data-theme-toggle></button>
       <!-- Увеличение и пометка «отражено» живут здесь, а не в нижней строке:
            нижняя строка крала поле зрения (замечание патолога 2026-09-24) -->
-      <output class="topbar-mag" id="statusMag" data-i18n-tip="zoom.current.tip"></output>
       <span class="flip-mark" id="statusFlip" hidden data-i18n="flip.mark" data-i18n-tip="flip.mark.tip"></span>
       <span class="user-badge no-desktop" id="userName"></span>
       <button class="btn btn-icon no-desktop" id="btnLogout" data-icon="logout" data-i18n-label="common.logout" data-i18n-tip="common.logout"></button>
+      <a class="btn btn-icon" href="/" data-icon="close" data-i18n-label="top.catalog" data-i18n-tip="top.close.tip"></a>
     </div>
   </header>
 
   <div class="workspace">
     <aside class="slides-panel" id="slidesPanel">
       <div class="slides-panel-head">
-        <span class="slides-panel-title" data-i18n="slides.heading"></span>
-        <button class="icon-btn" id="slidesToggle" aria-expanded="true" aria-controls="slidesList" data-i18n-tip="slides.toggle.tip">‹</button>
+        <button class="icon-btn" id="slidesToggle" aria-expanded="true" aria-controls="slidesList" data-i18n-tip="slides.toggle.tip">«</button>
+        <span class="slides-panel-title" id="slidesTitle"></span>
+        <span class="slides-panel-keys muted">PgDn / PgUp</span>
       </div>
       <ul class="slides-list" id="slidesList"></ul>
     </aside>
 
     <!-- Половины экрана создаются из шаблона: одна в обычном режиме, две при сравнении -->
     <div class="panes-wrap">
-      <!-- Панель увеличений одна на весь экран: в режиме сравнения она задаёт
-           одинаковый масштаб обеим половинам, чтобы их можно было сопоставить -->
-      <div class="zoom-panel" role="toolbar" aria-orientation="vertical">
-        <!-- Панель сворачивается, как мини-карта; по умолчанию развёрнута -->
-        <button class="icon-btn zoom-toggle" id="zoomToggle" aria-expanded="true"
-                data-i18n-tip="zoom.toggle.tip">▾</button>
-        <!-- Ползунка зума нет (Т-1): он дублировал колесо мыши -->
-        <div class="zoom-buttons" id="zoomButtons"></div>
-        <output class="zoom-current" id="zoomCurrent" data-i18n-tip="zoom.current.tip"></output>
-        <!-- Поворот и отражение живут в одном окошке (Т-2, Т-3, Т-6): верхняя
-             панель от них не растёт, а две кнопки ⟲⟳ больше не нужны -->
-        <div class="zoom-tools">
-          <!-- Рулетка встала на место ползунка зума (Т-4, Т-6) -->
-          <button class="icon-btn" id="btnRuler" data-icon="ruler"
-                  data-i18n-label="ruler.title" data-i18n-tip="ruler.tip"></button>
-          <!-- Привязка по ориентирам нужна только при сравнении (С-10) -->
-          <button class="icon-btn" id="btnBind" hidden data-icon="bind"
-                  data-i18n-label="bind.title" data-i18n-tip="bind.tip"></button>
-          <!-- Клеточность костного мозга (КЛ-1): только у сканов H&E (ОК-4) -->
-          <button class="icon-btn" id="btnCellularity" hidden aria-expanded="false" aria-controls="cellPanel"
-                  data-icon="cellularity" data-i18n-label="cell.title" data-i18n-tip="cell.tip"></button>
-          <div class="popover-anchor" id="rotateAnchor">
-            <button class="icon-btn" id="btnRotate" aria-expanded="false" aria-controls="rotatePopover"
-                    data-icon="rotate" data-i18n-label="rotate.title" data-i18n-tip="rotate.tip"></button>
-            <div class="popover rotate-popover" id="rotatePopover" hidden>
-              <div class="rotate-row">
-                <label for="rotateNumber" data-i18n="rotate.angle"></label>
-                <input type="number" id="rotateNumber" min="-180" max="180" step="1">
-                <span>°</span>
-              </div>
-              <input type="range" id="rotateSlider" min="-180" max="180" step="1" data-i18n-tip="rotate.slider.tip">
-              <div class="rotate-row rotate-steps">
-                <button class="btn" id="rotateMinus90">−90°</button>
-                <button class="btn" id="rotateZero">0°</button>
-                <button class="btn" id="rotatePlus90">+90°</button>
-              </div>
-              <label class="check"><input type="checkbox" id="rotateFlip"> <span data-i18n="rotate.flip"></span></label>
-              <p class="muted" data-i18n="rotate.flipHint"></p>
-            </div>
-          </div>
-        </div>
+      <!-- Круглые кнопки поля просмотра, как в образце: действуют на обе половины -->
+      <div class="nav-buttons" role="toolbar">
+        <button class="round-btn" type="button" id="navZoomIn" data-icon="zoomIn" data-i18n-tip="nav.zoomIn.tip"></button>
+        <button class="round-btn" type="button" id="navZoomOut" data-icon="zoomOut" data-i18n-tip="nav.zoomOut.tip"></button>
+        <button class="round-btn" type="button" id="navHome" data-icon="home" data-i18n-tip="nav.home.tip"></button>
+        <button class="round-btn" type="button" id="btnFullscreen" data-icon="fullscreen" data-i18n-tip="top.fullscreen.tip"></button>
       </div>
       <div class="panes" id="panes"></div>
       <!-- Сообщения и подсказки всплывают над препаратом и исчезают сами: нижней строки больше нет -->
@@ -295,8 +299,12 @@
       <main class="stage" data-role="stage">
         <div class="osd" data-role="osd"></div>
 
+        <!-- Мини-карта: заголовок тянется мышью в любое место поля, кнопка сворачивает -->
         <div class="minimap" data-role="minimap">
-          <button class="icon-btn minimap-toggle" data-role="minimapToggle" aria-expanded="true" data-i18n-tip="minimap.toggle.tip">▾</button>
+          <div class="minimap-head" data-role="minimapHead">
+            <span class="minimap-title" data-i18n="minimap.title"></span>
+            <button class="minimap-toggle" data-role="minimapToggle" aria-expanded="true" data-i18n-tip="minimap.toggle.tip">▾</button>
+          </div>
           <div class="minimap-view" data-role="navigator"></div>
         </div>
 
@@ -326,6 +334,8 @@
   </template>
 
   <script src="/static/vendor/openseadragon.min.js"></script>
+  <script type="module" src="/static/js/theme.js"></script>
+  <script type="module" src="/static/js/ui-scale.js"></script>
   <script type="module" src="/static/js/viewer.js"></script>
 </body>
 </html>

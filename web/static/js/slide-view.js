@@ -96,8 +96,8 @@ export class SlideView {
       // сравнения вылезает за свою половину
       navigatorMaintainSizeRatio: false,
       navigatorAutoResize: false,
-      navigatorWidth: 220,
-      navigatorHeight: 150,
+      navigatorWidth: 180,
+      navigatorHeight: 100,
       maxZoomPixelRatio: MAX_DIGITAL_ZOOM,
       minZoomImageRatio: 1,
       preserveImageSizeOnResize: true,
@@ -256,7 +256,28 @@ export class SlideView {
   }
 
   #initMinimap() {
-    const { minimap, minimapToggle } = this.parts;
+    const { minimap, minimapHead, minimapToggle, stage } = this.parts;
+    // За заголовок мини-карту можно утащить в любое место поля (просьба
+    // заказчика 2026-10-22). Положение не запоминается: при каждом открытии
+    // она снова в правом верхнем углу.
+    let drag = null;
+    minimapHead.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0 || event.target === minimapToggle) return;
+      const box = minimap.getBoundingClientRect();
+      const field = stage.getBoundingClientRect();
+      drag = { dx: event.clientX - box.left, dy: event.clientY - box.top, field, w: box.width, h: box.height };
+      minimapHead.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    minimapHead.addEventListener('pointermove', (event) => {
+      if (!drag) return;
+      const left = Math.min(Math.max(event.clientX - drag.dx - drag.field.left, 0), drag.field.width - drag.w);
+      const top = Math.min(Math.max(event.clientY - drag.dy - drag.field.top, 0), drag.field.height - drag.h);
+      minimap.style.left = `${Math.round(left)}px`;
+      minimap.style.top = `${Math.round(top)}px`;
+      minimap.style.right = 'auto';
+    });
+    for (const name of ['pointerup', 'pointercancel']) minimapHead.addEventListener(name, () => { drag = null; });
     // На телефоне мини-карта закрывала бы половину экрана: сворачиваем сразу,
     // развернуть можно той же кнопкой.
     if (matchMedia('(max-width: 700px)').matches) {

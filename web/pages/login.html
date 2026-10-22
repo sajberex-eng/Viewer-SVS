@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Вход · HemCenterHistoDigital</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <script src="/static/js/theme-init.js"></script>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="login-page">
+  <button class="btn btn-icon login-theme" type="button" data-theme-toggle></button>
   <form class="login-card" id="loginForm">
     <div class="login-brand">
       <img class="login-logo" src="/static/img/logo.svg" alt="">
@@ -24,6 +26,7 @@
     <button class="btn btn-primary" type="submit" data-i18n="login.submit"></button>
     <p class="muted" data-i18n="login.note"></p>
   </form>
+  <script type="module" src="/static/js/theme.js"></script>
   <script type="module" src="/static/js/login.js"></script>
 </body>
 </html>

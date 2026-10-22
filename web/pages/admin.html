@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Пользователи · HemCenterHistoDigital</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <script src="/static/js/theme-init.js"></script>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="admin-page">
@@ -18,9 +19,10 @@
       <button class="btn tab-btn" id="tabJournal" data-i18n="journal.heading"></button>
       <button class="btn tab-btn" id="tabSettings" data-i18n="settings.heading"></button>
     </nav>
-    <div class="topbar-user no-desktop">
-      <span id="userName"></span>
-      <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
+    <div class="topbar-user">
+      <button class="btn btn-icon" type="button" data-theme-toggle></button>
+      <span class="no-desktop" id="userName"></span>
+      <button class="btn no-desktop" id="btnLogout" data-i18n="common.logout"></button>
     </div>
   </header>
 
@@ -116,6 +118,7 @@
     </section>
   </main>
 
+  <script type="module" src="/static/js/theme.js"></script>
   <script type="module" src="/static/js/admin.js"></script>
 </body>
 </html>

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Каталог · HemCenterHistoDigital</title>
   <link rel="icon" type="image/svg+xml" href="/static/img/logo.svg">
+  <script src="/static/js/theme-init.js"></script>
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="catalog-page">
@@ -16,10 +17,11 @@
       <a class="btn" id="linkJournal" href="/admin#journal" hidden data-i18n="catalog.journal"></a>
       <a class="btn only-desktop" id="linkSettings" href="/admin#settings" hidden data-i18n="catalog.settings"></a>
     </nav>
-    <div class="topbar-user no-desktop">
-      <span id="userName"></span>
-      <button class="btn" id="btnProfile" data-i18n="common.profile"></button>
-      <button class="btn" id="btnLogout" data-i18n="common.logout"></button>
+    <div class="topbar-user">
+      <button class="btn btn-icon" type="button" data-theme-toggle></button>
+      <span class="no-desktop" id="userName"></span>
+      <button class="btn no-desktop" id="btnProfile" data-i18n="common.profile"></button>
+      <button class="btn no-desktop" id="btnLogout" data-i18n="common.logout"></button>
     </div>
   </header>
 
@@ -73,6 +75,7 @@
     <ul class="upload-list" id="uploadList"></ul>
   </section>
 
+  <script type="module" src="/static/js/theme.js"></script>
   <script type="module" src="/static/js/catalog.js"></script>
 </body>
 </html>

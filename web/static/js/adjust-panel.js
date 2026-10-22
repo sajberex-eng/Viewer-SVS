@@ -411,7 +411,7 @@ export class AdjustPanel {
         if (bar > 0) context.fillRect(level * step, height - bar, Math.max(1, step), bar);
       }
     }
-    context.fillStyle = 'rgba(0, 0, 0, 0.16)';
+    context.fillStyle = document.documentElement.dataset.theme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.16)';
     context.fillRect(0, 0, (this.values.black / 255) * width, height);
     context.fillRect((this.values.white / 255) * width, 0, width, height);
   }

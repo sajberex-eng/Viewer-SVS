@@ -567,7 +567,14 @@ def create_app() -> FastAPI:
             if folder_id in names
         ]
         info["siblings"] = [
-            {"id": s["id"], "title": slide_title(s)}
+            {
+                "id": s["id"],
+                "title": slide_title(s),
+                "stain": s["stain"],
+                "ihc_marker": s["ihc_marker"],
+                "objective": s["objective"],
+                "added_at": utc_iso(s["added_at"]),
+            }
             for s in catalog.slides(row["folder_id"])
             if access.can_view_slide(s)
         ]

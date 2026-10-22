@@ -8,7 +8,7 @@ import { api, isDesktop, logout } from './api.js';
 import { initCellularity, isContour } from './cellularity.js';
 import { chooseDialog, confirmDialog, formDialog, infoDialog } from './dialog.js';
 import { applyIcons } from './icons.js';
-import { applyI18n, formatDateTime, formatNumber, setLanguage, stainFull, t } from './i18n.js';
+import { applyI18n, formatDateTime, formatNumber, setLanguage, stainFull, stainShort, t } from './i18n.js';
 // Пересчёт точек и углов между половинами: link.forward, link.backward,
 // link.rotationFor, link.fitBind — по имени модуля понятнее, чем сами по себе.
 import * as link from './link.js';
@@ -231,7 +231,8 @@ function setActive(view) {
   active = view;
   for (const pane of panes) pane.setActive(panes.length > 1 && pane === view);
   $('slideTitle').textContent = view.slide.title;
-  showPath($('slidePath'), view.slide);  // путь в шапке — от активной половины (ИН-3)
+  showCase($('slidePath'), view.slide);  // случай в шапке — от активной половины (ИН-3)
+  showMeta($('slideMeta'), view.slide);
   document.title = `${view.slide.title} · ${t('app.title')}`;
   adjustPanel.attachTo(view);
   $('adjustTarget').textContent = t('adjust.target', { title: view.slide.title });
@@ -386,7 +387,7 @@ function ensureSplitter() {
 // поэтому при проверке места её ширина не учитывается.
 function panesWidthIfCompared() {
   const panel = $('slidesPanel');
-  const freed = panel.classList.contains('is-collapsed') ? 0 : panel.offsetWidth - 42;
+  const freed = panel.classList.contains('is-collapsed') ? 0 : panel.offsetWidth - COLLAPSED_PANEL_WIDTH;
   return $('panes').offsetWidth + Math.max(freed, 0);
 }
 
@@ -455,13 +456,6 @@ function swapPanes() {
 // сравнения масштаб должен быть одинаковым, иначе сканы не сопоставить.
 function initZoomPanel() {
   const buttons = $('zoomButtons');
-  const fit = document.createElement('button');
-  fit.className = 'zoom-btn';
-  fit.textContent = t('zoom.fit');
-  fit.title = t('zoom.fit.tip');
-  fit.addEventListener('click', () => forEachPane((pane) => pane.viewer.viewport.goHome(true)));
-  buttons.append(fit);
-
   FIXED_MAGNIFICATIONS.forEach((magnification, index) => {
     const button = document.createElement('button');
     button.className = 'zoom-btn';
@@ -470,15 +464,6 @@ function initZoomPanel() {
     button.title = t('zoom.fixed.tip', { mag: magnification, key: index + 1 });
     button.addEventListener('click', () => zoomAllTo(magnification));
     buttons.append(button);
-  });
-
-  // Панель сворачивается, как мини-карта, и при каждом открытии страницы
-  // снова развёрнута: увеличение нужно чаще, чем место под ним
-  const toggle = $('zoomToggle');
-  toggle.addEventListener('click', () => {
-    const collapsed = toggle.closest('.zoom-panel').classList.toggle('is-collapsed');
-    toggle.textContent = collapsed ? '▸' : '▾';
-    toggle.setAttribute('aria-expanded', String(!collapsed));
   });
 }
 
@@ -589,6 +574,9 @@ function initTopbar() {
   $('btnLabel').addEventListener('click', () => active?.toggleLabel?.());
   $('btnReset').addEventListener('click', () => active?.resetView());
   $('btnFullscreen').addEventListener('click', toggleFullscreen);
+  $('navZoomIn').addEventListener('click', () => forEachPane((pane) => pane.zoomBy(ZOOM_STEP)));
+  $('navZoomOut').addEventListener('click', () => forEachPane((pane) => pane.zoomBy(1 / ZOOM_STEP)));
+  $('navHome').addEventListener('click', () => forEachPane((pane) => pane.viewer.viewport.goHome(true)));
   $('btnCompare').addEventListener('click', startCompare);
   $('btnSingle').addEventListener('click', leaveCompare);
   $('btnSwap').addEventListener('click', swapPanes);
@@ -680,7 +668,7 @@ function updateStatusBar() {
   updateRulerButton();
   // Увеличение и отражение — в шапке (нижней строки больше нет). Размеры и
   // микрометры ушли в «Сведения о скане» (ИН-16).
-  $('statusMag').textContent = active.magnificationLabel();
+  $('zoomCurrent').textContent = active.magnificationLabel();
   $('statusFlip').hidden = !active.flipped;  // отражение видно и на снимке экрана (Т-3)
   // Сбой загрузки тайлов показывается всплывашкой; обычная подгрузка — нет
   if (active.tilesFailed) showNote(active.tilesStatus);
@@ -694,6 +682,28 @@ function initials(name) {
 
 // Путь «2026-09-19 › Случай 01» рядом с названием скана. Щелчок открывает
 // эту папку в каталоге (ИН-3).
+// Случай — последняя папка пути; полный путь лежит в подсказке
+function showCase(node, slide) {
+  const path = slide.path ?? [];
+  node.hidden = !path.length;
+  if (!path.length) return;
+  const last = path[path.length - 1];
+  node.textContent = `${t('top.case')} ${last.name}`;
+  node.title = path.map((folder) => folder.name).join(' › ');
+  node.href = `/?folder=${last.id}`;
+}
+
+// Окраска, увеличение, размер пикселя и размер изображения в точках
+function showMeta(node, slide) {
+  const parts = [
+    stainShort(slide),
+    slide.objective ? `×${formatNumber(slide.objective, 0)}` : '',
+    slide.mpp ? t('top.mppValue', { mpp: formatNumber(slide.mpp, 3) }) : '',
+    slide.width && slide.height ? `${slide.width} × ${slide.height}` : '',
+  ];
+  node.textContent = parts.filter(Boolean).join(' · ');
+}
+
 function showPath(node, slide) {
   const path = slide.path ?? [];
   node.hidden = !path.length;
@@ -1359,9 +1369,13 @@ function restoreView(pane, query, suffix) {
 
 // ---------- панель стёкол ----------
 
+// Ширина свёрнутой панели сканов; та же цифра в app.css (.slides-panel.is-collapsed)
+const COLLAPSED_PANEL_WIDTH = 54;
+
 function initSlidesPanel(slide) {
   const list = $('slidesList');
-  for (const sibling of slide.siblings) {
+  $('slidesTitle').textContent = t('slides.count', { n: slide.siblings.length });
+  for (const [index, sibling] of slide.siblings.entries()) {
     const item = document.createElement('li');
     const link = document.createElement('a');
     link.href = `/viewer?slide=${encodeURIComponent(sibling.id)}`;
@@ -1371,9 +1385,39 @@ function initSlidesPanel(slide) {
     image.src = `/api/slides/${encodeURIComponent(sibling.id)}/thumbnail.jpg`;
     image.alt = '';
     image.loading = 'lazy';
+    // Развёрнутый вид: название, плашка окраски, увеличение, дата.
+    // Свёрнутый: номер и короткая подпись окраски под миниатюрой.
+    const number = document.createElement('span');
+    number.className = 'thumb-num';
+    number.textContent = String(index + 1);
     const caption = document.createElement('span');
+    caption.className = 'thumb-title';
     caption.textContent = sibling.title;
-    link.append(image, caption);
+    const short = stainShort(sibling);
+    const meta = document.createElement('span');
+    meta.className = 'thumb-meta';
+    if (short) {
+      const chip = document.createElement('span');
+      chip.className = 'stain-chip';
+      chip.textContent = sibling.stain === 'IHC' ? `${t('stain.IHC')} ${short}` : short;
+      meta.append(chip);
+    }
+    if (sibling.objective) {
+      const mag = document.createElement('span');
+      mag.textContent = `×${formatNumber(sibling.objective, 0)}`;
+      meta.append(mag);
+    }
+    if (sibling.added_at) {
+      const date = document.createElement('span');
+      date.className = 'thumb-date';
+      date.textContent = formatDateTime(sibling.added_at).split(',')[0];
+      meta.append(date);
+    }
+    const label = document.createElement('span');
+    label.className = 'thumb-short';
+    label.textContent = short || t('stain.none');
+    link.title = sibling.title;
+    link.append(number, image, caption, meta, label);
     // Щелчок заменяет скан в активной половине: страница не перезагружается,
     // настройки панелей и свёрнутый список остаются как были (С-10)
     link.addEventListener('click', (event) => {
@@ -1390,7 +1434,9 @@ function initSlidesPanel(slide) {
   // collapseSlidesPanel, освобождая место половинам (С-10).
   const panel = $('slidesPanel');
   const toggle = $('slidesToggle');
-  collapseSlidesPanel(matchMedia('(pointer: coarse), (max-width: 1100px)').matches);
+  let saved = null;
+  try { saved = localStorage.getItem('viewer.slidesCollapsed'); } catch (e) { /* хранилище закрыто */ }
+  collapseSlidesPanel(saved === null ? matchMedia('(pointer: coarse), (max-width: 1100px)').matches : saved === '1');
   toggle.addEventListener('click', () => collapseSlidesPanel(!panel.classList.contains('is-collapsed')));
 }
 
@@ -1399,7 +1445,8 @@ function collapseSlidesPanel(collapsed) {
   if (panel.classList.contains('is-collapsed') === collapsed) return;
   panel.classList.toggle('is-collapsed', collapsed);
   const toggle = $('slidesToggle');
-  toggle.textContent = collapsed ? '›' : '‹';
+  toggle.textContent = collapsed ? '»' : '«';
+  try { localStorage.setItem('viewer.slidesCollapsed', collapsed ? '1' : '0'); } catch (e) { /* не записалось */ }
   toggle.setAttribute('aria-expanded', String(!collapsed));
   for (const pane of panes) pane.resize();
 }
@@ -1441,7 +1488,9 @@ function openInActive(slideId) {
 function markCurrentThumb() {
   const shown = new Set(panes.map((pane) => pane.slide.id));
   for (const link of $('slidesList').querySelectorAll('.slide-thumb')) {
-    link.toggleAttribute('aria-current', shown.has(link.dataset.slide));
+    const current = shown.has(link.dataset.slide);
+    link.toggleAttribute('aria-current', current);
+    if (current) link.scrollIntoView({ block: 'nearest' });
   }
 }
 
