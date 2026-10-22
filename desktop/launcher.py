@@ -205,7 +205,14 @@ def main() -> int:
     if len(sys.argv) == 4 and sys.argv[1] == "--selftest":  # самопроверка сборки на CI, без окна
         from desktop.selftest import run
 
-        return run(Path(sys.argv[2]), Path(sys.argv[3]))
+        try:
+            return run(Path(sys.argv[2]), Path(sys.argv[3]))
+        except BaseException:  # окно ошибки безоконной сборки на CI некому закрыть — пишем в отчёт
+            import traceback
+
+            with open(sys.argv[3], "a", encoding="utf-8") as handle:
+                handle.write("[СБОЙ] исключение самопроверки:\n" + traceback.format_exc())
+            return 1
     if not claim_single_instance():
         focus_running_window()
         return 0

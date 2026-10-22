@@ -97,6 +97,12 @@ def run(scan: Path, report: Path) -> int:
     for name, action in (("чтение скана", read_scan), ("тайл", make_tile), ("Numba и OpenCV", watershed),
                          ("дочерний процесс", spawn), ("окно", window_library), ("KFB", kfb)):
         step(name, action)
-    if getattr(sys, "stderr", None) is not None:  # в безоконной сборке Windows stderr нет
-        print("\n".join(lines), file=sys.stderr)
+    # Печать только из исходников: в безоконной сборке Windows дескриптор stderr может быть
+    # недействителен, исключение показало бы окно ошибки, которое на CI некому закрыть
+    # (так самопроверка зависала после последнего шага, 2026-10-23)
+    if not getattr(sys, "frozen", False):
+        try:
+            print("\n".join(lines), file=sys.stderr)
+        except Exception:
+            pass
     return 1 if failed else 0
