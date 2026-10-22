@@ -767,33 +767,12 @@ input[type="range"] { accent-color: var(--accent); }
 .adjust-check input { margin: 0; accent-color: var(--accent); }
 .adjust-more { border-top: 1px solid var(--border); padding-top: 8px; }
 .adjust-more summary { cursor: pointer; font-size: 13px; color: var(--brand); margin-bottom: 10px; }
-/* Ползунки панели рисуются одинаково: серая дорожка и цветной бегунок.
-   С accent-color Chrome сам красил пустую часть дорожки по контрасту —
-   у зелёного выходила чёрной (замечание заказчика 2026-10-22) */
-.adjust-row input[type="range"] {
-  -webkit-appearance: none;
-  appearance: none;
-  height: 20px;
-  background: transparent;
-  --thumb: var(--accent);
-}
-.adjust-row input[type="range"]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: var(--border); }
-.adjust-row input[type="range"]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--border); }
-.adjust-row input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
-  margin-top: -5px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--thumb);
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 15%);
-}
-.adjust-row input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border: 0; border-radius: 50%; background: var(--thumb); }
-.adjust-row input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.adjust-row input[type="range"].is-red { --thumb: #e53935; }
-.adjust-row input[type="range"].is-green { --thumb: #43a047; }
-.adjust-row input[type="range"].is-blue { --thumb: #1e88e5; }
+/* Каналы — цветные дорожки через accent-color (заказчику этот вид понравился).
+   Пустую часть дорожки Chrome красит сам по контрасту к цвету: у светлого
+   зелёного #43a047 выходила чёрная, поэтому зелёный темнее (замечание 2026-10-22) */
+.adjust-row input[type="range"].is-red { accent-color: #e53935; }
+.adjust-row input[type="range"].is-green { accent-color: #2e7d32; }
+.adjust-row input[type="range"].is-blue { accent-color: #1e88e5; }
 /* Резкость High Pass: отделена линией, при выключенной галочке ползунки бледные */
 .adjust-sharpen { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 .adjust-sharpen-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
