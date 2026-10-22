@@ -775,6 +775,7 @@ input[type="range"] { accent-color: var(--accent); }
 .adjust-sharpen { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 .adjust-sharpen-head { margin-bottom: 8px; font-weight: 600; }
 .adjust-sharpen.is-off .adjust-row { opacity: 0.55; }
+.adjust-sharpen.is-inactive .adjust-sharpen-head { opacity: 0.6; }
 
 /* Нижней строки состояния больше нет (замечание патолога 2026-09-24): увеличение
    в шапке, сообщения — всплывашкой над препаратом */

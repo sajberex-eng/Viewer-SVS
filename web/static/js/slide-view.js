@@ -64,6 +64,7 @@ export class SlideView {
       this.viewer.viewport.goHome(true);
     });
     this.adjuster = new ImageAdjuster(this.viewer);
+    this.adjuster.viewInfo = () => ({ magnification: this.magnification, pixelScale: this.imageZoom });
     const saved = loadSavedValues(storageKey);
     if (saved) this.adjuster.setValues(saved);
     this.#loadProfile();

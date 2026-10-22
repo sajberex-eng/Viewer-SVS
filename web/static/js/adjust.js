@@ -33,7 +33,7 @@ export const PARAMS = [
   // (0 Overlay, 1 Soft Light, 2 Multiply)
   { id: 'sharpen', label: 'adjust.sharpen', min: 0, max: 1, step: 1, def: 0, digits: 0 },
   { id: 'sharpAmount', label: 'adjust.sharpAmount', min: 0, max: 100, step: 1, def: 50, digits: 0 },
-  { id: 'sharpRadius', label: 'adjust.sharpRadius', min: 0.3, max: 3, step: 0.1, def: 0.8, digits: 1 },
+  { id: 'sharpRadius', label: 'adjust.sharpRadius', min: 0.3, max: 3, step: 0.1, def: 0.8, digits: 1 }, // в пикселях скана
   { id: 'sharpMode', label: 'adjust.sharpMode', min: 0, max: 2, step: 1, def: 0, digits: 0 },
 ];
 export const LEGACY_ORDER = ['brightness', 'contrast', 'gamma', 'saturation', 'hue', 'red', 'green', 'blue'];
@@ -48,6 +48,14 @@ export const PRESETS = {
   pale: { ...DEFAULTS, black: 20, white: 250, saturation: 35 },
   overstained: { ...DEFAULTS, gamma: 1.4, white: 245 },
 };
+
+// Резкость считается только от этого увеличения (решение заказчика 2026-10-22):
+// ниже тайлы берутся из уменьшенных уровней пирамиды, и фильтр лишь добавляет
+// зернистость. Радиус задан в пикселях скана и пересчитывается в пиксели
+// холста по текущему увеличению, так что на 20× и 40× он значит одно и то же.
+export const SHARPEN_MIN_MAGNIFICATION = 10;
+const SIGMA_MIN = 0.3;
+const SIGMA_MAX = 3;
 
 // Автокоррекция «как в сканере» (раздел 7.6 ТЗ, решение заказчика 2026-09-29):
 // баланс белого и белая точка по фону стекла, фон ложится на backgroundLevel,
@@ -348,6 +356,8 @@ export class ImageAdjuster {
     this.lutData = null;
     this.lutSize = 0;
     this.profileOn = true;
+    // Половина экрана сообщает увеличение и масштаб (пикселей экрана на пиксель скана)
+    this.viewInfo = () => ({ magnification: null, pixelScale: 1 });
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'adjust-canvas';
     this.canvas.hidden = true;
@@ -415,8 +425,15 @@ export class ImageAdjuster {
     return this.supported && this.ready && !this.bypass && (!isDefault(this.values) || this.profileActive);
   }
 
+  // Резкость включена и увеличение позволяет: ниже порога проходы размытия
+  // и наложения пропускаются, и кадр стоит столько же, сколько без резкости
+  get sharpenApplies() {
+    const { magnification } = this.viewInfo();
+    return magnification === null || magnification > SHARPEN_MIN_MAGNIFICATION;
+  }
+
   get sharpenActive() {
-    return this.values.sharpen > 0 && this.values.sharpAmount > 0;
+    return this.values.sharpen > 0 && this.values.sharpAmount > 0 && this.sharpenApplies;
   }
 
   render() {
@@ -460,7 +477,10 @@ export class ImageAdjuster {
 
     // Размытие: targets[0] → [1] по x → [2] по y; блоки текстур 2, 3, 4
     this._use(this.blur);
-    gl.uniform1f(this.blur.uniforms.uSigma, v.sharpRadius);
+    // Радиус из пикселей скана в пиксели холста: масштаб экрана и плотность точек
+    const ratio = width / (source.clientWidth || width);
+    const sigma = Math.min(SIGMA_MAX, Math.max(SIGMA_MIN, v.sharpRadius * this.viewInfo().pixelScale * ratio));
+    gl.uniform1f(this.blur.uniforms.uSigma, sigma);
     gl.uniform1i(this.blur.uniforms.uImage, 2);
     gl.uniform2f(this.blur.uniforms.uStep, 1 / width, 0);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.targets[1].fbo);

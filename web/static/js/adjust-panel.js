@@ -393,6 +393,10 @@ export class AdjustPanel {
   // фона стекла не скрывал ткань; участки за чёрной и белой точками затенены.
   _drawHistogram() {
     if (!this.open || !this.adjuster?.supported) return;
+    // Ниже 10× резкость не применяется: блок бледнеет, подсказка говорит почему
+    const applies = this.adjuster.sharpenApplies;
+    this.sharpenBlock.classList.toggle('is-inactive', !applies);
+    this.sharpenBlock.querySelector('.adjust-sharpen-head').title = t(applies ? 'adjust.sharpen.tip' : 'adjust.sharpen.lowMag');
     const canvas = this.histogram;
     const ratio = window.devicePixelRatio || 1;
     const width = Math.round(canvas.clientWidth * ratio) || canvas.width;
