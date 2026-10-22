@@ -761,7 +761,7 @@ input[type="range"] { accent-color: var(--accent); }
 .levels-marker:focus-visible { outline: 2px solid var(--accent-marker); outline-offset: 3px; }
 .adjust-panel.is-disabled .levels-marker { pointer-events: none; opacity: 0.45; }
 .levels-fields { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.levels-fields label { display: grid; gap: 2px; font-size: 12px; }
+.levels-fields label { display: grid; gap: 2px; font-size: 12px; align-content: end; text-align: center; }
 .levels-fields input[type="number"] { width: 100%; height: 26px; padding: 0 4px; text-align: right; }
 .adjust-check { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .adjust-check input { margin: 0; accent-color: var(--accent); }

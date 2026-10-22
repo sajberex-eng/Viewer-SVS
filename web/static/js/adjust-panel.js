@@ -246,7 +246,12 @@ export class AdjustPanel {
       this.markers[id] = marker;
 
       const label = document.createElement('label');
-      label.textContent = t(param.label);
+      // Подпись только у гаммы: «Чёрная точка» и «Белая точка» переносились на две
+      // строки и поля вставали ступеньками (замечание заказчика 2026-10-22);
+      // маркеры под шкалой и подсказка поля говорят, что это за число
+      label.textContent = id === 'gamma' ? t(param.label) : '';
+      label.title = t(param.label);
+      if (id !== 'gamma') label.classList.add('is-unlabeled');
       const number = document.createElement('input');
       Object.assign(number, { type: 'number', min: param.min, max: param.max, step: param.step });
       number.setAttribute('aria-label', t(param.label));
