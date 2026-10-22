@@ -81,14 +81,19 @@ jobs:
       # дочерний процесс: то, что из исходников работает, а в сборке ломается первым
       - name: Самопроверка собранной программы
         shell: pwsh
+        timeout-minutes: 10
         run: |
           $dir = Join-Path $env:RUNNER_TEMP 'selftest'
           New-Item -ItemType Directory -Force $dir | Out-Null
           $env:SELFTEST_SCAN = Join-Path $dir 'probe.svs'
           python -X utf8 -c "import os,sys; sys.path[:0]=['tests','.']; from pathlib import Path; from synthetic_svs import build_svs; build_svs(Path(os.environ['SELFTEST_SCAN']), size=1024, objective=40, mpp=0.25)"
           $report = Join-Path $dir 'report.txt'
-          $p = Start-Process -FilePath build/dist/HemCenterHistoDigital/HemCenterHistoDigital.exe -ArgumentList '--selftest', $env:SELFTEST_SCAN, $report -Wait -PassThru
+          $exe = (Resolve-Path build/dist/HemCenterHistoDigital/HemCenterHistoDigital.exe).Path
+          $p = Start-Process -FilePath $exe -ArgumentList '--selftest', $env:SELFTEST_SCAN, $report -PassThru
+          # Окно ошибки безоконной программы на runner никто не закроет: ждём ограниченно
+          $finished = $p.WaitForExit(300000)
           if (Test-Path $report) { Get-Content $report -Encoding UTF8 } else { Write-Host 'Отчёт не создан' }
+          if (-not $finished) { Stop-Process -Id $p.Id -Force; throw 'Самопроверка не уложилась в 5 минут' }
           if ($p.ExitCode -ne 0) { throw "Самопроверка не прошла (код $($p.ExitCode))" }
 
       - name: Архив
@@ -162,6 +167,7 @@ jobs:
           codesign -dv build/dist/HemCenterHistoDigital.app 2>&1 | head -n 8 || true
 
       - name: Самопроверка собранной программы
+        timeout-minutes: 10
         run: |
           DIR="$RUNNER_TEMP/selftest"; mkdir -p "$DIR"
           export SELFTEST_SCAN="$DIR/probe.svs"

@@ -22,16 +22,27 @@ def child(queue) -> None:
 
 def run(scan: Path, report: Path) -> int:
     os.environ.setdefault("NUMBA_CACHE_DIR", str(report.parent / "numba"))
+    report.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
     failed = False
 
+    def write(line: str) -> None:
+        """Отчёт пишется построчно: если самопроверка зависнет, видно, на каком шаге."""
+        lines.append(line)
+        with open(report, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+    report.write_text("", encoding="utf-8")
+    write(f"начало: Python {sys.version.split()[0]}, frozen={getattr(sys, 'frozen', False)}")
+
     def step(name: str, action) -> None:
         nonlocal failed
+        write(f"... {name}")
         try:
-            lines.append(f"[OK] {name}: {action()}")
+            write(f"[OK] {name}: {action()}")
         except Exception as exc:  # отчёт нужен именно с причиной
             failed = True
-            lines.append(f"[СБОЙ] {name}: {type(exc).__name__}: {exc}")
+            write(f"[СБОЙ] {name}: {type(exc).__name__}: {exc}")
 
     def read_scan() -> str:
         import openslide
@@ -86,7 +97,6 @@ def run(scan: Path, report: Path) -> int:
     for name, action in (("чтение скана", read_scan), ("тайл", make_tile), ("Numba и OpenCV", watershed),
                          ("дочерний процесс", spawn), ("окно", window_library), ("KFB", kfb)):
         step(name, action)
-    report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("\n".join(lines), file=sys.stderr)
+    if getattr(sys, "stderr", None) is not None:  # в безоконной сборке Windows stderr нет
+        print("\n".join(lines), file=sys.stderr)
     return 1 if failed else 0
