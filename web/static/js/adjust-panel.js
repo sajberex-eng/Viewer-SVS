@@ -83,6 +83,7 @@ export class AdjustPanel {
     this.sharpenBlock = panel.querySelector('#adjustSharpenBlock');
     this.sharpModeSelect = panel.querySelector('#adjustSharpMode');
     this.sharpenAuto = panel.querySelector('#adjustSharpenAuto');
+    this.sharpenHint = panel.querySelector('#adjustSharpenHint');
     this.profileCheck = panel.querySelector('#adjustProfile');
     this.stainSelect = panel.querySelector('#adjustStain');
     this.histogramHandler = () => this._scheduleHistogram();
@@ -377,10 +378,11 @@ export class AdjustPanel {
   }
 
   _flashHint(text) {
-    this.hint.textContent = text;
+    const node = this.sharpenHint;
+    node.textContent = text;
     clearTimeout(this.hintTimer);
     this.hintTimer = setTimeout(() => {
-      if (this.hint.textContent === text) this.hint.textContent = '';
+      if (node.textContent === text) node.textContent = '';
     }, 5000);
   }
 

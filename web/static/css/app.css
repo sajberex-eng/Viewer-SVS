@@ -776,6 +776,7 @@ input[type="range"] { accent-color: var(--accent); }
 .adjust-sharpen-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .adjust-sharpen-head .adjust-check { font-weight: 600; }
 #adjustSharpenAuto { height: 26px; padding: 0 10px; }
+#adjustSharpenHint { margin-top: 8px; }
 .adjust-sharpen.is-off .adjust-row { opacity: 0.55; }
 .adjust-sharpen.is-inactive .adjust-check { opacity: 0.6; }
 
