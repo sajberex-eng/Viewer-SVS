@@ -255,7 +255,13 @@ export class AdjustPanel {
       const number = document.createElement('input');
       Object.assign(number, { type: 'number', min: param.min, max: param.max, step: param.step });
       number.setAttribute('aria-label', t(param.label));
-      number.addEventListener('change', () => this.setValues({ [id]: number.valueAsNumber }));
+      // И «input», и «change»: колесо мыши и стрелки меняют число без «change»
+      // до потери фокуса, а маркер и кадр должны идти сразу (заказчик 2026-10-22)
+      for (const event of ['input', 'change']) {
+        number.addEventListener(event, () => {
+          if (Number.isFinite(number.valueAsNumber)) this.setValues({ [id]: number.valueAsNumber });
+        });
+      }
       label.append(number);
       fieldsContainer.append(label);
       this.fields[id] = number;
@@ -289,7 +295,13 @@ export class AdjustPanel {
 
       range.addEventListener('input', () => this.setValues({ [id]: range.valueAsNumber }));
       range.addEventListener('dblclick', () => this.setValues({ [id]: param.def }));
-      number.addEventListener('change', () => this.setValues({ [id]: number.valueAsNumber }));
+      // И «input», и «change»: колесо мыши и стрелки меняют число без «change»
+      // до потери фокуса, а маркер и кадр должны идти сразу (заказчик 2026-10-22)
+      for (const event of ['input', 'change']) {
+        number.addEventListener(event, () => {
+          if (Number.isFinite(number.valueAsNumber)) this.setValues({ [id]: number.valueAsNumber });
+        });
+      }
 
       row.append(label, number, range);
       container.append(row);
