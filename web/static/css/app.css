@@ -604,6 +604,7 @@ input[type="range"] { accent-color: var(--accent); }
   z-index: 12;
   max-height: calc(100% - 16px);
   overflow-y: auto;
+  overflow-x: hidden;
   background: var(--overlay-strong);
   border: 1px solid var(--overlay-border);
   border-radius: var(--radius);
@@ -616,8 +617,8 @@ input[type="range"] { accent-color: var(--accent); }
   gap: 8px;
   padding: 10px 12px 12px;
 }
-.annot-head, .adjust-head { cursor: move; touch-action: none; user-select: none; margin: -10px -12px 0; padding: 8px 12px 0; }
-.adjust-head { margin: -12px -12px 0; padding: 10px 12px 0; }
+/* Без отрицательных полей: они вылезали за край панели и давали горизонтальную прокрутку */
+.annot-head, .adjust-head { cursor: move; touch-action: none; user-select: none; }
 .annot-show { font-size: 13px; }
 .annot-tools { display: flex; gap: 6px; }
 .annot-tools .btn { flex: 1; justify-content: center; }
@@ -701,18 +702,24 @@ input[type="range"] { accent-color: var(--accent); }
 .cell-panel:not(.can-edit) .cell-edit { display: none; }
 
 .adjust-panel {
-  width: 300px;
+  width: 276px;
   padding: 12px;
   display: grid;
+  /* Столбец не шире панели: иначе самый широкий ряд растягивал все остальные
+     за край и появлялась горизонтальная прокрутка */
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: 10px;
 }
+.adjust-panel > * { min-width: 0; }
 .adjust-head { display: flex; align-items: center; justify-content: space-between; }
 .adjust-head h2 { font-size: 15px; }
 .adjust-row { display: grid; grid-template-columns: 1fr 72px; gap: 2px 8px; align-items: center; margin-bottom: 8px; }
 .adjust-row input[type="range"] { grid-column: 1 / -1; width: 100%; margin: 0; }
 .adjust-row input[type="number"] { height: 26px; width: 72px; padding: 0 4px; text-align: right; }
-.adjust-row-preset { grid-template-columns: auto 1fr; margin-bottom: 0; }
+.adjust-row-preset { grid-template-columns: auto minmax(0, 1fr); margin-bottom: 0; }
+/* Список не шире своей ячейки: длинные пункты («Перекрашенный препарат») иначе раздвигали панель */
+.adjust-row-preset select { width: 100%; min-width: 0; }
 .adjust-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 /* Подсказка пипетки и ошибки «Авто»: своя плашка, чтобы не сливаться со
    ссылкой «Дополнительно» того же цвета под ней (замечание заказчика 2026-09-29) */
@@ -765,7 +772,6 @@ input[type="range"] { accent-color: var(--accent); }
 /* Резкость High Pass: отделена линией, при выключенной галочке ползунки бледные */
 .adjust-sharpen { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 .adjust-sharpen-head { margin-bottom: 8px; font-weight: 600; }
-.adjust-sharpen-state { margin-left: auto; font-weight: 400; font-size: 12px; color: var(--brand); }
 .adjust-sharpen.is-off .adjust-row { opacity: 0.55; }
 
 /* Нижней строки состояния больше нет (замечание патолога 2026-09-24): увеличение

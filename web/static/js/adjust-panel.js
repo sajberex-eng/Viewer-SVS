@@ -79,7 +79,6 @@ export class AdjustPanel {
     this.hint = panel.querySelector('#adjustHint');
     this.histogram = panel.querySelector('#adjustHistogram');
     this.sharpenCheck = panel.querySelector('#adjustSharpen');
-    this.sharpenState = panel.querySelector('#adjustSharpenState');
     this.sharpenBlock = panel.querySelector('#adjustSharpenBlock');
     this.sharpModeSelect = panel.querySelector('#adjustSharpMode');
     this.profileCheck = panel.querySelector('#adjustProfile');
@@ -175,7 +174,6 @@ export class AdjustPanel {
       number.value = v[id];
     }
     this.sharpenCheck.checked = v.sharpen > 0;
-    this.sharpenState.textContent = t(v.sharpen > 0 ? 'adjust.sharpen.on' : 'adjust.sharpen.off');
     this.sharpenBlock.classList.toggle('is-off', !(v.sharpen > 0));
     this.sharpModeSelect.value = String(v.sharpMode);
     for (const id of LEVELS) this.fields[id].value = v[id];

@@ -604,8 +604,6 @@ const STRINGS = {
     'adjust.green': 'Зелёный',
     'adjust.blue': 'Синий',
     'adjust.sharpen': 'Резкость (High Pass)',
-    'adjust.sharpen.on': 'включена',
-    'adjust.sharpen.off': 'выключена',
     'adjust.sharpen.tip': 'Подчёркивает границы, как High Pass в Photoshop: копия кадра с выделенными перепадами накладывается на изображение. Считается на видимом поле; детали, которых нет в скане, не появятся',
     'adjust.sharpAmount': 'Сила',
     'adjust.sharpRadius': 'Радиус, пикс',
@@ -629,7 +627,6 @@ const STRINGS = {
     'adjust.balance': 'Баланс белого:',
     'adjust.balance.none': 'не задан',
     'adjust.balance.reset.tip': 'Сбросить баланс белого',
-    'adjust.order': 'Порядок: профиль сканера → окраска → баланс RGB → чёрная и белая точки → яркость и контраст → гамма → насыщенность и оттенок → резкость.',
     'adjust.noWebgl': 'WebGL недоступен в этом браузере, настройка изображения отключена.',
   },
 };
