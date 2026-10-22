@@ -1,6 +1,6 @@
 import {
   DEFAULTS, LEGACY_ORDER, ORDER_11, PARAMS, PRESETS, autoSharpenAmount, autoValues, clampParam, gainToBalance, isDefault,
-  loadImage, sharpnessMetric,
+  loadImage,
 } from './adjust.js';
 import { formatNumber, t } from './i18n.js';
 
@@ -363,8 +363,7 @@ export class AdjustPanel {
   _bindSharpenAuto(button) {
     button.addEventListener('click', () => {
       if (!this.adjuster) return;
-      const sample = this.adjuster.sharpenApplies ? this.adjuster.centerSample() : null;
-      const metric = sample ? sharpnessMetric(sample) : null;
+      const metric = this.adjuster.sharpnessMetric();
       if (metric === null) {
         this._flashHint(t('adjust.sharpen.auto.none'));
         return;

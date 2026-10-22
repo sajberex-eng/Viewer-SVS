@@ -58,12 +58,15 @@ export const SHARPEN_MIN_MAGNIFICATION = 10;
 // «Авто» для резкости (просьба заказчика 2026-10-22): сила подбирается по
 // размытости видимого поля. Мера — разброс лапласиана яркости, делённый на
 // разброс самой яркости по пикселям ткани (без фона стекла): у резкого кадра
-// около sharp, у мягкого — около soft. Калибровка 2026-10-22 по снимку
-// настоящего H&E на 23,7×: без фильтра 0,81, с резкостью 50 % — 0,93,
-// 100 % Overlay — 1,12, Multiply — 1,36. Пороги уточняются на настоящих сканах.
+// около sharp, у мягкого — около soft. Сырая мера сильно зависит от
+// увеличения (уменьшенный кадр резче), поэтому приводится к масштабу «один
+// пиксель скана = один пиксель холста» степенью scaleExponent. Калибровка
+// 2026-10-22 на настоящем H&E (Aperio 40×): сырая мера 0,39 на 40× и 1,20 на
+// 20×, приведённая — около 0,45 там и там, сила получается ≈ 60 %.
 export const AUTO_SHARPEN = {
-  soft: 0.5,          // такой кадр считается мягким: сила maxAmount
-  sharp: 1.1,         // такой — уже резким: сила minAmount
+  soft: 0.3,          // приведённая мера мягкого кадра: сила maxAmount
+  sharp: 0.7,         // резкого: сила minAmount
+  scaleExponent: 1.6, // как растёт сырая мера при уменьшении кадра
   minAmount: 10,
   maxAmount: 90,
   tissueBelow: 235,   // яркость, ниже которой пиксель считается тканью
@@ -79,8 +82,9 @@ export function autoSharpenAmount(metric) {
 }
 
 // Мера размытости по участку кадра (ImageData): std(лапласиан) / std(яркость)
-// по пикселям ткани; null — ткани мало.
-export function sharpnessMetric(imageData) {
+// по пикселям ткани, приведённая к масштабу один к одному (pixelScale —
+// пикселей холста на пиксель скана); null — ткани мало.
+export function sharpnessMetric(imageData, pixelScale = 1) {
   const { data, width, height } = imageData;
   const luma = new Float32Array(width * height);
   const tissue = new Uint8Array(width * height);
@@ -113,7 +117,7 @@ export function sharpnessMetric(imageData) {
   const mean = sum / lapCount;
   const std = Math.sqrt(Math.max(0, sumSq / lapCount - mean * mean));
   if (std < 1) return null; // однотонный участок: мерить нечего
-  return Math.sqrt(lapSq / lapCount) / std;
+  return (Math.sqrt(lapSq / lapCount) / std) * pixelScale ** AUTO_SHARPEN.scaleExponent;
 }
 const SIGMA_MIN = 0.3;
 const SIGMA_MAX = 3;
@@ -641,14 +645,18 @@ export class ImageAdjuster {
     return context.getImageData(0, 0, width, height);
   }
 
-  // Участок кадра для «Авто» резкости: центр холста OpenSeadragon, исходные пиксели
-  centerSample() {
+  // Мера резкости центра видимого поля (исходные пиксели холста OpenSeadragon),
+  // приведённая к масштабу скана; null — ткани нет или увеличение ниже порога
+  sharpnessMetric() {
+    if (!this.sharpenApplies) return null;
     const source = this.viewer.drawer.canvas;
     if (!source.width || !source.height) return null;
     const size = Math.min(AUTO_SHARPEN.sample, source.width, source.height);
     const x = Math.round((source.width - size) / 2);
     const y = Math.round((source.height - size) / 2);
-    return source.getContext('2d').getImageData(x, y, size, size);
+    const sample = source.getContext('2d').getImageData(x, y, size, size);
+    const ratio = source.width / (source.clientWidth || source.width);
+    return sharpnessMetric(sample, this.viewInfo().pixelScale * ratio);
   }
 
   _uploadLut() {
