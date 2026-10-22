@@ -32,6 +32,10 @@ else:
     _unavailable_reason = ""
 
 AVAILABLE = KfbSlide is not None
+if not AVAILABLE and sys.platform == "darwin":
+    # macOS: библиотеки KFBio для неё в сборке нет (docs/TOR-desktop.md, этап 6);
+    # пользователю незачем видеть «No module named 'Aslide'»
+    _unavailable_reason = "KFB на macOS пока не поддерживается"
 
 
 def unavailable_reason() -> str:

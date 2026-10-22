@@ -110,9 +110,11 @@ def main() -> None:
         check("повреждённый файл виден с причиной, в сканы не попал (НП-17)",
               set(reasons) == {"Повреждённый.svs", "Сломанный.kfb"} and "не распознан" in reasons["Повреждённый.svs"],
               str(problems))
-        check("повреждённый KFB — с причиной от KFBio или «нужна KFSlideOS»",
-              "KFBio" in reasons.get("Сломанный.kfb", "") or "KFSlideOS" in reasons.get("Сломанный.kfb", ""),
-              reasons.get("Сломанный.kfb", ""))
+        kfb_reason = reasons.get("Сломанный.kfb", "")
+        check("повреждённый KFB — с причиной от KFBio, «нужна KFSlideOS» или «не поддерживается на macOS»",
+              "KFBio" in kfb_reason or "KFSlideOS" in kfb_reason
+              or (sys.platform == "darwin" and "macOS" in kfb_reason),
+              kfb_reason)
         check("файлы не-сканы не видны", all("заметки" not in s["title"] for s in data["slides"]))
 
         he = titles["Биопсия HE"]

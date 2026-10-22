@@ -128,11 +128,13 @@ jobs:
 
       - name: Тесты
         run: |
-          set -e
+          # Все наборы прогоняются, даже если один упал: за один запуск видно все сбои
+          fail=0
           for name in desktop library access upload smoke cellularity; do
             echo "=== $name"
-            python -X utf8 "tests/${name}_test.py"
+            python -X utf8 "tests/${name}_test.py" || { echo "::error::Тест $name не прошёл"; fail=1; }
           done
+          exit $fail
 
       - name: Сборка PyInstaller
         env:
