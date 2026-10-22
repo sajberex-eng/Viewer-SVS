@@ -202,6 +202,10 @@ class Api:
 
 def main() -> int:
     multiprocessing.freeze_support()  # дочерний процесс расчёта не должен запускать вторую программу
+    if len(sys.argv) == 4 and sys.argv[1] == "--selftest":  # самопроверка сборки на CI, без окна
+        from desktop.selftest import run
+
+        return run(Path(sys.argv[2]), Path(sys.argv[3]))
     if not claim_single_instance():
         focus_running_window()
         return 0

@@ -77,6 +77,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "PyInstaller завершился с кодом $LASTEXITCODE" }
           if (-not (Test-Path build/dist/HemCenterHistoDigital/HemCenterHistoDigital.exe)) { throw "exe не собран" }
 
+      # Собранная программа без окна читает синтетический скан, считает на Numba, запускает
+      # дочерний процесс: то, что из исходников работает, а в сборке ломается первым
+      - name: Самопроверка собранной программы
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'selftest'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $env:SELFTEST_SCAN = Join-Path $dir 'probe.svs'
+          python -X utf8 -c "import os,sys; sys.path[:0]=['tests','.']; from pathlib import Path; from synthetic_svs import build_svs; build_svs(Path(os.environ['SELFTEST_SCAN']), size=1024, objective=40, mpp=0.25)"
+          $report = Join-Path $dir 'report.txt'
+          $p = Start-Process -FilePath build/dist/HemCenterHistoDigital/HemCenterHistoDigital.exe -ArgumentList '--selftest', $env:SELFTEST_SCAN, $report -Wait -PassThru
+          if (Test-Path $report) { Get-Content $report -Encoding UTF8 } else { Write-Host 'Отчёт не создан' }
+          if ($p.ExitCode -ne 0) { throw "Самопроверка не прошла (код $($p.ExitCode))" }
+
       - name: Архив
         shell: pwsh
         run: |
@@ -146,6 +160,16 @@ jobs:
           # Подпись ad-hoc ставит сам PyInstaller; здесь только показываем результат
           codesign --verify --deep --strict --verbose=2 build/dist/HemCenterHistoDigital.app || echo "::warning::codesign --verify не прошла"
           codesign -dv build/dist/HemCenterHistoDigital.app 2>&1 | head -n 8 || true
+
+      - name: Самопроверка собранной программы
+        run: |
+          DIR="$RUNNER_TEMP/selftest"; mkdir -p "$DIR"
+          export SELFTEST_SCAN="$DIR/probe.svs"
+          python -X utf8 -c "import os,sys; sys.path[:0]=['tests','.']; from pathlib import Path; from synthetic_svs import build_svs; build_svs(Path(os.environ['SELFTEST_SCAN']), size=1024, objective=40, mpp=0.25)"
+          code=0
+          build/dist/HemCenterHistoDigital.app/Contents/MacOS/HemCenterHistoDigital --selftest "$SELFTEST_SCAN" "$DIR/report.txt" || code=$?
+          cat "$DIR/report.txt" || echo "Отчёт не создан"
+          exit $code
 
       # Запуск собранной программы: сервер поднялся, чужой Host и неверный ключ отклоняются,
       # окно нарисовано (снимок экрана в артефакт). Системные окна и Gatekeeper на runner не проверить.
