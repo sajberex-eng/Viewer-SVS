@@ -258,7 +258,14 @@ def main() -> int:
 
 if __name__ == "__main__":
     code = main()
+    selftest_report = Path(sys.argv[3]) if len(sys.argv) == 4 and sys.argv[1] == "--selftest" else None
+    if selftest_report:
+        with open(selftest_report, "a", encoding="utf-8") as handle:
+            handle.write(f"main завершён, код {code}\n")
     stop_child_processes()
+    if selftest_report:
+        with open(selftest_report, "a", encoding="utf-8") as handle:
+            handle.write("дочерние остановлены, выход\n")
     # Выход без ожидания рабочих потоков: поток расчёта клеточности дожидается конца
     # своего расчёта, и после закрытия окна процесс висел больше минуты — а пока он
     # жив, повторный запуск упирается в «одну копию» и ничего не показывает

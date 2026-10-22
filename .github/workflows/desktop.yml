@@ -91,9 +91,14 @@ jobs:
           $exe = (Resolve-Path build/dist/HemCenterHistoDigital/HemCenterHistoDigital.exe).Path
           $p = Start-Process -FilePath $exe -ArgumentList '--selftest', $env:SELFTEST_SCAN, $report -PassThru
           # Окно ошибки безоконной программы на runner никто не закроет: ждём ограниченно
-          $finished = $p.WaitForExit(300000)
+          $finished = $p.WaitForExit(120000)
           if (Test-Path $report) { Get-Content $report -Encoding UTF8 } else { Write-Host 'Отчёт не создан' }
-          if (-not $finished) { Stop-Process -Id $p.Id -Force; throw 'Самопроверка не уложилась в 5 минут' }
+          if (-not $finished) {
+            Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $p.Id -or $_.ProcessId -eq $p.Id } |
+              Format-Table ProcessId, ParentProcessId, Name, CommandLine -AutoSize | Out-String -Width 300 | Write-Host
+            Stop-Process -Id $p.Id -Force
+            throw 'Самопроверка не уложилась в 5 минут'
+          }
           if ($p.ExitCode -ne 0) { throw "Самопроверка не прошла (код $($p.ExitCode))" }
 
       - name: Архив
