@@ -108,11 +108,16 @@ function drawScalebar(context, pane, ratio) {
 }
 
 // В буфер обмена; где буфера нет (Firefox, HTTP) — файлом. Возвращает, куда ушло.
+// Запись в буфер без жеста пользователя Chrome держит в ожидании без ответа
+// (проверено на рабочем сервере 2026-10-22), поэтому ждём не дольше CLIPBOARD_WAIT_MS.
+const CLIPBOARD_WAIT_MS = 3000;
+
 export async function deliverSnapshot(blob, filename) {
   if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
     try {
-      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      return 'clipboard';
+      const written = navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]).then(() => true);
+      const timeout = new Promise((resolve) => setTimeout(() => resolve(false), CLIPBOARD_WAIT_MS));
+      if (await Promise.race([written, timeout])) return 'clipboard';
     } catch {
       // отказ браузера — ниже файлом
     }
