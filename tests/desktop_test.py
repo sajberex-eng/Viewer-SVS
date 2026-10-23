@@ -99,6 +99,12 @@ def main() -> None:
         check("ключ по чужому Host не принимается",
               enter(stranger, keys.issue()).status_code == 400)
 
+        # Мост pywebview строит функции API через new Function: без 'unsafe-eval' WKWebView
+        # (macOS) его режет, и окно выбора папки не открывается (найдено 2026-10-23)
+        csp = window.get("/").headers.get("content-security-policy", "")
+        check("CSP программы разрешает eval для моста pywebview (script-src 'unsafe-eval')",
+              "script-src 'self' 'unsafe-eval'" in csp and "default-src 'self'" in csp, csp)
+
         # Новый запуск программы: сессии прошлого запуска больше не действуют
         ensure_local_admin(db)
         app.state.perms.invalidate()

@@ -45,6 +45,9 @@ def main() -> None:
             check("страница без входа уводит на /login", response.status_code == 303)
             check("каталог без входа: 401", client.get("/api/catalog").status_code == 401)
             check("тайл без входа: 401", client.get("/api/slides/x/tiles/0/0_0.jpg").status_code == 401)
+            csp = client.get("/login").headers.get("content-security-policy", "")
+            check("CSP веб-сервиса строгий: без 'unsafe-eval' (он только у настольной программы)",
+                  "default-src 'self'" in csp and "unsafe-eval" not in csp, csp)
             check("миниатюра без входа: 401", client.get("/api/slides/x/thumbnail.jpg").status_code == 401)
             check("этикетка без входа: 401", client.get("/api/slides/x/label.jpg").status_code == 401)
             check("журнал без входа: 401", client.get("/api/journal").status_code == 401)

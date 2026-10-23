@@ -281,10 +281,20 @@ def create_app() -> FastAPI:
             if request.method not in ("GET", "HEAD") and not request.url.path.startswith("/api/uploads"):
                 perms.invalidate()
 
+    headers = dict(SECURITY_HEADERS)
+    if settings.desktop:
+        # Окно программы (pywebview) строит мост window.pywebview.api через new Function —
+        # под default-src 'self' это eval, и WKWebView на macOS его запрещает: окно выбора
+        # папки не открывалось, страница показывала ввод пути вручную (найдено заказчиком
+        # на выпуске 1.0.2, 2026-10-23). WebView2 на Windows внедрённому скрипту CSP не
+        # применяет, поэтому там работало. Веб-сервис CSP не ослабляет: сервер только 127.0.0.1.
+        headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
+            "default-src 'self';", "default-src 'self'; script-src 'self' 'unsafe-eval';", 1)
+
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
         response = await call_next(request)
-        for name, value in SECURITY_HEADERS.items():
+        for name, value in headers.items():
             response.headers.setdefault(name, value)
         return response
 
