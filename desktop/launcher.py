@@ -94,6 +94,33 @@ def unblock_downloaded_files(base: Path | None = None) -> int:
     return cleared
 
 
+# ---------- сообщение об ошибке ----------
+
+def show_error(message: str, log_path: Path) -> None:
+    """Системное окно с текстом ошибки: у программы нет консоли, и без него пользователь
+    видит либо трассу (Windows, «Unhandled exception in script»), либо ничего (macOS).
+    Найдено на выпуске 1.0 2026-10-23."""
+    hint = ""
+    if sys.platform == "win32":
+        hint = ("Если архив скачан из интернета: закройте программу, удалите распакованную папку, "
+                "в свойствах zip-файла поставьте «Разблокировать», распакуйте заново.\n\n")
+    text = f"{message}\n\n{hint}Подробности: {log_path}"
+    try:
+        if sys.platform == "win32":
+            ctypes.windll.user32.MessageBoxW(None, text, WINDOW_TITLE, 0x10)  # MB_ICONERROR
+        elif sys.platform == "darwin":
+            import subprocess
+
+            # Перевод строки в литерале AppleScript ненадёжен — склеиваем через return
+            body = text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", '" & return & "')
+            script = (f'display dialog "{body}" with title "{WINDOW_TITLE}" buttons {{"OK"}} '
+                      'default button 1 with icon stop giving up after 600')
+            subprocess.run(["osascript", "-e", script], timeout=600, check=False,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        log.exception("Окно с ошибкой не показано")
+
+
 # ---------- одна копия программы ----------
 
 _mutex = None
@@ -269,6 +296,7 @@ def main() -> int:
     while not server.started:
         if not thread.is_alive() or time.monotonic() > deadline:
             log.error("Сервер программы не запустился")
+            show_error("Программа не запустилась: внутренний сервер не ответил.", home / "logs" / "app.log")
             return 1
         time.sleep(0.05)
     log.info("Программа запущена: порт %s, папка %s", port, home)
@@ -293,14 +321,7 @@ def main() -> int:
         # Без окна программе нечего показывать. Безоконная сборка в таком случае молча
         # показывала «Unhandled exception in script» с трассой, понятной только разработчику
         log.exception("Окно программы не открылось")
-        if sys.platform == "win32":
-            ctypes.windll.user32.MessageBoxW(
-                None,
-                "Не удалось открыть окно программы.\n\n"
-                "Если архив скачан из интернета: закройте программу, удалите распакованную папку, "
-                "в свойствах zip-файла поставьте «Разблокировать», распакуйте заново.\n\n"
-                f"Подробности: {home / 'logs' / 'app.log'}",
-                WINDOW_TITLE, 0x10)
+        show_error("Не удалось открыть окно программы.", home / "logs" / "app.log")
         server.should_exit = True
         return 1
 
