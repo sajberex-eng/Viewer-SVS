@@ -101,6 +101,30 @@ jobs:
           }
           if ($p.ExitCode -ne 0) { throw "Самопроверка не прошла (код $($p.ExitCode))" }
 
+      # Архив, скачанный браузером и распакованный проводником, помечает КАЖДЫЙ файл как «из интернета»
+      # (Zone.Identifier). С такой пометкой .NET не грузил Python.Runtime.dll, и окно не открывалось
+      # (выпуск desktop-v1.0 у заказчика, 2026-10-23). Повторяем это здесь: копия папки с пометками.
+      - name: Самопроверка папки, помеченной как скачанная из интернета
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $copy = Join-Path $env:RUNNER_TEMP 'downloaded'
+          Copy-Item build/dist/HemCenterHistoDigital $copy -Recurse
+          $n = 0
+          Get-ChildItem $copy -Recurse -File | ForEach-Object {
+            Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"; $n++
+          }
+          Write-Host "Помечено файлов: $n"
+          $dir = Join-Path $env:RUNNER_TEMP 'selftest-marked'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $report = Join-Path $dir 'report.txt'
+          $scan = Join-Path $env:RUNNER_TEMP 'selftest\probe.svs'   # создан шагом выше
+          $p = Start-Process -FilePath (Join-Path $copy 'HemCenterHistoDigital.exe') -ArgumentList '--selftest', $scan, $report -PassThru
+          $finished = $p.WaitForExit(120000)
+          if (Test-Path $report) { Get-Content $report -Encoding UTF8 } else { Write-Host 'Отчёт не создан' }
+          if (-not $finished) { Stop-Process -Id $p.Id -Force; throw 'Самопроверка помеченной папки не уложилась в 2 минуты' }
+          if ($p.ExitCode -ne 0) { throw "Самопроверка помеченной папки не прошла (код $($p.ExitCode))" }
+
       - name: Архив
         shell: pwsh
         run: |

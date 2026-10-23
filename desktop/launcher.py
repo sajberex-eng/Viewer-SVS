@@ -64,6 +64,36 @@ def ensure_config(home: Path) -> Path:
     return path
 
 
+# ---------- файлы из скачанного архива ----------
+
+def unblock_downloaded_files(base: Path | None = None) -> int:
+    """Снимает с файлов программы пометку «получено из интернета» (поток Zone.Identifier).
+
+    Браузер ставит её на zip, а проводник переносит на каждый распакованный файл. Для DLL с
+    такой пометкой .NET отказывается загружаться: pythonnet не находит Python.Runtime.Loader.Initialize,
+    и окно не открывается («Unhandled exception in script»). Найдено у заказчика 2026-10-23 на
+    выпуске desktop-v1.0, на CI и у разработчика файлы не помечены, поэтому там всё работало.
+    Возвращает, со скольких файлов пометка снята."""
+    if sys.platform != "win32":
+        return 0
+    if base is None:
+        if not getattr(sys, "frozen", False):
+            return 0
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    marker = base / "pythonnet" / "runtime" / "Python.Runtime.dll"
+    if not os.path.exists(f"{marker}:Zone.Identifier"):  # файлы не помечены — обход не нужен
+        return 0
+    cleared = 0
+    for folder, _dirs, files in os.walk(base):
+        for name in files:
+            try:
+                os.remove(os.path.join(folder, name) + ":Zone.Identifier")
+                cleared += 1
+            except OSError:  # у файла пометки нет или папка только для чтения
+                pass
+    return cleared
+
+
 # ---------- одна копия программы ----------
 
 _mutex = None
@@ -202,6 +232,7 @@ class Api:
 
 def main() -> int:
     multiprocessing.freeze_support()  # дочерний процесс расчёта не должен запускать вторую программу
+    unblocked = unblock_downloaded_files()  # до импорта окна: иначе pythonnet не загрузится
     if len(sys.argv) == 4 and sys.argv[1] == "--selftest":  # самопроверка сборки на CI, без окна
         from desktop.selftest import run
 
@@ -241,6 +272,8 @@ def main() -> int:
             return 1
         time.sleep(0.05)
     log.info("Программа запущена: порт %s, папка %s", port, home)
+    if unblocked:
+        log.info("С файлов программы снята пометка «получено из интернета»: %s", unblocked)
 
     api = Api()
     key = app.state.launch_keys.issue()
@@ -254,7 +287,22 @@ def main() -> int:
     webview.settings["OPEN_DEVTOOLS_IN_DEBUG"] = False
     # Свой профиль WebView2: настройки страницы (localStorage) живут между запусками,
     # cookie сессии — нет (у неё нет срока), чужой браузер её не видит (НП-10)
-    webview.start(private_mode=False, storage_path=str(home / "webview"))
+    try:
+        webview.start(private_mode=False, storage_path=str(home / "webview"))
+    except Exception:
+        # Без окна программе нечего показывать. Безоконная сборка в таком случае молча
+        # показывала «Unhandled exception in script» с трассой, понятной только разработчику
+        log.exception("Окно программы не открылось")
+        if sys.platform == "win32":
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "Не удалось открыть окно программы.\n\n"
+                "Если архив скачан из интернета: закройте программу, удалите распакованную папку, "
+                "в свойствах zip-файла поставьте «Разблокировать», распакуйте заново.\n\n"
+                f"Подробности: {home / 'logs' / 'app.log'}",
+                WINDOW_TITLE, 0x10)
+        server.should_exit = True
+        return 1
 
     log.info("Окно закрыто, сервер останавливается")
     server.should_exit = True

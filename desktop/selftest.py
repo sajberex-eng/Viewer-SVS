@@ -87,6 +87,10 @@ def run(scan: Path, report: Path) -> int:
     def window_library() -> str:
         import webview
 
+        if sys.platform == "win32":
+            # Загружает .NET и Python.Runtime.dll — то, что не стартовало на скачанном архиве
+            # (2026-10-23): до окна дело доходит только если эта загрузка прошла
+            import clr  # noqa: F401
         return f"pywebview {getattr(webview, '__version__', '?')}"
 
     def kfb() -> str:
