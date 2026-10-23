@@ -111,7 +111,9 @@ jobs:
           $copy = Join-Path $env:RUNNER_TEMP 'downloaded'
           Copy-Item build/dist/HemCenterHistoDigital $copy -Recurse
           $n = 0
-          Get-ChildItem $copy -Recurse -File | ForEach-Object {
+          # Сам exe не помечаем: помеченный exe на runner не стартует (SmartScreen), а у человека это
+          # предупреждение «Выполнить в любом случае». Нужны пометки на DLL внутри папки.
+          Get-ChildItem $copy -Recurse -File | Where-Object { $_.Name -ne 'HemCenterHistoDigital.exe' } | ForEach-Object {
             Set-Content -Path $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"; $n++
           }
           Write-Host "Помечено файлов: $n"
