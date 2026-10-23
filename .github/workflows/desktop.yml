@@ -265,9 +265,10 @@ jobs:
           screencapture -x "$RUNNER_TEMP/macos-window.png" || echo "::warning::screencapture не сработал"
           # Мост pywebview под CSP программы: без него «Добавить папку» не открывает системное окно
           # (WKWebView режет new Function без 'unsafe-eval'; найдено заказчиком на 1.0.2)
-          python desktop/bridge_check.py "http://127.0.0.1:$PORT/login" "$RUNNER_TEMP/bridge.txt" || code=$?
+          bridge=0
+          python desktop/bridge_check.py "http://127.0.0.1:$PORT/login" "$RUNNER_TEMP/bridge.txt" || bridge=$?
           cat "$RUNNER_TEMP/bridge.txt" || true
-          [ "${code:-0}" = "0" ] || { echo "::error::Мост pywebview не работает под CSP программы"; exit 1; }
+          [ "$bridge" = "0" ] || { echo "::error::Мост pywebview не работает под CSP программы"; exit 1; }
           echo "Проба пройдена"
 
       - name: Закрытие и проверка, что процессов не осталось
