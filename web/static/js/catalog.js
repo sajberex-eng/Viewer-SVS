@@ -743,17 +743,34 @@ function setUpDesktop() {
   });
 }
 
-// Окно выбора папки даёт программа (pywebview); без неё — путь вручную
+// Системное окно выбора папки даёт окно программы через сервер (/api/desktop/pick-folder):
+// мост window.pywebview.api на macOS не работал (выпуски 1.0.2–1.0.4). Без окна
+// (стенд в браузере) сервер отвечает 404 — тогда путь вводится вручную.
+async function pickFolderPath() {
+  if (!isDesktop) return undefined;
+  try {
+    return (await api('/api/desktop/pick-folder', { method: 'POST' })).path;
+  } catch (error) {
+    if (error.status === 404) return undefined;
+    throw error;
+  }
+}
+
 async function addFolder() {
   const connect = (path) => {
     setNote(t('library.refreshing'));
     return api('/api/library/sources', { method: 'POST', body: { path } });
   };
   let done = null;
-  const native = window.pywebview?.api?.pick_folder;
-  if (native) {
-    const path = await native();
-    if (!path) return;
+  let path;
+  try {
+    path = await pickFolderPath();
+  } catch (error) {
+    setNote(error.message, true);
+    return;
+  }
+  if (path === null) return; // окно закрыли без выбора
+  if (path) {
     try {
       done = await connect(path);
     } catch (error) {

@@ -1370,9 +1370,15 @@ function toggleFullscreen() {
   const root = document.documentElement;
   if (document.fullscreenElement || document.webkitFullscreenElement) {
     (document.exitFullscreen || document.webkitExitFullscreen).call(document);
-  } else {
-    (root.requestFullscreen || root.webkitRequestFullscreen).call(root);
+    return;
   }
+  if (isDesktop && !(document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+    // Окно программы на macOS (WKWebView): Fullscreen API страницы выключен, и кнопка ничего
+    // не делала. Разворачивает и сворачивает само окно (desktop/launcher.py, WindowHooks).
+    api('/api/desktop/fullscreen', { method: 'POST' }).catch(() => {});
+    return;
+  }
+  (root.requestFullscreen || root.webkitRequestFullscreen)?.call(root);
 }
 
 // ---------- ссылка на поле зрения (Н-9, С-11) ----------

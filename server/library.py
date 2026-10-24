@@ -93,7 +93,9 @@ class Library:
 
     def add_source(self, path: str, user) -> int:
         try:
-            base = Path(path.strip().strip('"')).expanduser().resolve()
+            # Кавычки и апострофы: путь, перетащенный в поле из Terminal на macOS, приходит
+            # в апострофах (замечено на снимке заказчика 2026-10-23)
+            base = Path(path.strip().strip('"\'')).expanduser().resolve()
         except (OSError, RuntimeError) as exc:
             raise CatalogError(f"Папка не найдена: {exc}") from exc
         if not base.is_dir():

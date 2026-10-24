@@ -263,12 +263,11 @@ jobs:
           kill -0 "$PID"
           sleep 5
           screencapture -x "$RUNNER_TEMP/macos-window.png" || echo "::warning::screencapture не сработал"
-          # Мост pywebview под CSP программы: без него «Добавить папку» не открывает системное окно
-          # (WKWebView режет new Function без 'unsafe-eval'; найдено заказчиком на 1.0.2)
-          bridge=0
-          python desktop/bridge_check.py "http://127.0.0.1:$PORT/login" "$RUNNER_TEMP/bridge.txt" || bridge=$?
-          cat "$RUNNER_TEMP/bridge.txt" || true
-          [ "$bridge" = "0" ] || { echo "::error::Мост pywebview не работает под CSP программы"; exit 1; }
+          # Окно даёт странице выбор папки и полный экран через сервер (без сессии — 401),
+          # а жесты тачпада «назад/вперёд» включает у WKWebView после загрузки страницы
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 -X POST "http://127.0.0.1:$PORT/api/desktop/pick-folder")
+          [ "$code" = "401" ] || { echo "::error::Выбор папки без сессии вернул $code, ожидался 401"; exit 1; }
+          grep -q "Жесты тачпада «назад» и «вперёд» включены" "$HOME_DIR/logs/app.log" \n            || { echo "::error::В журнале нет строки о включённых жестах тачпада"; cat "$HOME_DIR/logs/app.log"; exit 1; }
           echo "Проба пройдена"
 
       - name: Закрытие и проверка, что процессов не осталось

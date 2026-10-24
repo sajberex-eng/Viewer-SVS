@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import quote
@@ -61,6 +62,8 @@ STATIC_LINK = re.compile(r'(?<=["\'])(/static/[^"\']+\.(?:js|css))(?=["\'])')
 # адресу всегда один и тот же тайл, и браузер не перепроверяет сотни адресов (СК-4)
 TILE_CACHE_CONTROL = "private, max-age=604800, immutable"
 LABEL_SIZE = (600, 600)
+
+CLIENT_LOG_PER_MINUTE = 20  # ошибки страницы программы в журнал: защита от зацикленной ошибки
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -174,6 +177,11 @@ class SourceRequest(BaseModel):
     path: str
 
 
+class ClientLogRequest(BaseModel):
+    page: str = ""
+    text: str = Field(max_length=4000)
+
+
 class SyncRequest(BaseModel):
     folder_id: int | None = None   # None — все подключённые папки
 
@@ -250,6 +258,10 @@ def create_app() -> FastAPI:
     app.state.desktop = settings.desktop
     launch_keys = LaunchKeys()
     app.state.launch_keys = launch_keys  # ключ выдаёт программа при запуске (desktop/launcher.py)
+    # Окно программы (desktop/launcher.py, WindowHooks): системное окно выбора папки и полный
+    # экран страница просит через сервер, а не через мост pywebview. Без окна (тесты, стенд
+    # в браузере) маршруты /api/desktop/* отвечают 404, и страница обходится своими средствами.
+    app.state.desktop_window = None
     if settings.desktop:
         ensure_local_admin(db)
     app.add_middleware(
@@ -281,15 +293,11 @@ def create_app() -> FastAPI:
             if request.method not in ("GET", "HEAD") and not request.url.path.startswith("/api/uploads"):
                 perms.invalidate()
 
+    # CSP один и тот же у веб-сервиса и у программы. Страница программы ничего не просит у
+    # моста pywebview (он строился через new Function, и под строгим CSP WKWebView на macOS
+    # его резал — выпуск 1.0.2): окно выбора папки и полный экран идут через сервер,
+    # маршруты /api/desktop/* (desktop/launcher.py, WindowHooks).
     headers = dict(SECURITY_HEADERS)
-    if settings.desktop:
-        # Окно программы (pywebview) строит мост window.pywebview.api через new Function —
-        # под default-src 'self' это eval, и WKWebView на macOS его запрещает: окно выбора
-        # папки не открывалось, страница показывала ввод пути вручную (найдено заказчиком
-        # на выпуске 1.0.2, 2026-10-23). WebView2 на Windows внедрённому скрипту CSP не
-        # применяет, поэтому там работало. Веб-сервис CSP не ослабляет: сервер только 127.0.0.1.
-        headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
-            "default-src 'self';", "default-src 'self'; script-src 'self' 'unsafe-eval';", 1)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -915,6 +923,41 @@ def create_app() -> FastAPI:
         if body.folder_id is None:
             return library.sync_all()
         return library.sync_folder(body.folder_id)
+
+    # ---------- окно программы: только программа ----------
+
+    def desktop_window():
+        desktop_only()
+        window = app.state.desktop_window
+        if window is None:
+            raise HTTPException(404, "Окно программы недоступно")
+        return window
+
+    @app.post("/api/desktop/pick-folder")
+    def desktop_pick_folder(user=Depends(require_admin)):
+        """Системное окно выбора папки для «Добавить папку» (НП-12). Обработчик обычный,
+        не async: окно модальное, и запрос ждёт выбора в рабочем потоке, а не в цикле событий."""
+        return {"path": desktop_window().pick_folder()}
+
+    @app.post("/api/desktop/fullscreen")
+    def desktop_fullscreen(user=Depends(require_admin)):
+        """Полный экран окном программы: в WKWebView (macOS) Fullscreen API страницы выключен."""
+        desktop_window().toggle_fullscreen()
+        return {"ok": True}
+
+    client_log_times: list[float] = []
+
+    @app.post("/api/desktop/client-log")
+    def desktop_client_log(body: ClientLogRequest, user=Depends(require_user)):
+        """Ошибки страницы — в журнал программы (logs/app.log): консоли у окна нет, и без этого
+        сбой на компьютере заказчика нечем разобрать. Не чаще CLIENT_LOG_PER_MINUTE в минуту."""
+        desktop_only()
+        now = time.monotonic()
+        client_log_times[:] = [t for t in client_log_times if now - t < 60]
+        if len(client_log_times) < CLIENT_LOG_PER_MINUTE:
+            client_log_times.append(now)
+            log.warning("Страница %s: %s", body.page[:200], body.text[:2000])
+        return {"ok": True}
 
     # ---------- доступ ----------
 

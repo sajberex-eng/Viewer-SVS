@@ -99,11 +99,40 @@ def main() -> None:
         check("ключ по чужому Host не принимается",
               enter(stranger, keys.issue()).status_code == 400)
 
-        # Мост pywebview строит функции API через new Function: без 'unsafe-eval' WKWebView
-        # (macOS) его режет, и окно выбора папки не открывается (найдено 2026-10-23)
+        # Страница ничего не просит у моста pywebview, поэтому CSP программы такой же строгий,
+        # как у веб-сервиса (ослабление 'unsafe-eval' выпуска 1.0.3 снято 2026-10-24)
         csp = window.get("/").headers.get("content-security-policy", "")
-        check("CSP программы разрешает eval для моста pywebview (script-src 'unsafe-eval')",
-              "script-src 'self' 'unsafe-eval'" in csp and "default-src 'self'" in csp, csp)
+        check("CSP программы строгий: без 'unsafe-eval'", "default-src 'self'" in csp and "unsafe-eval" not in csp, csp)
+
+        # Окно программы: выбор папки и полный экран через сервер (замечания по macOS 2026-10-24)
+        check("без окна программы выбор папки отвечает 404 — страница спросит путь",
+              window.post("/api/desktop/pick-folder").status_code == 404)
+        check("без окна программы полный экран отвечает 404",
+              window.post("/api/desktop/fullscreen").status_code == 404)
+
+        class FakeWindow:
+            calls: list[str] = []
+
+            def pick_folder(self):
+                self.calls.append("pick")
+                return str(WORK_DIR / "slides")
+
+            def toggle_fullscreen(self):
+                self.calls.append("fullscreen")
+
+        app.state.desktop_window = FakeWindow()
+        try:
+            picked = window.post("/api/desktop/pick-folder")
+            check("выбор папки возвращает путь из системного окна",
+                  picked.status_code == 200 and picked.json()["path"] == str(WORK_DIR / "slides"), picked.text)
+            check("полный экран переключает окно",
+                  window.post("/api/desktop/fullscreen").status_code == 200 and FakeWindow.calls == ["pick", "fullscreen"])
+            logged = window.post("/api/desktop/client-log", json={"page": "/", "text": "TypeError: проба"})
+            check("ошибка страницы принимается в журнал программы", logged.status_code == 200, logged.text)
+            check("слишком длинная запись страницы отклоняется",
+                  window.post("/api/desktop/client-log", json={"text": "x" * 5000}).status_code == 422)
+        finally:
+            app.state.desktop_window = None
 
         # Новый запуск программы: сессии прошлого запуска больше не действуют
         ensure_local_admin(db)

@@ -8,8 +8,9 @@
    недопустимы. Вторая выводит вперёд окно первой и закрывается.
 2. Создаёт служебную папку (%LOCALAPPDATA%\\HemCenterHistoDigital) и config.yaml в ней.
 3. Поднимает сервер на 127.0.0.1 и свободном порту в фоновом потоке.
-4. Открывает окно (WebView2) на адресе входа с одноразовым ключом — ни логина,
-   ни пароля пользователь не вводит (НП-2, НП-9).
+4. Открывает окно (WebView2, на macOS WKWebView) на адресе входа с одноразовым
+   ключом — ни логина, ни пароля пользователь не вводит (НП-2, НП-9). Системное окно
+   выбора папки и полный экран страница просит у окна через сервер (WindowHooks).
 5. После закрытия окна останавливает сервер; идущий расчёт клеточности
    отменяется, его процесс завершается.
 """
@@ -240,21 +241,75 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
-# ---------- то, что странице даёт программа ----------
+# ---------- то, что странице даёт окно программы ----------
 
-class Api:
-    """Методы доступны странице как window.pywebview.api.*. Окно хранится в
-    закрытом поле: pywebview отдаёт странице только открытые методы."""
+class WindowHooks:
+    """Страница просит окно через сервер (маршруты /api/desktop/* в server/main.py),
+    а не через мост window.pywebview.api: мост строится через new Function, и WKWebView
+    на macOS резал его строгим CSP (выпуск 1.0.2), а с ослабленным CSP у заказчика всё равно
+    открывался ввод пути вручную (1.0.4). Сервер работает в том же процессе, что и окно,
+    поэтому обработчик просто вызывает pywebview; тот сам переводит вызов в главный поток."""
 
-    def __init__(self) -> None:
-        self._window = None
+    def __init__(self, window) -> None:
+        self._window = window
 
-    def pick_folder(self):
-        """Системное окно выбора папки для «Добавить папку» (НП-12)."""
+    def pick_folder(self) -> str | None:
+        """Системное окно выбора папки для «Добавить папку» (НП-12). None — выбор отменён."""
         import webview
 
         chosen = self._window.create_file_dialog(webview.FileDialog.FOLDER)
         return chosen[0] if chosen else None
+
+    def toggle_fullscreen(self) -> None:
+        """Полный экран самим окном: в WKWebView (macOS) Fullscreen API страницы выключен,
+        и кнопка «Во весь экран» там ничего не делала. На macOS — родное toggleFullScreen
+        NSWindow (своё состояние окно ведёт само, повторный вызов сворачивает обратно)."""
+        if sys.platform == "darwin":
+            from PyObjCTools import AppHelper
+
+            native = self._window.native
+            AppHelper.callAfter(lambda: native.toggleFullScreen_(None))
+        else:
+            self._window.toggle_fullscreen()
+
+
+def tune_macos_window(window) -> None:
+    """Что pywebview на macOS не включает сам (замечания заказчика 2026-10-24):
+    жесты тачпада «назад/вперёд» (allowsBackForwardNavigationGestures у WKWebView) и
+    разрешение окну разворачиваться во весь экран (NSWindowCollectionBehaviorFullScreenPrimary).
+    WKWebView становится contentView окна только после первой загрузки страницы, поэтому
+    жесты включаются по событию loaded."""
+    if sys.platform != "darwin":
+        return
+    from PyObjCTools import AppHelper
+
+    def allow_fullscreen() -> None:
+        try:
+            native = window.native
+            native.setCollectionBehavior_(native.collectionBehavior() | (1 << 7))  # FullScreenPrimary
+        except Exception:
+            log.exception("Полный экран окну не разрешён")
+
+    def enable_gestures() -> None:
+        try:
+            view = window.native.contentView()
+            if view.respondsToSelector_("setAllowsBackForwardNavigationGestures:"):
+                view.setAllowsBackForwardNavigationGestures_(True)
+                log.info("Жесты тачпада «назад» и «вперёд» включены")
+            else:
+                log.warning("Жесты тачпада не включены: contentView окна — %s", type(view).__name__)
+        except Exception:
+            log.exception("Жесты тачпада не включены")
+
+    def on_shown() -> None:
+        AppHelper.callAfter(allow_fullscreen)
+
+    def on_loaded() -> None:
+        window.events.loaded -= on_loaded  # один раз: страницы потом меняются, окно — нет
+        AppHelper.callAfter(enable_gestures)
+
+    window.events.shown += on_shown
+    window.events.loaded += on_loaded
 
 
 def main() -> int:
@@ -303,13 +358,13 @@ def main() -> int:
     if unblocked:
         log.info("С файлов программы снята пометка «получено из интернета»: %s", unblocked)
 
-    api = Api()
     key = app.state.launch_keys.issue()
     window = webview.create_window(
-        WINDOW_TITLE, f"http://127.0.0.1:{port}/desktop/enter?key={key}", js_api=api,
+        WINDOW_TITLE, f"http://127.0.0.1:{port}/desktop/enter?key={key}",
         width=1440, height=900, min_size=(900, 600), text_select=True,
     )
-    api._window = window
+    app.state.desktop_window = WindowHooks(window)
+    tune_macos_window(window)
     # Скачивание (CSV, журнал) идёт через окно «Сохранить как» (НП-7)
     webview.settings["ALLOW_DOWNLOADS"] = True
     webview.settings["OPEN_DEVTOOLS_IN_DEBUG"] = False
