@@ -4,7 +4,7 @@
 import { makeDraggable } from './drag.js';
 import { ImageAdjuster, loadImage } from './adjust.js';
 import { clampValues, loadSavedValues, saveValues } from './adjust-panel.js';
-import { applyI18n, formatNumber, t } from './i18n.js';
+import { applyI18n, formatNumber, stainFull, stainShort, t } from './i18n.js';
 
 // Горячие клавиши 1–4. С 2× ряд начинался зря: на микроскопе увеличения
 // начинаются с 4× (решение заказчика 2026-09-21).
@@ -36,6 +36,14 @@ export class SlideView {
     applyI18n(container);
 
     this.parts.title.textContent = slide.title;
+    // Окраска в заголовке половины (у ИГХ — маркер): просьба заказчика 2026-10-24, при
+    // сравнении шапка страницы показывает окраску только активной половины
+    const stain = stainShort(slide);
+    if (stain) {
+      this.parts.stain.hidden = false;
+      this.parts.stain.textContent = stain;
+      this.parts.stain.title = stainFull(slide);
+    }
     // Путь до папки скана: виден у каждой половины и открывает её в каталоге (ИН-3)
     const path = slide.path ?? [];
     if (path.length) {

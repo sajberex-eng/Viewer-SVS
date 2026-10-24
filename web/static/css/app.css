@@ -346,6 +346,17 @@ input[type="range"] { accent-color: var(--accent); }
   font-size: 13px;
 }
 .pane-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Окраска (у ИГХ — маркер) заметнее названия и увеличения: по ней патолог различает половины */
+.pane-stain {
+  flex: none;
+  padding: 0 7px;
+  border-radius: 3px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  line-height: 19px;
+  letter-spacing: 0.01em;
+}
 .pane-path { flex: 1; min-width: 0; }
 .is-comparing .pane-head { display: flex; }
 /* В режиме сравнения у половин появляется заголовок: панель уходит под него */
